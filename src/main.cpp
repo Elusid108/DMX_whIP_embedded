@@ -5,6 +5,7 @@
 
 #include "board_matrix.h"
 #include "log.h"
+#include "wifi_setup.h"
 
 static CRGB leds[kLedCount];
 
@@ -82,6 +83,7 @@ void setup() {
   LOG_V("boot", "ESP32-S3-Matrix");
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
+  WifiSetup::begin();
   initSd();
 
   FastLED.addLeds<WS2812B, kLedPin, GRB>(leds, kLedCount);
@@ -93,6 +95,7 @@ void setup() {
 
 void loop() {
   Log::service();
+  WifiSetup::service();
   static uint8_t hue = 0;
 
   for (uint8_t x = 0; x < kMatrixWidth; ++x) {
