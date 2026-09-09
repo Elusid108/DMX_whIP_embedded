@@ -1,0 +1,1 @@
+{"sessionId": "aaccfe", "id": "log_1788912447615", "timestamp": 1788912447615, "location": "serial-monitor.py:read", "message": "saw firmware replay marker", "data": {"nbytes": 44}, "runId": "post-fix", "hypothesisId": "FIX"}

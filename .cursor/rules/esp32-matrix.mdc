@@ -1,0 +1,61 @@
+---
+description: Waveshare ESP32-S3-Matrix board facts and firmware scaling rules
+alwaysApply: true
+---
+
+# ESP32-S3-Matrix bring-up board
+
+This repo is multi-board firmware. Current hardware is the **Waveshare ESP32-S3-Matrix** (`[env:matrix]`). It is a compact bring-up node, not the production pixel controller. Share `src/`; add a new PlatformIO env for a later board instead of forking the tree.
+
+## This chip (do not copy the rebuild-plan PDF starter)
+
+- MCU: ESP32-S3FH4R2. **4MB flash, 2MB QSPI PSRAM.**
+- LED: 8x8 WS2812B on **GPIO 14**, color order **GRB**, 64 pixels.
+- Serial: native USB-C. Keep `ARDUINO_USB_CDC_ON_BOOT=1`.
+- SD SPI (not SDMMC): **CS 7, MOSI 6, CLK 5, MISO 4**. 3.3 V module only.
+- Default LED brightness **≤ 10/255** (~4%). Waveshare warns high brightness overheats this panel.
+
+## Flash handshake (every upload)
+
+Do this **every time** firmware is written to the Matrix. Do not skip steps or upload before the user is in download mode.
+
+1. Agent **stops and tells the user** an upload is needed. Do not run `pio ... upload` yet.
+2. User puts the board in download mode: hold **BOOT**, tap **RESET**, release **BOOT**. User replies that it is in download mode.
+3. Agent uploads (`pio run -e matrix -t upload`). Do **not** hold COM during the upload.
+4. Agent **refreshes** the desktop serial window titled `ESP32 COM3` via [`scripts/serial-monitor.ps1`](scripts/serial-monitor.ps1) (kill existing, then pop a new one). Tee log: `.pio/serial-com3.log`.
+5. Agent tells the user flash succeeded and the monitor is up. User taps **RESET** while that window is open so boot/SD lines are visible.
+
+Never flash a non-Espressif USB device. If the upload port is missing, stop and ask; do not guess.
+
+## Serial logging
+
+Three levels plus silence, via `Log` / `LOG_V` / `LOG_C` in [`include/log.h`](include/log.h):
+
+- `Off` (0): no serial log output
+- `Critical` (1): failures only (`LOG_C`)
+- `Verbose` (2): everything (`LOG_V` + `LOG_C`)
+
+Default is **Verbose** (`kLogLevelDefault`). Print if `msgLevel <= current` and current is not Off.
+
+- Always append complete lines to a 4KB RAM buffer.
+- A background `logsvc` task calls `Log::service()` every 50 ms so replay still happens if `setup()` is blocked in `SD.begin()`.
+- When USB serial is actually connected (`Serial` is true), the buffer is replayed, then live lines follow.
+- ESP32-S3 USB-Serial/JTAG (Arduino HWCDC) only reports connected after it **receives a byte from the PC**. The COM viewer must send a poke (`\\n`) after every open/reconnect so replay can run. Do not wait in `setup()` for Serial.
+
+Every new firmware path (init, I/O, protocol, LED, SD, faults) must log with a short tag. Do not use raw `Serial.println` for diagnostics. Do not log per-frame LED updates. Format: `[V|C][tag] message`.
+
+```ini
+; ✅ matrix env
+board_build.flash_mode = dio
+board_build.flash_size = 4MB
+board_build.partitions = default.csv
+board_build.arduino.memory_type = qio_qspi
+
+; ❌ never on this chip
+; board_build.arduino.memory_type = qspi_opi
+; board_build.partitions = default_8MB.csv
+```
+
+## Scaling
+
+Firmware is **one node** (universe range + pixel map as data). A single ESP32 cannot drive hundreds of thousands of live pixels. Do not hard-code 100k buffers on the Matrix; size rings from the board profile.
