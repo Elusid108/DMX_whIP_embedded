@@ -1,0 +1,18 @@
+---
+description: Living rebuild plan lives in README; never delete checklist items
+alwaysApply: true
+---
+
+# Living rebuild plan
+
+Before planning or implementing, read [`README.md`](README.md). That file is the plan. The PDF in the repo root is historical only. Do not copy its `platformio.ini` starter onto this chip (`qspi_opi`, 8MB partitions, SDMMC, huge rings).
+
+## Checklist
+
+- Mark `[x]` when the code is in the tree.
+- Mark `[x] **verified**` only after the user confirms it on hardware.
+- **Never delete** a list item, including completed ones.
+- **Never uncheck** a **verified** item unless the user asks.
+- Add new lines when scope grows; do not rewrite history by removing old ones.
+
+Share `src/` across boards. Add a PlatformIO env and board profile for other ESP32 / MCU variants instead of forking.

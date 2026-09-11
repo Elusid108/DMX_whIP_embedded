@@ -5,6 +5,7 @@
 
 #include "board_matrix.h"
 #include "log.h"
+#include "version.h"
 #include "wifi_setup.h"
 
 static CRGB leds[kLedCount];
@@ -80,7 +81,7 @@ static void initSd() {
 
 void setup() {
   Log::begin(115200, kLogLevelDefault);
-  LOG_V("boot", "ESP32-S3-Matrix");
+  LOG_V("boot", "ESP32-S3-Matrix v%s", kFirmwareVersion);
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
   WifiSetup::begin();

@@ -1,6 +1,7 @@
 #include "wifi_setup.h"
 
 #include "log.h"
+#include "version.h"
 #include "wifi_setup_html.h"
 
 #include <Arduino.h>
@@ -30,6 +31,7 @@ static constexpr char kPrefsNs[] = "wifi";
 static WebServer s_server(kHttpPort);
 static DNSServer s_dns;
 static String s_pendingSsid;
+static String s_savedSsid;
 static char s_error[48];
 static ConnectStatus s_connectStatus = ConnectStatus::Idle;
 static bool s_scanRunning = false;
@@ -80,7 +82,13 @@ static void sendJson(int code, const String &body) {
 
 static void sendPage() {
   s_server.sendHeader("Cache-Control", "no-store");
+  s_server.sendHeader("Connection", "close");
   s_server.send_P(200, "text/html", kWifiSetupHtml);
+}
+
+static void handleCaptive() {
+  LOG_V("http", "captive %s", s_server.uri().c_str());
+  sendPage();
 }
 
 static const char *reasonText(uint8_t reason) {
@@ -110,7 +118,21 @@ static void saveCreds(const String &ssid, const String &pass) {
   prefs.putString("ssid", ssid);
   prefs.putString("pass", pass);
   prefs.end();
+  s_savedSsid = ssid;
   LOG_V("wifi", "saved ssid=%s", ssid.c_str());
+}
+
+static void clearCreds() {
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNs, false)) {
+    LOG_C("wifi", "nvs open failed");
+    return;
+  }
+  prefs.remove("ssid");
+  prefs.remove("pass");
+  prefs.end();
+  s_savedSsid = "";
+  LOG_V("wifi", "forgot saved network");
 }
 
 static void failConnect(const char *why) {
@@ -154,10 +176,11 @@ static void startScan() {
 
 static void sendStatus(int code) {
   String out;
-  out.reserve(220);
+  out.reserve(280);
   out += "{\"state\":\"";
   out += stateName();
-  out += '"';
+  out += "\",\"ver\":";
+  jsonEscape(out, String(kFirmwareVersion));
   String ssid = s_pendingSsid;
   if (ssid.isEmpty() && WiFi.status() == WL_CONNECTED) {
     ssid = WiFi.SSID();
@@ -165,6 +188,10 @@ static void sendStatus(int code) {
   if (ssid.length()) {
     out += ",\"ssid\":";
     jsonEscape(out, ssid);
+  }
+  if (s_savedSsid.length()) {
+    out += ",\"saved\":";
+    jsonEscape(out, s_savedSsid);
   }
   if (WiFi.status() == WL_CONNECTED) {
     out += ",\"ip\":\"";
@@ -259,11 +286,23 @@ static void handleConnect() {
   sendStatus(200);
 }
 
+static void handleForget() {
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  clearCreds();
+  s_pendingSsid = "";
+  s_connectStatus = ConnectStatus::Idle;
+  s_error[0] = '\0';
+  LOG_V("http", "forget");
+  sendStatus(200);
+}
+
 static void handleNotFound() {
   if (s_server.uri() == "/favicon.ico") {
     s_server.send(204);
     return;
   }
+  LOG_V("http", "captive %s", s_server.uri().c_str());
   sendPage();
 }
 
@@ -365,13 +404,17 @@ void WifiSetup::begin() {
   WiFi.setHostname(kApSsid);
   WiFi.onEvent(onWifiEvent);
 
+  if (!WiFi.softAPConfig(kApIp, kApIp, kApMask)) {
+    LOG_C("ap", "softAPConfig failed");
+  }
   if (!WiFi.softAP(kApSsid, kApPass)) {
     LOG_C("ap", "softAP failed");
   }
   const IPAddress apIp = WiFi.softAPIP();
   LOG_V("ap", "ssid=%s ip=%s", kApSsid, apIp.toString().c_str());
 
-  if (!s_dns.start(kDnsPort, "*", apIp)) {
+  s_dns.setTTL(0);
+  if (!s_dns.start(kDnsPort, "*", kApIp)) {
     LOG_C("ap", "dns failed");
   } else {
     LOG_V("ap", "dns captive %u -> %s", kDnsPort, apIp.toString().c_str());
@@ -381,6 +424,16 @@ void WifiSetup::begin() {
   s_server.on("/scan", HTTP_GET, handleScan);
   s_server.on("/status", HTTP_GET, handleStatus);
   s_server.on("/connect", HTTP_POST, handleConnect);
+  s_server.on("/forget", HTTP_POST, handleForget);
+  s_server.on("/generate_204", HTTP_GET, handleCaptive);
+  s_server.on("/gen_204", HTTP_GET, handleCaptive);
+  s_server.on("/hotspot-detect.html", HTTP_GET, handleCaptive);
+  s_server.on("/library/test/success.html", HTTP_GET, handleCaptive);
+  s_server.on("/connecttest.txt", HTTP_GET, handleCaptive);
+  s_server.on("/ncsi.txt", HTTP_GET, handleCaptive);
+  s_server.on("/canonical.html", HTTP_GET, handleCaptive);
+  s_server.on("/redirect", HTTP_GET, handleCaptive);
+  s_server.on("/success.txt", HTTP_GET, handleCaptive);
   s_server.onNotFound(handleNotFound);
   s_server.begin();
   LOG_V("http", "listen :%u", kHttpPort);
@@ -394,9 +447,11 @@ void WifiSetup::begin() {
     prefs.end();
   }
   if (ssid.length()) {
+    s_savedSsid = ssid;
     LOG_V("wifi", "saved ssid=%s", ssid.c_str());
     beginConnect(ssid, pass);
   } else {
+    s_savedSsid = "";
     LOG_V("wifi", "no saved creds");
   }
 }

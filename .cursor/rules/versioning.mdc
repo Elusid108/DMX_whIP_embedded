@@ -1,0 +1,18 @@
+---
+description: Firmware version 0.1.0+ must stay in sync in three places
+alwaysApply: true
+---
+
+# Version
+
+One version string for firmware, portal, and docs.
+
+| Place | How |
+| --- | --- |
+| [`include/version.h`](include/version.h) | `kFirmwareVersion` (source of truth) |
+| Web | `/status` field `ver`; portal footer `dmxwhip v…` |
+| [`README.md`](README.md) | `Version:` line and **Version history** |
+
+**PATCH** polish/bugfix. **MINOR** user-visible feature. **MAJOR** breaking on-wire or file-format change.
+
+Bump all three in the same change. Add a README history line for why. Never skip a number. Do not change version without that note.
