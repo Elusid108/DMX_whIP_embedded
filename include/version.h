@@ -1,3 +1,3 @@
 #pragma once
 
-static constexpr char kFirmwareVersion[] = "0.2.2";
+static constexpr char kFirmwareVersion[] = "0.3.0";

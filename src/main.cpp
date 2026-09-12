@@ -1,79 +1,17 @@
 #include <Arduino.h>
 #include <FastLED.h>
-#include <SD.h>
-#include <SPI.h>
 
 #include "artnet_rx.h"
 #include "board_matrix.h"
+#include "led_ctrl.h"
 #include "live_input.h"
 #include "log.h"
+#include "sd_info.h"
 #include "version.h"
 #include "wifi_setup.h"
 
 static CRGB leds[kLedCount];
 static constexpr uint32_t kLedIntervalMs = 25;
-
-static const char *sdCardTypeName(uint8_t cardType) {
-  switch (cardType) {
-  case CARD_NONE:
-    return "none";
-  case CARD_MMC:
-    return "MMC";
-  case CARD_SD:
-    return "SDSC";
-  case CARD_SDHC:
-    return "SDHC";
-  default:
-    return "unknown";
-  }
-}
-
-static void listSdRoot() {
-  File root = SD.open("/");
-  if (!root) {
-    LOG_C("sd", "root open failed");
-    return;
-  }
-
-  int count = 0;
-  while (true) {
-    File entry = root.openNextFile();
-    if (!entry) {
-      break;
-    }
-    LOG_V("sd", "%s %s bytes=%u", entry.isDirectory() ? "dir" : "file",
-          entry.name(), static_cast<unsigned>(entry.size()));
-    entry.close();
-    ++count;
-    if (count >= 12) {
-      LOG_V("sd", "root listing truncated");
-      break;
-    }
-  }
-  root.close();
-  LOG_V("sd", "root entries=%d", count);
-}
-
-static void initSd() {
-  LOG_V("sd", "spi cs=%u mosi=%u clk=%u miso=%u hz=%u", kSdCs, kSdMosi, kSdClk,
-        kSdMiso, static_cast<unsigned>(kSdSpiHz));
-  SPI.begin(kSdClk, kSdMiso, kSdMosi, kSdCs);
-  if (!SD.begin(kSdCs, SPI, kSdSpiHz)) {
-    LOG_C("sd", "mount failed");
-    return;
-  }
-
-  const uint8_t cardType = SD.cardType();
-  if (cardType == CARD_NONE) {
-    LOG_C("sd", "no card");
-    return;
-  }
-
-  const uint64_t sizeMb = SD.cardSize() / (1024ULL * 1024ULL);
-  LOG_V("sd", "mount OK type=%s size_MB=%u", sdCardTypeName(cardType),
-        static_cast<unsigned>(sizeMb));
-  listSdRoot();
-}
 
 static void renderArtNet() {
   const uint8_t *d = ArtNetRx::dmx();
@@ -96,13 +34,13 @@ void setup() {
         static_cast<unsigned>(Log::level()));
   WifiSetup::begin();
   ArtNetRx::begin();
-  initSd();
+  SdInfo::begin();
 
   FastLED.addLeds<WS2812B, kLedPin, GRB>(leds, kLedCount);
-  FastLED.setBrightness(kBrightness);
+  LedCtrl::begin();
   FastLED.clear(true);
   LOG_V("led", "init pin=%u count=%u brightness=%u", kLedPin, kLedCount,
-        kBrightness);
+        LedCtrl::get());
 }
 
 void loop() {

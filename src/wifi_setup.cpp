@@ -1,7 +1,9 @@
 #include "wifi_setup.h"
 
+#include "led_ctrl.h"
 #include "live_input.h"
 #include "log.h"
+#include "sd_info.h"
 #include "version.h"
 #include "wifi_setup_html.h"
 
@@ -10,6 +12,7 @@
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -210,7 +213,7 @@ static void startScan() {
 
 static void sendStatus(int code) {
   String out;
-  out.reserve(280);
+  out.reserve(420);
   out += "{\"state\":\"";
   out += stateName();
   out += "\",\"ver\":";
@@ -239,6 +242,21 @@ static void sendStatus(int code) {
     out += ",\"error\":";
     jsonEscape(out, String(s_error));
   }
+  out += ",\"bri\":";
+  out += static_cast<unsigned>(LedCtrl::get());
+  out += ",\"sd\":{\"ok\":";
+  out += SdInfo::ok() ? "true" : "false";
+  if (SdInfo::ok()) {
+    out += ",\"type\":";
+    jsonEscape(out, String(SdInfo::type()));
+    out += ",\"size_mb\":";
+    out += SdInfo::sizeMb();
+    out += ",\"used_mb\":";
+    out += SdInfo::usedMb();
+    out += ",\"free_mb\":";
+    out += SdInfo::freeMb();
+  }
+  out += '}';
   out += '}';
   sendJson(code, out);
 }
@@ -293,6 +311,22 @@ static void handleScan() {
 }
 
 static void handleStatus() { sendStatus(200); }
+
+static void handleBrightness() {
+  if (!s_server.hasArg("v")) {
+    sendJson(400, "{\"error\":\"bad v\"}");
+    return;
+  }
+  const String arg = s_server.arg("v");
+  char *end = nullptr;
+  const long v = strtol(arg.c_str(), &end, 10);
+  if (end == arg.c_str() || *end != '\0' || v < 0 || v > 255) {
+    sendJson(400, "{\"error\":\"bad v\"}");
+    return;
+  }
+  LedCtrl::set(static_cast<uint8_t>(v), true);
+  sendStatus(200);
+}
 
 static void handleConnect() {
   if (s_scanRunning) {
@@ -448,6 +482,7 @@ void WifiSetup::begin() {
   s_server.on("/status", HTTP_GET, handleStatus);
   s_server.on("/connect", HTTP_POST, handleConnect);
   s_server.on("/forget", HTTP_POST, handleForget);
+  s_server.on("/brightness", HTTP_POST, handleBrightness);
   s_server.on("/generate_204", HTTP_GET, handleCaptive);
   s_server.on("/gen_204", HTTP_GET, handleCaptive);
   s_server.on("/hotspot-detect.html", HTTP_GET, handleCaptive);

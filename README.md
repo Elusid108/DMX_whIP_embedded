@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.2.2**
+Version: **0.3.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -9,7 +9,7 @@ The 18-month-old [`Esp32-s3 Pixel Playback — Rebuild Plan (step-by-step).pdf`]
 ## Current hardware (`[env:matrix]`)
 
 - MCU: ESP32-S3FH4R2 — **4MB flash, 2MB QSPI PSRAM** (`qio_qspi`, `default.csv`)
-- LED: 8×8 WS2812B on GPIO 14, GRB, brightness ≤ 10/255
+- LED: 8×8 WS2812B on GPIO 14, GRB, default brightness **10/255** (portal 0–255; warn above 64 — this panel can overheat)
 - USB-C: native USB-Serial/JTAG (`ARDUINO_USB_CDC_ON_BOOT=1`, `ARDUINO_USB_MODE=1`)
 - microSD: **SPI** CS 7, MOSI 6, CLK 5, MISO 4 (3.3 V module only)
 
@@ -26,10 +26,12 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 - Captive DNS hijacks all names to `4.3.2.1`. Probe URLs (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`, …) return the portal HTML with **200**, never OS “success” tokens (no HTTP 204 for Android, no Apple `Success`, no Windows NCSI pass string).
 - Limit: HTTPS connectivity checks cannot be spoofed. Some new phones only show a sign-in notification. DHCP Captive-Portal-API (RFC 8910) needs IDF 5+; this Arduino core is IDF 4.4. If the sheet does not open, use `http://4.3.2.1` (not https).
 - Connecting STA may hop the SoftAP channel; if the page drops, rejoin `dmxwhip`. While a protocol is live the AP is gone — unicast to the **STA IP** (serial `[V][wifi] connected ... ip=`). While idle, use `dmxwhip` / `http://4.3.2.1`.
+- Max brightness slider 0–255 (default 10, stored in NVS). Warning on the page above 64; the value is not capped. `/status` field `bri`. Live Art-Net uses this as FastLED global scale.
+- SD line on the page from cached mount stats: type, size MB, used, free (or `not mounted`). `/status` object `sd`.
 
 ## Art-Net (Resolume)
 
-- UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). 64 pixels = 192 RGB channels, **1:1** onto the strip (DMX triplet *n* → LED *n*). No serpentine/row remap in firmware — put snake/orientation in the Resolume fixture patch. FastLED maps RGB → GRB. Brightness 10.
+- UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). 64 pixels = 192 RGB channels, **1:1** onto the strip (DMX triplet *n* → LED *n*). No serpentine/row remap in firmware — put snake/orientation in the Resolume fixture patch. FastLED maps RGB → GRB. Brightness default 10 (portal cap).
 - Live path: drop-to-latest (overwrite unread frames). Idle is **black** (no rainbow). Unicast from Resolume to the STA IP. Serial `[V][artnet]` first packet + 5 s counters (`drops` = overwritten before render). `[V][ap] down (live)` / `[V][ap] up (idle)` on portal transitions.
 
 ## Living milestone list
@@ -48,6 +50,8 @@ Bring-up (this board)
 - [x] SoftAP stops ~45 s after STA IP (STA-only for live); AP returns if STA drops — implemented
 - [x] Idle = black panel + SoftAP/HTTP; live protocol = pixels + portal down; AP returns after ~2 s silence — implemented (not verified)
 - [x] Live Art-Net 1:1 channel → LED index (no firmware snake remap) — implemented (not verified)
+- [x] Portal max brightness 0–255 (default 10, NVS, warn >64) — implemented (not verified)
+- [x] SD mount/size/used/free on portal `/status` — implemented (not verified)
 
 From the historical PDF (adapted)
 
@@ -81,6 +85,7 @@ Companion PC (sibling repo, not this tree)
 
 ## Version history
 
+- **0.3.0** — Portal max brightness 0–255 (default 10, NVS, warn >64); SD type/size/used/free on the config page
 - **0.2.2** — Live Art-Net is 1:1 onto the strip; serpentine remap removed so Resolume owns the fixture patch
 - **0.2.1** — Black idle; SoftAP/HTTP only while not streaming (`LiveInput`); Art-Net still the only live source
 - **0.2.0** — Art-Net universe 0 → 8×8; SoftAP off 45 s after STA; drop-to-latest live render; rainbow if stream silent
