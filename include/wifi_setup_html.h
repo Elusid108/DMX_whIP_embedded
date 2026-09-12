@@ -252,7 +252,12 @@ brinum.onchange=()=>{
 function postLive(){
   const body=new URLSearchParams({proto:protoEl.value,fps:fpsEl.value,buf:bufEl.value});
   fetch('/live',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})
-    .then(()=>{liveDirty=false;})
+    .then(async r=>{
+      if(!r.ok) throw new Error('http');
+      const s=await r.json();
+      liveDirty=false;
+      applyMeta(s);
+    })
     .catch(dropHint);
 }
 function scheduleLive(){

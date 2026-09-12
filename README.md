@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.4.0**
+Version: **0.4.1**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -88,6 +88,7 @@ Companion PC (sibling repo, not this tree)
 
 ## Version history
 
+- **0.4.1** — Fix portal live FPS/buffer POST so the dropdowns persist
 - **0.4.0** — Portal Auto/Art-Net/sACN, show FPS, jitter buffer 0–3; sACN universe 1; Wi-Fi PS off while live
 - **0.3.1** — Brightness number field; Wi-Fi scan on portal load; SD removal + automount while idle
 - **0.3.0** — Portal max brightness 0–255 (default 10, NVS, warn >64); SD type/size/used/free on the config page

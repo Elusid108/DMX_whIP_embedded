@@ -352,9 +352,9 @@ static void handleLive() {
   char *end = nullptr;
   uint8_t fps = LiveCfg::fps();
   if (s_server.hasArg("fps")) {
-    const long v = strtol(s_server.arg("fps").c_str(), &end, 10);
-    if (end == s_server.arg("fps").c_str() || *end != '\0' || v < 0 ||
-        v > 255) {
+    const String fpsArg = s_server.arg("fps");
+    const long v = strtol(fpsArg.c_str(), &end, 10);
+    if (end == fpsArg.c_str() || *end != '\0' || v < 0 || v > 255) {
       sendJson(400, "{\"error\":\"bad fps\"}");
       return;
     }
@@ -363,8 +363,9 @@ static void handleLive() {
 
   uint8_t buf = LiveCfg::buf();
   if (s_server.hasArg("buf")) {
-    const long v = strtol(s_server.arg("buf").c_str(), &end, 10);
-    if (end == s_server.arg("buf").c_str() || *end != '\0' || v < 0 || v > 3) {
+    const String bufArg = s_server.arg("buf");
+    const long v = strtol(bufArg.c_str(), &end, 10);
+    if (end == bufArg.c_str() || *end != '\0' || v < 0 || v > 3) {
       sendJson(400, "{\"error\":\"bad buf\"}");
       return;
     }
