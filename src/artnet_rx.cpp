@@ -1,5 +1,6 @@
 #include "artnet_rx.h"
 
+#include "live_input.h"
 #include "log.h"
 
 #include <Arduino.h>
@@ -16,35 +17,13 @@ static constexpr uint32_t kStatMs = 5000;
 
 static WiFiUDP s_udp;
 static uint8_t s_pkt[kMaxPkt];
-static uint8_t s_dmx[512];
-static uint16_t s_dmxLen = 0;
 static uint8_t s_seq = 0;
-static uint32_t s_lastMs = 0;
 static uint32_t s_statMs = 0;
 static uint32_t s_pkts = 0;
 static uint32_t s_dmxOk = 0;
-static uint32_t s_drops = 0;
 static uint32_t s_wrongUni = 0;
-static bool s_unread = false;
+static bool s_up = false;
 static bool s_loggedFirst = false;
-
-static void takeDmx(const uint8_t *data, uint16_t len, uint8_t seq) {
-  if (len > 512) {
-    len = 512;
-  }
-  if (s_unread) {
-    ++s_drops;
-  }
-  memcpy(s_dmx, data, len);
-  if (len < 512) {
-    memset(s_dmx + len, 0, 512 - len);
-  }
-  s_dmxLen = len;
-  s_seq = seq;
-  s_unread = true;
-  s_lastMs = millis();
-  ++s_dmxOk;
-}
 
 static void parsePacket(int n, const IPAddress &from) {
   ++s_pkts;
@@ -71,11 +50,14 @@ static void parsePacket(int n, const IPAddress &from) {
   if (kHdr + len > static_cast<size_t>(n)) {
     len = static_cast<uint16_t>(n - kHdr);
   }
-  const uint8_t seq = s_pkt[12];
-  takeDmx(s_pkt + kHdr, len, seq);
+  s_seq = s_pkt[12];
+  if (!LiveInput::push(LiveSource::ArtNet, s_pkt + kHdr, len)) {
+    return;
+  }
+  ++s_dmxOk;
   if (!s_loggedFirst) {
     s_loggedFirst = true;
-    LOG_V("artnet", "dmx uni=%u seq=%u len=%u from=%s", uni, seq, len,
+    LOG_V("artnet", "dmx uni=%u seq=%u len=%u from=%s", uni, s_seq, len,
           from.toString().c_str());
   }
 }
@@ -83,22 +65,38 @@ static void parsePacket(int n, const IPAddress &from) {
 } // namespace
 
 void ArtNetRx::begin() {
-  memset(s_dmx, 0, sizeof(s_dmx));
+  if (s_up) {
+    return;
+  }
   if (!s_udp.begin(kArtNetPort)) {
     LOG_C("artnet", "udp bind :%u failed", kArtNetPort);
     return;
   }
+  s_up = true;
   LOG_V("artnet", "listen :%u uni=%u", kArtNetPort, kArtNetUniverse);
 }
 
+void ArtNetRx::stop() {
+  if (!s_up) {
+    return;
+  }
+  s_udp.stop();
+  s_up = false;
+  LOG_V("artnet", "stop");
+}
+
 void ArtNetRx::service() {
+  if (!s_up) {
+    return;
+  }
   for (;;) {
     const int n = s_udp.parsePacket();
     if (n <= 0) {
       break;
     }
     const IPAddress from = s_udp.remoteIP();
-    const int got = s_udp.read(s_pkt, n > static_cast<int>(kMaxPkt) ? kMaxPkt : n);
+    const int got =
+        s_udp.read(s_pkt, n > static_cast<int>(kMaxPkt) ? kMaxPkt : n);
     if (got > 0) {
       parsePacket(got, from);
     }
@@ -108,23 +106,9 @@ void ArtNetRx::service() {
   if (now - s_statMs >= kStatMs) {
     s_statMs = now;
     if (s_pkts > 0 || s_dmxOk > 0) {
-      LOG_V("artnet", "rx pkts=%u dmx=%u uni=%u seq=%u drops=%u skip_uni=%u",
+      LOG_V("artnet", "rx pkts=%u dmx=%u uni=%u seq=%u skip_uni=%u",
             static_cast<unsigned>(s_pkts), static_cast<unsigned>(s_dmxOk),
-            kArtNetUniverse, s_seq, static_cast<unsigned>(s_drops),
-            static_cast<unsigned>(s_wrongUni));
+            kArtNetUniverse, s_seq, static_cast<unsigned>(s_wrongUni));
     }
   }
 }
-
-bool ArtNetRx::hasFresh(uint32_t timeoutMs) {
-  if (s_lastMs == 0) {
-    return false;
-  }
-  return (millis() - s_lastMs) < timeoutMs;
-}
-
-const uint8_t *ArtNetRx::dmx() { return s_dmx; }
-
-uint16_t ArtNetRx::dmxLen() { return s_dmxLen; }
-
-void ArtNetRx::consume() { s_unread = false; }

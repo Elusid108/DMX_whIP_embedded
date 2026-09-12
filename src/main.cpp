@@ -1,9 +1,9 @@
 #include <Arduino.h>
 #include <FastLED.h>
 
-#include "artnet_rx.h"
 #include "board_matrix.h"
 #include "led_ctrl.h"
+#include "live_cfg.h"
 #include "live_input.h"
 #include "log.h"
 #include "sd_info.h"
@@ -11,11 +11,8 @@
 #include "wifi_setup.h"
 
 static CRGB leds[kLedCount];
-static constexpr uint32_t kLedIntervalMs = 25;
 
-static void renderArtNet() {
-  const uint8_t *d = ArtNetRx::dmx();
-  const uint16_t len = ArtNetRx::dmxLen();
+static void renderLive(const uint8_t *d, uint16_t len) {
   for (uint16_t p = 0; p < kLedCount; ++p) {
     const uint16_t i = static_cast<uint16_t>(p * 3);
     if (i + 2 < len) {
@@ -24,7 +21,6 @@ static void renderArtNet() {
       leds[p] = CRGB::Black;
     }
   }
-  ArtNetRx::consume();
 }
 
 void setup() {
@@ -33,7 +29,8 @@ void setup() {
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
   WifiSetup::begin();
-  ArtNetRx::begin();
+  LiveCfg::begin();
+  LiveInput::begin();
   SdInfo::begin();
 
   FastLED.addLeds<WS2812B, kLedPin, GRB>(leds, kLedCount);
@@ -45,19 +42,24 @@ void setup() {
 
 void loop() {
   Log::service();
-  ArtNetRx::service();
+  LiveInput::service();
   WifiSetup::service();
+  SdInfo::service();
 
   static uint32_t lastShow = 0;
   const uint32_t now = millis();
-  if (now - lastShow < kLedIntervalMs) {
+  if (now - lastShow < LiveCfg::showIntervalMs()) {
     yield();
     return;
   }
   lastShow = now;
 
   if (LiveInput::active()) {
-    renderArtNet();
+    const uint8_t *d = nullptr;
+    uint16_t len = 0;
+    if (LiveInput::pop(d, len)) {
+      renderLive(d, len);
+    }
   } else {
     FastLED.clear();
   }

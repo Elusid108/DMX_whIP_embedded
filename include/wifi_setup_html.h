@@ -17,10 +17,12 @@ h1{font-size:1.15rem;margin:0 0 4px;flex:0 0 auto}
 #list{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid #333;border-radius:8px;margin:8px 0;padding:4px;background:#161616}
 .net{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;margin:4px;background:#1c1c1c;border:1px solid #333;border-radius:8px;cursor:pointer}
 .net.sel{border-color:#6cf}
-.form,#ledrow{flex:0 0 auto}
+.form,#ledrow,#liverow{flex:0 0 auto}
 label{display:block;margin:6px 0 2px;font-size:.8rem;color:#bbb}
-input,button{width:100%;box-sizing:border-box;padding:8px 10px;font-size:1rem;border-radius:8px;border:1px solid #333;background:#1c1c1c;color:#eee}
-input[type=range]{padding:8px 0}
+input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:1rem;border-radius:8px;border:1px solid #333;background:#1c1c1c;color:#eee}
+.brirow{display:flex;gap:8px;align-items:center}
+.brirow input[type=range]{flex:1 1 auto;padding:8px 0;min-width:0}
+#brinum{width:4.6rem;flex:0 0 4.6rem;padding:8px 6px;text-align:right}
 button{background:#2a6;border:0;margin:8px 0 0;font-weight:600}
 button.sec{background:#333}
 #savedrow{display:none;margin-top:6px}
@@ -50,8 +52,33 @@ button.sec{background:#333}
 </div>
 <div id="ledrow">
 <label for="bri">Max brightness <b id="brival">10</b></label>
+<div class="brirow">
 <input id="bri" type="range" min="0" max="255" value="10">
+<input id="brinum" type="number" min="0" max="255" value="10" inputmode="numeric">
+</div>
 <p id="briwarn">This 8×8 can overheat above 64.</p>
+</div>
+<div id="liverow">
+<label for="proto">Protocol</label>
+<select id="proto">
+<option value="auto">Auto</option>
+<option value="artnet">Art-Net</option>
+<option value="sacn">sACN</option>
+</select>
+<label for="fps">Show FPS</label>
+<select id="fps">
+<option value="20">20</option>
+<option value="30">30</option>
+<option value="40" selected>40</option>
+<option value="60">60</option>
+</select>
+<label for="buf">Buffer</label>
+<select id="buf">
+<option value="0">0 latest</option>
+<option value="1">1 frame</option>
+<option value="2">2 frames</option>
+<option value="3">3 frames</option>
+</select>
 </div>
 <p id="status"></p>
 <p id="sd">SD: …</p>
@@ -65,16 +92,24 @@ const savedRow=document.getElementById('savedrow');
 const savedLab=document.getElementById('savedlab');
 const verEl=document.getElementById('ver');
 const briEl=document.getElementById('bri');
+const brinum=document.getElementById('brinum');
 const brival=document.getElementById('brival');
 const briwarn=document.getElementById('briwarn');
 const sdEl=document.getElementById('sd');
+const protoEl=document.getElementById('proto');
+const fpsEl=document.getElementById('fps');
+const bufEl=document.getElementById('buf');
 let pollTimer=0;
 let briTimer=0;
+let liveTimer=0;
 let briDirty=false;
+let liveDirty=false;
+let scanning=false;
 function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t;}
 function dropHint(){setStatus('Page dropped. Rejoin dmxwhip and open http://4.3.2.1','err');}
 function showBri(v){
   briEl.value=v;
+  brinum.value=v;
   brival.textContent=v;
   briwarn.className=v>64?'on':'';
 }
@@ -83,11 +118,18 @@ function applySd(s){
   if(!sd||!sd.ok){sdEl.textContent='SD: not mounted';return;}
   sdEl.textContent='SD: '+sd.type+' '+sd.size_mb+' MB  used '+sd.used_mb+'  free '+sd.free_mb;
 }
+function applyLive(s){
+  if(liveDirty) return;
+  if(s.proto) protoEl.value=s.proto;
+  if(typeof s.fps==='number') fpsEl.value=String(s.fps);
+  if(typeof s.buf==='number') bufEl.value=String(s.buf);
+}
 function applyMeta(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
   if(s.saved){savedRow.style.display='block';savedLab.textContent='Saved: '+s.saved+' (connects at boot)';}
   else {savedRow.style.display='none';savedLab.textContent='';}
   if(typeof s.bri==='number'&&!briDirty) showBri(s.bri);
+  applyLive(s);
   applySd(s);
 }
 async function jget(url){
@@ -113,22 +155,31 @@ function renderNets(nets){
 }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 async function scan(force){
+  scanning=true;
   setStatus('Scanning…');
   try{
     await jget('/scan'+(force?'?start=1':''));
+    let finished=false;
     for(let i=0;i<25;i++){
       const data=await jget('/scan');
       if(data.state==='scanning'){await new Promise(r=>setTimeout(r,400));continue;}
-      if(data.state==='connecting'){setStatus('Connect in progress…');return;}
+      if(data.state==='connecting'){setStatus('Connect in progress…');finished=true;break;}
       renderNets(data.networks||[]);
       if((data.networks||[]).length) setStatus('Select a network, then Connect.');
-      return;
+      finished=true;
+      break;
     }
-    setStatus('Scan timed out. Try again.','err');
+    if(!finished) setStatus('Scan timed out. Try again.','err');
   }catch(e){dropHint();}
+  finally{scanning=false;}
+  try{
+    const s=await jget('/status');
+    if(s.state==='connected'||s.state==='connecting'||s.state==='failed') showStatus(s);
+  }catch(e){}
 }
 function showStatus(s){
   applyMeta(s);
+  if(scanning) return s.state==='connecting';
   if(s.state==='connected'){
     setStatus('Connected to '+s.ssid+'  STA IP '+s.ip+(s.ap_ip?'  (AP '+s.ap_ip+')':''),'ok');
     return false;
@@ -141,7 +192,8 @@ function showStatus(s){
 async function poll(){
   try{
     const s=await jget('/status');
-    if(showStatus(s)) pollTimer=setTimeout(poll,500);
+    const fast=showStatus(s);
+    pollTimer=setTimeout(poll,fast?500:1000);
   }catch(e){dropHint();}
 }
 async function connect(){
@@ -173,13 +225,44 @@ function postBri(v){
     .then(()=>{briDirty=false;})
     .catch(dropHint);
 }
-briEl.oninput=()=>{
-  const v=+briEl.value;
+function scheduleBri(v){
+  v=Math.max(0,Math.min(255,v|0));
   briDirty=true;
   showBri(v);
   clearTimeout(briTimer);
   briTimer=setTimeout(()=>postBri(v),300);
+}
+function parseBriNum(){
+  const t=brinum.value.trim();
+  if(t==='') return null;
+  if(!/^\d+$/.test(t)) return null;
+  return parseInt(t,10);
+}
+briEl.oninput=()=>scheduleBri(+briEl.value);
+brinum.oninput=()=>{
+  const n=parseBriNum();
+  if(n===null) return;
+  scheduleBri(n);
 };
+brinum.onchange=()=>{
+  const n=parseBriNum();
+  if(n===null){showBri(+briEl.value);return;}
+  scheduleBri(n);
+};
+function postLive(){
+  const body=new URLSearchParams({proto:protoEl.value,fps:fpsEl.value,buf:bufEl.value});
+  fetch('/live',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})
+    .then(()=>{liveDirty=false;})
+    .catch(dropHint);
+}
+function scheduleLive(){
+  liveDirty=true;
+  clearTimeout(liveTimer);
+  liveTimer=setTimeout(postLive,300);
+}
+protoEl.onchange=scheduleLive;
+fpsEl.onchange=scheduleLive;
+bufEl.onchange=scheduleLive;
 document.getElementById('scan').onclick=()=>scan(true);
 document.getElementById('go').onclick=connect;
 document.getElementById('forget').onclick=forget;
@@ -187,8 +270,9 @@ document.getElementById('forget').onclick=forget;
   try{
     const s=await jget('/status');
     applyMeta(s);
-    if(showStatus(s)&&s.state==='connecting') poll();
-    else if(s.state!=='connected') await scan(false);
+    const connecting=showStatus(s)&&s.state==='connecting';
+    poll();
+    if(!connecting) await scan(true);
   }catch(e){dropHint();}
 })();
 </script>
