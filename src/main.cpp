@@ -13,13 +13,6 @@
 static CRGB leds[kLedCount];
 static constexpr uint32_t kLedIntervalMs = 25;
 
-static uint16_t xy(uint8_t x, uint8_t y) {
-  if (kMatrixSerpentine && (x & 1)) {
-    return static_cast<uint16_t>(x * kMatrixHeight + (kMatrixHeight - 1 - y));
-  }
-  return static_cast<uint16_t>(x * kMatrixHeight + y);
-}
-
 static const char *sdCardTypeName(uint8_t cardType) {
   switch (cardType) {
   case CARD_NONE:
@@ -85,15 +78,12 @@ static void initSd() {
 static void renderArtNet() {
   const uint8_t *d = ArtNetRx::dmx();
   const uint16_t len = ArtNetRx::dmxLen();
-  uint16_t i = 0;
-  for (uint8_t y = 0; y < kMatrixHeight; ++y) {
-    for (uint8_t x = 0; x < kMatrixWidth; ++x) {
-      if (i + 2 < len) {
-        leds[xy(x, y)] = CRGB(d[i], d[i + 1], d[i + 2]);
-      } else {
-        leds[xy(x, y)] = CRGB::Black;
-      }
-      i += 3;
+  for (uint16_t p = 0; p < kLedCount; ++p) {
+    const uint16_t i = static_cast<uint16_t>(p * 3);
+    if (i + 2 < len) {
+      leds[p] = CRGB(d[i], d[i + 1], d[i + 2]);
+    } else {
+      leds[p] = CRGB::Black;
     }
   }
   ArtNetRx::consume();

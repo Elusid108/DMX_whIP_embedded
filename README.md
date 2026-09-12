@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.2.1**
+Version: **0.2.2**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -29,7 +29,7 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 
 ## Art-Net (Resolume)
 
-- UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). 64 pixels = 192 RGB channels, row-major into the serpentine matrix. FastLED maps RGB → GRB. Brightness 10.
+- UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). 64 pixels = 192 RGB channels, **1:1** onto the strip (DMX triplet *n* → LED *n*). No serpentine/row remap in firmware — put snake/orientation in the Resolume fixture patch. FastLED maps RGB → GRB. Brightness 10.
 - Live path: drop-to-latest (overwrite unread frames). Idle is **black** (no rainbow). Unicast from Resolume to the STA IP. Serial `[V][artnet]` first packet + 5 s counters (`drops` = overwritten before render). `[V][ap] down (live)` / `[V][ap] up (idle)` on portal transitions.
 
 ## Living milestone list
@@ -47,6 +47,7 @@ Bring-up (this board)
 - [x] SoftAP IP `4.3.2.1` (DHCP gateway + DNS) — implemented
 - [x] SoftAP stops ~45 s after STA IP (STA-only for live); AP returns if STA drops — implemented
 - [x] Idle = black panel + SoftAP/HTTP; live protocol = pixels + portal down; AP returns after ~2 s silence — implemented (not verified)
+- [x] Live Art-Net 1:1 channel → LED index (no firmware snake remap) — implemented (not verified)
 
 From the historical PDF (adapted)
 
@@ -80,6 +81,7 @@ Companion PC (sibling repo, not this tree)
 
 ## Version history
 
+- **0.2.2** — Live Art-Net is 1:1 onto the strip; serpentine remap removed so Resolume owns the fixture patch
 - **0.2.1** — Black idle; SoftAP/HTTP only while not streaming (`LiveInput`); Art-Net still the only live source
 - **0.2.0** — Art-Net universe 0 → 8×8; SoftAP off 45 s after STA; drop-to-latest live render; rainbow if stream silent
 - **0.1.1** — SoftAP IP / fallback `http://4.3.2.1` (WLED-style); DNS TTL 0
