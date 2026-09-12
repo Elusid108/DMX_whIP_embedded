@@ -1,5 +1,6 @@
 #include "wifi_setup.h"
 
+#include "live_input.h"
 #include "log.h"
 #include "version.h"
 #include "wifi_setup_html.h"
@@ -37,6 +38,7 @@ static ConnectStatus s_connectStatus = ConnectStatus::Idle;
 static bool s_scanRunning = false;
 static bool s_haveScan = false;
 static uint32_t s_connectStart = 0;
+static bool s_apUp = false;
 static volatile bool s_gotIp = false;
 static volatile bool s_discPending = false;
 static volatile bool s_lostPending = false;
@@ -135,12 +137,44 @@ static void clearCreds() {
   LOG_V("wifi", "forgot saved network");
 }
 
+static void startAp() {
+  if (s_apUp) {
+    return;
+  }
+  WiFi.mode(WIFI_AP_STA);
+  if (!WiFi.softAPConfig(kApIp, kApIp, kApMask)) {
+    LOG_C("ap", "softAPConfig failed");
+  }
+  if (!WiFi.softAP(kApSsid, kApPass)) {
+    LOG_C("ap", "softAP failed");
+    return;
+  }
+  s_dns.setTTL(0);
+  if (!s_dns.start(kDnsPort, "*", kApIp)) {
+    LOG_C("ap", "dns failed");
+  }
+  s_apUp = true;
+  LOG_V("ap", "up (idle) ssid=%s ip=%s", kApSsid,
+        WiFi.softAPIP().toString().c_str());
+}
+
+static void stopAp() {
+  if (!s_apUp) {
+    return;
+  }
+  s_dns.stop();
+  WiFi.softAPdisconnect(false);
+  s_apUp = false;
+  LOG_V("ap", "down (live)");
+}
+
 static void failConnect(const char *why) {
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, false);
   s_connectStatus = ConnectStatus::Failed;
   setError(why);
   LOG_C("wifi", "connect failed ssid=%s %s", s_pendingSsid.c_str(), s_error);
+  startAp();
 }
 
 static void beginConnect(const String &ssid, const String &pass) {
@@ -293,6 +327,7 @@ static void handleForget() {
   s_pendingSsid = "";
   s_connectStatus = ConnectStatus::Idle;
   s_error[0] = '\0';
+  startAp();
   LOG_V("http", "forget");
   sendStatus(200);
 }
@@ -374,6 +409,7 @@ static void pollConnect() {
   if (s_lostPending) {
     s_lostPending = false;
     LOG_C("wifi", "sta lost reason=%u", s_discReason);
+    startAp();
     if (s_discReason == WIFI_REASON_NO_AP_FOUND) {
       failConnect("no network found");
     } else {
@@ -392,6 +428,7 @@ static void pollConnect() {
       WiFi.status() != WL_CONNECTED && !s_lostPending) {
     s_connectStatus = ConnectStatus::Connecting;
     s_connectStart = millis();
+    startAp();
   }
 }
 
@@ -404,21 +441,7 @@ void WifiSetup::begin() {
   WiFi.setHostname(kApSsid);
   WiFi.onEvent(onWifiEvent);
 
-  if (!WiFi.softAPConfig(kApIp, kApIp, kApMask)) {
-    LOG_C("ap", "softAPConfig failed");
-  }
-  if (!WiFi.softAP(kApSsid, kApPass)) {
-    LOG_C("ap", "softAP failed");
-  }
-  const IPAddress apIp = WiFi.softAPIP();
-  LOG_V("ap", "ssid=%s ip=%s", kApSsid, apIp.toString().c_str());
-
-  s_dns.setTTL(0);
-  if (!s_dns.start(kDnsPort, "*", kApIp)) {
-    LOG_C("ap", "dns failed");
-  } else {
-    LOG_V("ap", "dns captive %u -> %s", kDnsPort, apIp.toString().c_str());
-  }
+  startAp();
 
   s_server.on("/", HTTP_GET, sendPage);
   s_server.on("/scan", HTTP_GET, handleScan);
@@ -459,6 +482,13 @@ void WifiSetup::begin() {
 void WifiSetup::service() {
   pollScan();
   pollConnect();
-  s_dns.processNextRequest();
+  if (LiveInput::active() && WiFi.status() == WL_CONNECTED) {
+    stopAp();
+    return;
+  }
+  startAp();
+  if (s_apUp) {
+    s_dns.processNextRequest();
+  }
   s_server.handleClient();
 }

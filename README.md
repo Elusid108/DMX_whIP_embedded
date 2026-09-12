@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.1.1**
+Version: **0.2.1**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -22,10 +22,15 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 ## SoftAP config portal
 
 - SSID `dmxwhip`, password `pass1234`, page `http://4.3.2.1`
-- AP+STA: scan 2.4 GHz networks, connect, always **remember** last STA network in NVS and reconnect at boot. **Forget saved network** on the page clears NVS and drops STA; SoftAP stays up.
+- AP+STA: scan 2.4 GHz networks, connect, always **remember** last STA network in NVS and reconnect at boot. **Forget saved network** on the page clears NVS and drops STA. SoftAP/HTTP stay up while idle (no live lighting protocol). When `LiveInput` is fresh (Art-Net today; sACN/KiNet later), SoftAP and the portal stop so the radio is STA-only. After ~2 s of silence the portal comes back. SoftAP also returns if STA drops.
 - Captive DNS hijacks all names to `4.3.2.1`. Probe URLs (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`, …) return the portal HTML with **200**, never OS “success” tokens (no HTTP 204 for Android, no Apple `Success`, no Windows NCSI pass string).
 - Limit: HTTPS connectivity checks cannot be spoofed. Some new phones only show a sign-in notification. DHCP Captive-Portal-API (RFC 8910) needs IDF 5+; this Arduino core is IDF 4.4. If the sheet does not open, use `http://4.3.2.1` (not https).
-- Connecting STA may hop the SoftAP channel; if the page drops, rejoin `dmxwhip`.
+- Connecting STA may hop the SoftAP channel; if the page drops, rejoin `dmxwhip`. While a protocol is live the AP is gone — unicast to the **STA IP** (serial `[V][wifi] connected ... ip=`). While idle, use `dmxwhip` / `http://4.3.2.1`.
+
+## Art-Net (Resolume)
+
+- UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). 64 pixels = 192 RGB channels, row-major into the serpentine matrix. FastLED maps RGB → GRB. Brightness 10.
+- Live path: drop-to-latest (overwrite unread frames). Idle is **black** (no rainbow). Unicast from Resolume to the STA IP. Serial `[V][artnet]` first packet + 5 s counters (`drops` = overwritten before render). `[V][ap] down (live)` / `[V][ap] up (idle)` on portal transitions.
 
 ## Living milestone list
 
@@ -40,6 +45,8 @@ Bring-up (this board)
 - [x] STA credentials persist in NVS and reconnect at boot — implemented
 - [x] Captive probe handlers + viewport-fixed portal + Forget + version in `/status` — implemented (this rev; captive auto-open not verified)
 - [x] SoftAP IP `4.3.2.1` (DHCP gateway + DNS) — implemented
+- [x] SoftAP stops ~45 s after STA IP (STA-only for live); AP returns if STA drops — implemented
+- [x] Idle = black panel + SoftAP/HTTP; live protocol = pixels + portal down; AP returns after ~2 s silence — implemented (not verified)
 
 From the historical PDF (adapted)
 
@@ -47,11 +54,11 @@ From the historical PDF (adapted)
 - [ ] JSON `/api/stats` (Wi-Fi IP/RSSI, later queue depths / drops / FPS)
 - [ ] RTOS layout: RX on APP CPU, render on PRO CPU, SD I/O task; rings allocated at boot
 - [ ] Protocol adapter interface + DMX universe assembler (seq, late, missing, dupes)
-- [ ] Art-Net (UDP 6454) → assembler → test pattern / 64 pixels
+- [x] Art-Net (UDP 6454) → assembler → test pattern / 64 pixels — implemented (universe 0 → 8×8; no multi-universe assembler yet; not verified)
 - [ ] sACN / E1.31 multicast + frame fence
 - [ ] KiNet (optional; after Art-Net and sACN)
-- [ ] LED manager: (universe, channel) → framebuffer; double-buffer (triple if SD + net)
-- [ ] Render scheduler at target FPS; drop-to-latest for live
+- [x] LED manager: (universe, channel) → framebuffer; double-buffer (triple if SD + net) — implemented (64-pixel drop-to-latest + 25 ms show; not a full LED manager)
+- [x] Render scheduler at target FPS; drop-to-latest for live — implemented (40 FPS / 25 ms; not verified)
 - [ ] SD async reader (SPI on this board; SDMMC only on boards that have it); ring sized from profile — not 128–512 KB on the Matrix
 - [ ] Recording file spec v1 (header + timestamped frames + CRC + index)
 - [ ] Playback engine; pause on underrun
@@ -73,5 +80,7 @@ Companion PC (sibling repo, not this tree)
 
 ## Version history
 
+- **0.2.1** — Black idle; SoftAP/HTTP only while not streaming (`LiveInput`); Art-Net still the only live source
+- **0.2.0** — Art-Net universe 0 → 8×8; SoftAP off 45 s after STA; drop-to-latest live render; rainbow if stream silent
 - **0.1.1** — SoftAP IP / fallback `http://4.3.2.1` (WLED-style); DNS TTL 0
 - **0.1.0** — Bring-up: serial log, SD SPI, LED rainbow, SoftAP portal (`dmxwhip` / `pass1234`), NVS STA remember, captive probes, Forget, version in `/status`

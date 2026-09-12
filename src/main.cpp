@@ -3,12 +3,15 @@
 #include <SD.h>
 #include <SPI.h>
 
+#include "artnet_rx.h"
 #include "board_matrix.h"
+#include "live_input.h"
 #include "log.h"
 #include "version.h"
 #include "wifi_setup.h"
 
 static CRGB leds[kLedCount];
+static constexpr uint32_t kLedIntervalMs = 25;
 
 static uint16_t xy(uint8_t x, uint8_t y) {
   if (kMatrixSerpentine && (x & 1)) {
@@ -79,12 +82,30 @@ static void initSd() {
   listSdRoot();
 }
 
+static void renderArtNet() {
+  const uint8_t *d = ArtNetRx::dmx();
+  const uint16_t len = ArtNetRx::dmxLen();
+  uint16_t i = 0;
+  for (uint8_t y = 0; y < kMatrixHeight; ++y) {
+    for (uint8_t x = 0; x < kMatrixWidth; ++x) {
+      if (i + 2 < len) {
+        leds[xy(x, y)] = CRGB(d[i], d[i + 1], d[i + 2]);
+      } else {
+        leds[xy(x, y)] = CRGB::Black;
+      }
+      i += 3;
+    }
+  }
+  ArtNetRx::consume();
+}
+
 void setup() {
   Log::begin(115200, kLogLevelDefault);
   LOG_V("boot", "ESP32-S3-Matrix v%s", kFirmwareVersion);
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
   WifiSetup::begin();
+  ArtNetRx::begin();
   initSd();
 
   FastLED.addLeds<WS2812B, kLedPin, GRB>(leds, kLedCount);
@@ -96,18 +117,21 @@ void setup() {
 
 void loop() {
   Log::service();
+  ArtNetRx::service();
   WifiSetup::service();
-  static uint8_t hue = 0;
 
-  for (uint8_t x = 0; x < kMatrixWidth; ++x) {
-    const uint8_t columnHue =
-        static_cast<uint8_t>(hue + x * (256 / kMatrixWidth));
-    for (uint8_t y = 0; y < kMatrixHeight; ++y) {
-      leds[xy(x, y)] = CHSV(columnHue, 255, 255);
-    }
+  static uint32_t lastShow = 0;
+  const uint32_t now = millis();
+  if (now - lastShow < kLedIntervalMs) {
+    yield();
+    return;
   }
+  lastShow = now;
 
+  if (LiveInput::active()) {
+    renderArtNet();
+  } else {
+    FastLED.clear();
+  }
   FastLED.show();
-  hue++;
-  delay(25);
 }
