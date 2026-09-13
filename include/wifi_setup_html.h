@@ -9,132 +9,128 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
 <title>dmxwhip</title>
 <style>
+:root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
-body{display:flex;flex-direction:column;box-sizing:border-box;padding:10px 12px;font-family:system-ui,sans-serif;background:#111;color:#eee;max-width:28rem;margin:0 auto}
-h1{font-size:1.15rem;margin:0 0 4px;flex:0 0 auto}
-.muted{color:#9aa;font-size:.8rem;margin:0 0 8px;line-height:1.3;flex:0 0 auto}
-.tabs{display:flex;gap:8px;flex:0 0 auto;margin:0 0 8px}
-.tabs button{margin:0;flex:1}
-.tabs button.on{background:#2a6}
-#viewNet,#viewPlay{flex:1 1 auto;min-height:0;display:none;flex-direction:column}
-#viewNet.on,#viewPlay.on{display:flex}
-#scan{flex:0 0 auto}
-#list,#plist{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid #333;border-radius:8px;margin:8px 0;padding:4px;background:#161616}
-.net,.playrow{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;margin:4px;background:#1c1c1c;border:1px solid #333;border-radius:8px;cursor:pointer}
-.net.sel,.playrow.sel{border-color:#6cf}
-.form,#ledrow,#liverow,#playopts{flex:0 0 auto}
-label{display:block;margin:6px 0 2px;font-size:.8rem;color:#bbb}
-input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:1rem;border-radius:8px;border:1px solid #333;background:#1c1c1c;color:#eee}
+body{display:flex;flex-direction:column;box-sizing:border-box;padding:10px 12px;font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);max-width:28rem;margin:0 auto}
+.strip{flex:0 0 auto;padding:0 0 8px;margin:0 0 8px;border-bottom:1px solid var(--border)}
+.namerow{display:flex;gap:6px;align-items:center}
+.namerow input{flex:1 1 auto;min-width:0}
+.readout{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.35;word-break:break-word}
+.tabs{display:flex;gap:0;flex:0 0 auto;border-bottom:1px solid var(--border);margin:0 0 8px}
+.tabs button{flex:1;margin:0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-weight:500}
+.tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
+#viewPlay,#viewSetup{flex:1 1 auto;min-height:0;display:none;flex-direction:column}
+#viewPlay.on,#viewSetup.on{display:flex}
+.lab{display:block;margin:8px 0 2px;font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.mod{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+#list,#plist{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:6px;margin:6px 0;padding:3px;background:var(--bg)}
+.net,.playrow{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;margin:3px;background:var(--chrome);border:1px solid var(--border);border-radius:6px;cursor:pointer}
+.net.sel,.playrow.sel{border-color:#22d3ee66;box-shadow:inset 2px 0 0 var(--accent)}
+.row{display:flex;flex-wrap:wrap;gap:6px;flex:0 0 auto}
+.row button{width:auto;margin:0;flex:0 0 auto}
+input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:1rem;border-radius:6px;border:1px solid var(--border);background:var(--chrome);color:var(--text)}
 .brirow{display:flex;gap:8px;align-items:center}
-.brirow input[type=range]{flex:1 1 auto;padding:8px 0;min-width:0}
-#brinum{width:4.6rem;flex:0 0 4.6rem;padding:8px 6px;text-align:right}
-button{background:#2a6;border:0;margin:8px 0 0;font-weight:600}
-button.sec{background:#333}
-#savedrow{display:none;margin-top:6px}
-#briwarn{display:none;color:#fa6;font-size:.8rem;margin:4px 0 0;line-height:1.3}
-#briwarn.on{display:block}
-#fileopts,#folderopts,#foldernrow{display:none}
-#fileopts.on,#folderopts.on,#foldernrow.on{display:block}
-#status{flex:0 0 auto;margin:8px 0 4px;min-height:2.1em;line-height:1.35;font-size:.9rem}
-#sd,#ver,#playnow{flex:0 0 auto;color:#9aa;font-size:.75rem;margin:0 0 4px}
-.ok{color:#8d8}
-.err{color:#f88}
+.brirow input[type=range]{flex:1 1 auto;padding:8px 0;min-width:0;accent-color:var(--accent)}
+#brinum{width:4.6rem;flex:0 0 4.6rem;padding:8px 6px;text-align:right;font-family:ui-monospace,monospace}
+button{background:var(--chrome);border:1px solid var(--border);margin:6px 0 0;font-weight:600;color:var(--text)}
+button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+#savedrow,#renrow,#fileopts,#folderopts,#foldernrow,#briwarn,#note{display:none}
+#savedrow.on,#renrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#briwarn.on,#note.on{display:block}
+#briwarn{color:#f59e0b;font-size:.8rem;margin:4px 0 0}
+#note{margin:6px 0 0;font-size:.85rem}
+#status,#ver{flex:0 0 auto;margin:6px 0 0;font-size:.85rem;color:var(--muted);min-height:1.2em}
+.ok{color:#86efac}
+.err{color:#f87171}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.hint{color:var(--muted);font-size:.75rem;margin:0 0 6px;line-height:1.3}
 </style>
 </head>
 <body>
-<h1>dmxwhip</h1>
+<div class="strip">
+<div class="namerow">
+<input id="name" maxlength="63" autocomplete="off">
+<button id="saveName" type="button">Save</button>
+<button class="pri" id="identify" type="button">Identify</button>
+</div>
+<p class="readout" id="meta"></p>
+<p id="note"></p>
+</div>
 <div class="tabs">
-<button class="on" id="tabNet" type="button">Network</button>
-<button class="sec" id="tabPlay" type="button">Playback</button>
+<button class="on" id="tabPlay" type="button">Playback</button>
+<button id="tabSetup" type="button">Setup</button>
 </div>
-<div id="viewNet" class="on">
-<p class="muted">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
-<button class="sec" id="scan" type="button">Scan networks</button>
+<div id="viewPlay" class="on">
+<p class="hint">Idle plays SD. Live Art-Net/sACN preempts.</p>
+<div id="plist"></div>
+<p class="readout" id="playnow"></p>
+<div class="row">
+<button id="prev" type="button">Prev</button>
+<button class="pri" id="play" type="button">Play</button>
+<button id="stop" type="button">Stop</button>
+<button id="next" type="button">Next</button>
+<button id="rename" type="button">Rename</button>
+</div>
+<div id="renrow">
+<input id="rendraft" maxlength="48" autocomplete="off">
+<div class="row">
+<button class="pri" id="renok" type="button">Save name</button>
+<button id="rencancel" type="button">Cancel</button>
+</div>
+</div>
+<div id="fileopts"><label class="lab" for="fileloop">Loop</label>
+<select id="fileloop"><option value="one">This file</option><option value="all">All in this folder</option></select></div>
+<div id="folderopts"><label class="lab" for="folderrep">Repeat</label>
+<select id="folderrep"><option value="forever">Forever</option><option value="count">Set times</option></select>
+<div id="foldernrow"><label class="lab" for="foldern">Times</label>
+<input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric"></div></div>
+</div>
+<div id="viewSetup">
+<p class="hint">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
+<div class="lab">Radio</div>
+<div class="row">
+<button id="scan" type="button">Scan</button>
+<button class="pri" id="go" type="button">Connect</button>
+<button id="forget" type="button">Forget</button>
+</div>
 <div id="list"></div>
-<div class="form">
-<label for="ssid">Network name</label>
+<label class="lab" for="ssid">SSID</label>
 <input id="ssid" maxlength="32" placeholder="SSID or hidden network" autocomplete="off">
-<label for="pass">Password</label>
+<label class="lab" for="pass">Password</label>
 <input id="pass" type="password" maxlength="63" placeholder="Leave empty if open" autocomplete="off">
-<button id="go" type="button">Connect</button>
-<div id="savedrow">
-<p class="muted" id="savedlab"></p>
-<button class="sec" id="forget" type="button">Forget saved network</button>
-</div>
-</div>
-<div id="ledrow">
-<label for="bri">Max brightness <b id="brival">10</b></label>
+<div id="savedrow"><p class="readout" id="savedlab"></p></div>
+<p id="status"></p>
+<div class="mod lab">Output</div>
+<label class="lab" for="bri">Brightness</label>
 <div class="brirow">
 <input id="bri" type="range" min="0" max="255" value="10">
 <input id="brinum" type="number" min="0" max="255" value="10" inputmode="numeric">
 </div>
 <p id="briwarn">This 8×8 can overheat above 64.</p>
-</div>
-<div id="liverow">
-<label for="proto">Protocol</label>
-<select id="proto">
-<option value="auto">Auto</option>
-<option value="artnet">Art-Net</option>
-<option value="sacn">sACN</option>
-</select>
-<label for="fps">Show FPS</label>
-<select id="fps">
-<option value="20">20</option>
-<option value="30">30</option>
-<option value="40" selected>40</option>
-<option value="60">60</option>
-</select>
-<label for="buf">Buffer</label>
-<select id="buf">
-<option value="0">0 latest</option>
-<option value="1">1 frame</option>
-<option value="2">2 frames</option>
-<option value="3">3 frames</option>
-</select>
-</div>
-<p id="status"></p>
-</div>
-<div id="viewPlay">
-<p class="muted">Idle plays SD. Live Art-Net/sACN preempts.</p>
-<p id="sd">SD: …</p>
-<p id="playnow"></p>
-<div id="plist"></div>
-<div id="playopts">
-<div id="fileopts">
-<label for="fileloop">Loop</label>
-<select id="fileloop">
-<option value="one">This file</option>
-<option value="all">All in this folder</option>
-</select>
-</div>
-<div id="folderopts">
-<label for="folderrep">Repeat</label>
-<select id="folderrep">
-<option value="forever">Forever</option>
-<option value="count">Set times</option>
-</select>
-<div id="foldernrow">
-<label for="foldern">Times</label>
-<input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric">
+<div class="grid3">
+<div><label class="lab" for="proto">Protocol</label>
+<select id="proto"><option value="auto">Auto</option><option value="artnet">Art-Net</option><option value="sacn">sACN</option></select></div>
+<div><label class="lab" for="fps">FPS</label>
+<select id="fps"><option value="20">20</option><option value="30">30</option><option value="40" selected>40</option><option value="60">60</option></select></div>
+<div><label class="lab" for="buf">Buffer</label>
+<select id="buf"><option value="0">0 latest</option><option value="1">1 frame</option><option value="2">2 frames</option><option value="3">3 frames</option></select></div>
 </div>
 </div>
-</div>
-</div>
-<p id="ver">dmxwhip</p>
+<p id="ver" class="readout">dmxwhip</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
 const ssidEl=document.getElementById('ssid');
 const passEl=document.getElementById('pass');
 const statusEl=document.getElementById('status');
+const noteEl=document.getElementById('note');
 const savedRow=document.getElementById('savedrow');
 const savedLab=document.getElementById('savedlab');
 const verEl=document.getElementById('ver');
+const metaEl=document.getElementById('meta');
+const nameEl=document.getElementById('name');
 const briEl=document.getElementById('bri');
 const brinum=document.getElementById('brinum');
-const brival=document.getElementById('brival');
 const briwarn=document.getElementById('briwarn');
-const sdEl=document.getElementById('sd');
 const playnowEl=document.getElementById('playnow');
 const protoEl=document.getElementById('proto');
 const fpsEl=document.getElementById('fps');
@@ -145,40 +141,34 @@ const foldernEl=document.getElementById('foldern');
 const fileopts=document.getElementById('fileopts');
 const folderopts=document.getElementById('folderopts');
 const foldernrow=document.getElementById('foldernrow');
-const viewNet=document.getElementById('viewNet');
+const renrow=document.getElementById('renrow');
+const rendraft=document.getElementById('rendraft');
 const viewPlay=document.getElementById('viewPlay');
-const tabNet=document.getElementById('tabNet');
+const viewSetup=document.getElementById('viewSetup');
 const tabPlay=document.getElementById('tabPlay');
-let pollTimer=0;
-let briTimer=0;
-let liveTimer=0;
-let playTimer=0;
-let briDirty=false;
-let liveDirty=false;
-let playDirty=false;
-let scanning=false;
-let playSrc='root';
-let playPath='/';
-let playListKey='';
-function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t;}
-function dropHint(){setStatus('Page dropped. Rejoin dmxwhip and open http://4.3.2.1','err');}
+const tabSetup=document.getElementById('tabSetup');
+const idBtn=document.getElementById('identify');
+let pollTimer=0,briTimer=0,liveTimer=0;
+let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,scanning=false;
+let playSrc='root',playPath='/',playListKey='',lastFiles=[];
+function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t||'';}
+function setNote(t,cls){noteEl.className=t?(cls||'err')+' on':'';noteEl.textContent=t||'';}
+function dropHint(){setNote('Page dropped. Rejoin dmxwhip and open http://4.3.2.1','err');}
 function showTab(name){
-  const net=name==='net';
-  viewNet.className=net?'on':'';
-  viewPlay.className=net?'':'on';
-  tabNet.className=net?'on':'sec';
-  tabPlay.className=net?'sec':'on';
+  const play=name==='play';
+  viewPlay.className=play?'on':'';
+  viewSetup.className=play?'':'on';
+  tabPlay.className=play?'on':'';
+  tabSetup.className=play?'':'on';
+}
+function displayName(p){
+  const base=String(p||'').split('/').pop()||'';
+  return base.replace(/\.dmx$/i,'').replace(/^\d{2}_/,'')||p;
 }
 function showBri(v){
   briEl.value=v;
   brinum.value=v;
-  brival.textContent=v;
   briwarn.className=v>64?'on':'';
-}
-function applySd(s){
-  const sd=s.sd;
-  if(!sd||!sd.ok){sdEl.textContent='SD: not mounted';return;}
-  sdEl.textContent='SD: '+sd.type+' '+sd.size_mb+' MB  used '+sd.used_mb+'  free '+sd.free_mb;
 }
 function showPlayOpts(){
   fileopts.className=playSrc==='file'?'on':'';
@@ -189,6 +179,7 @@ function markPlaySel(){
   const kids=plist.children;
   for(let i=0;i<kids.length;i++){
     const el=kids[i];
+    if(!el.dataset) continue;
     const on=el.dataset.src===playSrc&&(playSrc==='root'||el.dataset.path===playPath);
     el.className='playrow'+(on?' sel':'');
   }
@@ -196,6 +187,7 @@ function markPlaySel(){
 function renderPlayList(p){
   const files=p.files||[];
   const dirs=p.dirs||[];
+  lastFiles=files;
   const key=(p.src||'')+'|'+(p.path||'')+'|'+files.join('\n')+'|'+dirs.join('\n');
   if(key===playListKey){markPlaySel();return;}
   playListKey=key;
@@ -205,22 +197,23 @@ function renderPlayList(p){
     d.className='playrow';
     d.dataset.src=src;
     d.dataset.path=path;
-    d.innerHTML='<span>'+escapeHtml(label)+'</span><span class="muted">'+kind+'</span>';
+    d.innerHTML='<span>'+escapeHtml(label)+'</span><span class="readout">'+kind+'</span>';
     d.onclick=()=>{
+      playDirty=true;
       playSrc=src;
       playPath=path;
+      renrow.className='';
       markPlaySel();
       showPlayOpts();
-      schedulePlay();
     };
     plist.appendChild(d);
   }
   row('root','/','All .dmx in /','default');
-  files.forEach(f=>row('file',f,f,'.dmx'));
-  dirs.forEach(d=>row('folder',d,d,'dir'));
+  dirs.forEach(d=>row('folder',d,displayName(d),'dir'));
+  files.forEach(f=>row('file',f,displayName(f),'.dmx'));
   if(!files.length&&!dirs.length){
     const e=document.createElement('p');
-    e.className='muted';
+    e.className='hint';
     e.textContent='No .dmx files.';
     plist.appendChild(e);
   }
@@ -228,7 +221,7 @@ function renderPlayList(p){
 }
 function applyPlay(s){
   const p=s.play;
-  if(!p){playnowEl.textContent='';return;}
+  if(!p){playnowEl.textContent='Now stopped';return;}
   if(!playDirty){
     playSrc=p.src||'root';
     playPath=p.path||'/';
@@ -238,7 +231,7 @@ function applyPlay(s){
   }
   showPlayOpts();
   renderPlayList(p);
-  playnowEl.textContent=p.now?'Now: '+p.now:'Now: stopped';
+  playnowEl.textContent=p.now?'Now '+displayName(p.now):'Now stopped';
 }
 function applyLive(s){
   if(liveDirty) return;
@@ -248,11 +241,15 @@ function applyLive(s){
 }
 function applyMeta(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
-  if(s.saved){savedRow.style.display='block';savedLab.textContent='Saved: '+s.saved+' (connects at boot)';}
-  else {savedRow.style.display='none';savedLab.textContent='';}
+  if(!nameDirty&&s.name) nameEl.value=s.name;
+  const sd=s.sd;
+  const sdLine=!sd?'no SD':!sd.ok?'SD not mounted':'SD '+sd.used_mb+'/'+sd.size_mb+' MB';
+  const now=s.play&&s.play.now?displayName(s.play.now):'stopped';
+  metaEl.textContent=[s.ip?('STA '+s.ip):null,s.ver?('fw '+s.ver):null,sdLine,'idle','now '+now].filter(Boolean).join(' · ');
+  if(s.saved){savedRow.className='on';savedLab.textContent='saved '+s.saved+' (connects at boot)'+(s.ip?(' · STA '+s.ip):'');}
+  else {savedRow.className='';savedLab.textContent='';}
   if(typeof s.bri==='number'&&!briDirty) showBri(s.bri);
   applyLive(s);
-  applySd(s);
   applyPlay(s);
 }
 async function jget(url){
@@ -260,12 +257,15 @@ async function jget(url){
   if(!r.ok) throw new Error('http');
   return r.json();
 }
+function postForm(url,fields){
+  return fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(fields)});
+}
 function renderNets(nets){
   list.innerHTML='';
   (nets||[]).forEach(n=>{
     const d=document.createElement('div');
-    d.className='net';
-    d.innerHTML='<span>'+escapeHtml(n.ssid)+'</span><span class="muted">'+(n.secure?'lock ':'open ')+n.rssi+' dBm</span>';
+    d.className='net'+(ssidEl.value===n.ssid?' sel':'');
+    d.innerHTML='<span>'+escapeHtml(n.ssid)+'</span><span class="readout">'+(n.secure?'lock ':'open ')+n.rssi+' dBm</span>';
     d.onclick=()=>{
       const kids=list.children;
       for(let i=0;i<kids.length;i++) kids[i].classList.remove('sel');
@@ -315,6 +315,7 @@ function showStatus(s){
 async function poll(){
   try{
     const s=await jget('/status');
+    setNote('');
     const fast=showStatus(s);
     pollTimer=setTimeout(poll,fast?500:1000);
   }catch(e){dropHint();}
@@ -324,8 +325,7 @@ async function connect(){
   const password=passEl.value;
   if(!ssid){setStatus('Enter a network name.','err');return;}
   try{
-    const body=new URLSearchParams({ssid,password});
-    const r=await fetch('/connect',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
+    const r=await postForm('/connect',{ssid,password});
     const s=await r.json();
     applyMeta(s);
     if(!r.ok){setStatus(s.error||'Connect rejected','err');return;}
@@ -343,10 +343,7 @@ async function forget(){
   }catch(e){dropHint();}
 }
 function postBri(v){
-  const body=new URLSearchParams({v:String(v)});
-  fetch('/brightness',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})
-    .then(()=>{briDirty=false;})
-    .catch(dropHint);
+  postForm('/brightness',{v:String(v)}).then(()=>{briDirty=false;}).catch(dropHint);
 }
 function scheduleBri(v){
   v=Math.max(0,Math.min(255,v|0));
@@ -357,30 +354,15 @@ function scheduleBri(v){
 }
 function parseBriNum(){
   const t=brinum.value.trim();
-  if(t==='') return null;
-  if(!/^\d+$/.test(t)) return null;
+  if(t===''||!/^\d+$/.test(t)) return null;
   return parseInt(t,10);
 }
 briEl.oninput=()=>scheduleBri(+briEl.value);
-brinum.oninput=()=>{
-  const n=parseBriNum();
-  if(n===null) return;
-  scheduleBri(n);
-};
-brinum.onchange=()=>{
-  const n=parseBriNum();
-  if(n===null){showBri(+briEl.value);return;}
-  scheduleBri(n);
-};
+brinum.oninput=()=>{const n=parseBriNum();if(n!==null) scheduleBri(n);};
+brinum.onchange=()=>{const n=parseBriNum();if(n===null) showBri(+briEl.value); else scheduleBri(n);};
 function postLive(){
-  const body=new URLSearchParams({proto:protoEl.value,fps:fpsEl.value,buf:bufEl.value});
-  fetch('/live',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})
-    .then(async r=>{
-      if(!r.ok) throw new Error('http');
-      const s=await r.json();
-      liveDirty=false;
-      applyMeta(s);
-    })
+  postForm('/live',{proto:protoEl.value,fps:fpsEl.value,buf:bufEl.value})
+    .then(async r=>{if(!r.ok) throw new Error('http');liveDirty=false;applyMeta(await r.json());})
     .catch(dropHint);
 }
 function scheduleLive(){
@@ -393,38 +375,79 @@ function parsePlayN(){
   if(!/^\d+$/.test(t)) return 1;
   return Math.max(1,Math.min(99,parseInt(t,10)));
 }
-function postPlay(){
+function postPlay(src,path){
   const n=parsePlayN();
   foldernEl.value=String(n);
-  const body=new URLSearchParams({
+  playSrc=src||playSrc;
+  playPath=path||playPath;
+  return postForm('/play',{
     src:playSrc,path:playPath,file_loop:fileloopEl.value,folder_rep:folderrepEl.value,n:String(n)
-  });
-  fetch('/play',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body})
-    .then(async r=>{
-      if(!r.ok) throw new Error('http');
-      const s=await r.json();
-      playDirty=false;
-      applyMeta(s);
-    })
-    .catch(dropHint);
+  }).then(async r=>{
+    if(!r.ok) throw new Error('http');
+    playDirty=false;
+    applyMeta(await r.json());
+  }).catch(dropHint);
 }
-function schedulePlay(){
-  playDirty=true;
-  clearTimeout(playTimer);
-  playTimer=setTimeout(postPlay,300);
+function adjacent(step){
+  if(!lastFiles.length) return null;
+  const cur=playSrc==='file'&&lastFiles.indexOf(playPath)>=0?playPath:lastFiles[0];
+  const i=lastFiles.indexOf(cur);
+  return lastFiles[(i+step+lastFiles.length)%lastFiles.length];
 }
 protoEl.onchange=scheduleLive;
 fpsEl.onchange=scheduleLive;
 bufEl.onchange=scheduleLive;
-fileloopEl.onchange=schedulePlay;
-folderrepEl.onchange=()=>{showPlayOpts();schedulePlay();};
-foldernEl.onchange=schedulePlay;
-foldernEl.oninput=schedulePlay;
-tabNet.onclick=()=>showTab('net');
+folderrepEl.onchange=showPlayOpts;
 tabPlay.onclick=()=>showTab('play');
+tabSetup.onclick=()=>showTab('setup');
 document.getElementById('scan').onclick=()=>scan(true);
 document.getElementById('go').onclick=connect;
 document.getElementById('forget').onclick=forget;
+document.getElementById('play').onclick=()=>postPlay();
+document.getElementById('stop').onclick=()=>postForm('/play',{src:'stop'}).then(async r=>{if(!r.ok) throw new Error('http');applyMeta(await r.json());}).catch(dropHint);
+document.getElementById('prev').onclick=()=>{const t=adjacent(-1);if(t){playDirty=true;playSrc='file';playPath=t;markPlaySel();showPlayOpts();postPlay('file',t);}};
+document.getElementById('next').onclick=()=>{const t=adjacent(1);if(t){playDirty=true;playSrc='file';playPath=t;markPlaySel();showPlayOpts();postPlay('file',t);}};
+nameEl.oninput=()=>{nameDirty=true;};
+document.getElementById('saveName').onclick=()=>{
+  const long=nameEl.value.trim();
+  if(!long){setNote('Enter a device name','err');return;}
+  postForm('/name',{long}).then(async r=>{
+    if(!r.ok) throw new Error('http');
+    nameDirty=false;
+    setNote('');
+    applyMeta(await r.json());
+  }).catch(dropHint);
+};
+idBtn.onclick=()=>{
+  idBtn.textContent='Identifying…';
+  postForm('/identify',{ms:'3000'}).then(async r=>{
+    idBtn.textContent='Identify';
+    if(!r.ok){const s=await r.json().catch(()=>({}));setNote(s.error||'Identify failed','err');return;}
+    setNote('');
+  }).catch(()=>{idBtn.textContent='Identify';dropHint();});
+};
+document.getElementById('rename').onclick=()=>{
+  if(playSrc!=='file'||!playPath) return;
+  rendraft.value=displayName(playPath);
+  renrow.className='on';
+};
+document.getElementById('rencancel').onclick=()=>{renrow.className='';};
+document.getElementById('renok').onclick=()=>{
+  if(playSrc!=='file'||!playPath) return;
+  const raw=rendraft.value.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g,'').replace(/[. ]+$/,'')||'show';
+  const base=playPath.split('/').pop()||'';
+  const prefix=/^\d{2}_/.test(base)?base.slice(0,3):'';
+  const dir=playPath.slice(0,playPath.lastIndexOf('/'))||'';
+  const to=dir+'/'+prefix+raw+'.dmx';
+  postForm('/rename',{from:playPath,to}).then(async r=>{
+    const s=await r.json();
+    if(!r.ok){setNote(s.error||'Rename failed','err');return;}
+    playDirty=false;
+    renrow.className='';
+    setNote('');
+    applyMeta(s);
+  }).catch(dropHint);
+};
 (async()=>{
   try{
     const s=await jget('/status');

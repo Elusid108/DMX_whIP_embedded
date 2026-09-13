@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.9.0**
+Version: **0.10.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -23,14 +23,14 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 
 ## SoftAP config portal
 
-- SSID `dmxwhip`, password `pass1234`, page `http://4.3.2.1` (Network / Playback tabs)
+- SSID `dmxwhip`, password `pass1234`, page `http://4.3.2.1` (Playback / Setup faceplate)
 - AP+STA: scan 2.4 GHz networks, connect, always **remember** last STA network in NVS and reconnect at boot. **Forget saved network** on the page clears NVS and drops STA. SoftAP/HTTP stay up while idle (no live lighting protocol). When `LiveInput` is fresh, SoftAP and the portal stop so the radio is STA-only. After ~2 s of silence the portal comes back. SoftAP also returns if STA drops. The page **scans on load**; **Scan networks** starts a fresh scan.
 - Captive DNS hijacks all names to `4.3.2.1`. Probe URLs (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`, …) return the portal HTML with **200**, never OS “success” tokens (no HTTP 204 for Android, no Apple `Success`, no Windows NCSI pass string).
 - Limit: HTTPS connectivity checks cannot be spoofed. Some new phones only show a sign-in notification. DHCP Captive-Portal-API (RFC 8910) needs IDF 5+; this Arduino core is IDF 4.4. If the sheet does not open, use `http://4.3.2.1` (not https).
 - Connecting STA may hop the SoftAP channel; if the page drops, rejoin `dmxwhip`. While a protocol is live the AP is gone — unicast to the **STA IP** (serial `[V][wifi] connected ... ip=`). While idle, use `dmxwhip` / `http://4.3.2.1`.
-- Max brightness slider **and number field** 0–255 (default 10, stored in NVS). Warning on the page above 64; the value is not capped. `/status` field `bri`. Live pixels use this as FastLED global scale.
-- Live block (set while idle, NVS): **protocol** Auto / Art-Net / sACN (`/status` `proto`); **show FPS** 20 / 30 / 40 / 60 (`fps`); **buffer** 0 latest … 3 frames (`buf`). Auto = first live protocol locks until 2 s silence. Wi-Fi power save off while live. **Identify:** `POST /identify` (form `ms`, default 3000, 200–15000) flashes cyan/white on the matrix while idle; it does not mark the node live, so SoftAP/HTTP stay up. 503 if a protocol is live. Locate scale is `max(saved bri, 64)` then restored.
-- SD line on the **Playback** tab is live while the portal is up: type, size MB, used, free (or `not mounted`). Pull the card → not mounted; reinsert → automount. Cached used/free refresh on mount only. `/status` object `sd`. Skip SD I/O while a protocol is live. Playback also lists `.dmx` files and folders (`/status` `play`) and POSTs `/play` for the idle playlist (NVS). `src=stop` (or `action=stop`) parks playback without changing the saved playlist. Companion `POST /upload` (multipart `path` + `file`) streams a `.dmx` onto the card while idle.
+- Max brightness slider **and number field** 0–255 on Setup (default 10, stored in NVS). Warning on the page above 64; the value is not capped. `/status` field `bri`. Live pixels use this as FastLED global scale.
+- Live block on Setup (set while idle, NVS): **protocol** Auto / Art-Net / sACN (`/status` `proto`); **show FPS** 20 / 30 / 40 / 60 (`fps`); **buffer** 0 latest … 3 frames (`buf`). Auto = first live protocol locks until 2 s silence. Wi-Fi power save off while live. **Identify:** header button and `POST /identify` (form `ms`, default 3000, 200–15000) flashes cyan/white on the matrix while idle; it does not mark the node live, so SoftAP/HTTP stay up. 503 if a protocol is live. Locate scale is `max(saved bri, 64)` then restored.
+- Status strip shows SD used/size while the portal is up (or `not mounted`). Pull the card → not mounted; reinsert → automount. Cached used/free refresh on mount only. `/status` object `sd`. Skip SD I/O while a protocol is live. Playback lists `.dmx` files and folders (`/status` `play`) with Prev / Play / Stop / Next; row click selects only. POSTs `/play` for the idle playlist (NVS). `src=stop` (or `action=stop`) parks playback without changing the saved playlist. Companion `POST /upload` (multipart `path` + `file`) streams a `.dmx` onto the card while idle.
 
 ## Art-Net / sACN (Resolume)
 
@@ -62,6 +62,7 @@ Bring-up (this board)
 - [x] Portal `POST /identify` locate flash (idle; no LiveInput; 503 if live) — implemented (not verified)
 - [x] Companion `POST /upload` stream `.dmx` to SD + `POST /play` `src=stop` — implemented (not verified)
 - [x] Companion node name + SD rename / stream pull / order prefixes — implemented (not verified)
+- [x] SoftAP faceplate (status strip, Playback / Setup, companion-equivalent transport and radio list) — implemented (not verified)
 
 From the historical PDF (adapted)
 
@@ -173,6 +174,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.10.0** — SoftAP faceplate: status strip, Playback / Setup, Identify, name, transport, scan list (zinc/cyan)
 - **0.9.0** — NVS node name (ArtPoll + `POST /name`); SD `POST /rename`, `GET /file`, `POST /order`
 - **0.8.0** — Idle `POST /upload` stream `.dmx` to SD; `POST /play` `src=stop` parks without clearing NVS
 - **0.7.0** — Idle `POST /identify` locate flash for the companion; document ArtPoll/`/status` contract
