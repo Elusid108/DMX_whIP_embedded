@@ -4,6 +4,8 @@
 #include "live_cfg.h"
 #include "live_input.h"
 #include "log.h"
+#include "play_cfg.h"
+#include "playback.h"
 #include "sd_info.h"
 #include "version.h"
 #include "wifi_setup_html.h"
@@ -214,7 +216,7 @@ static void startScan() {
 
 static void sendStatus(int code) {
   String out;
-  out.reserve(480);
+  out.reserve(4096);
   out += "{\"state\":\"";
   out += stateName();
   out += "\",\"ver\":";
@@ -264,7 +266,33 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(LiveCfg::fps());
   out += ",\"buf\":";
   out += static_cast<unsigned>(LiveCfg::buf());
-  out += '}';
+  out += ",\"play\":{\"src\":";
+  jsonEscape(out, String(PlayCfg::srcName()));
+  out += ",\"path\":";
+  jsonEscape(out, String(PlayCfg::path()));
+  out += ",\"file_loop\":";
+  jsonEscape(out, String(PlayCfg::fileLoopName()));
+  out += ",\"folder_rep\":";
+  jsonEscape(out, String(PlayCfg::folderRepName()));
+  out += ",\"n\":";
+  out += static_cast<unsigned>(PlayCfg::folderN());
+  out += ",\"now\":";
+  jsonEscape(out, String(Playback::path()));
+  out += ",\"files\":[";
+  for (uint8_t i = 0; i < SdInfo::fileCount(); ++i) {
+    if (i) {
+      out += ',';
+    }
+    jsonEscape(out, String(SdInfo::fileAt(i)));
+  }
+  out += "],\"dirs\":[";
+  for (uint8_t i = 0; i < SdInfo::dirCount(); ++i) {
+    if (i) {
+      out += ',';
+    }
+    jsonEscape(out, String(SdInfo::dirAt(i)));
+  }
+  out += "]}}";
   sendJson(code, out);
 }
 
@@ -374,6 +402,64 @@ static void handleLive() {
 
   if (!LiveCfg::set(proto, fps, buf, true)) {
     sendJson(400, "{\"error\":\"bad live\"}");
+    return;
+  }
+  sendStatus(200);
+}
+
+static void handlePlay() {
+  PlaySrc src = PlayCfg::src();
+  const String srcArg = s_server.arg("src");
+  if (srcArg == "root") {
+    src = PlaySrc::Root;
+  } else if (srcArg == "file") {
+    src = PlaySrc::File;
+  } else if (srcArg == "folder") {
+    src = PlaySrc::Folder;
+  } else if (srcArg.length()) {
+    sendJson(400, "{\"error\":\"bad src\"}");
+    return;
+  }
+
+  const String pathArg = s_server.hasArg("path") ? s_server.arg("path")
+                                                 : String(PlayCfg::path());
+
+  PlayFileLoop fileLoop = PlayCfg::fileLoop();
+  const String flpArg = s_server.arg("file_loop");
+  if (flpArg == "one") {
+    fileLoop = PlayFileLoop::One;
+  } else if (flpArg == "all") {
+    fileLoop = PlayFileLoop::All;
+  } else if (flpArg.length()) {
+    sendJson(400, "{\"error\":\"bad file_loop\"}");
+    return;
+  }
+
+  PlayFolderRep folderRep = PlayCfg::folderRep();
+  const String frpArg = s_server.arg("folder_rep");
+  if (frpArg == "forever") {
+    folderRep = PlayFolderRep::Forever;
+  } else if (frpArg == "count") {
+    folderRep = PlayFolderRep::Count;
+  } else if (frpArg.length()) {
+    sendJson(400, "{\"error\":\"bad folder_rep\"}");
+    return;
+  }
+
+  uint8_t n = PlayCfg::folderN();
+  if (s_server.hasArg("n")) {
+    const String nArg = s_server.arg("n");
+    char *end = nullptr;
+    const long v = strtol(nArg.c_str(), &end, 10);
+    if (end == nArg.c_str() || *end != '\0' || v < 1 || v > 99) {
+      sendJson(400, "{\"error\":\"bad n\"}");
+      return;
+    }
+    n = static_cast<uint8_t>(v);
+  }
+
+  if (!PlayCfg::set(src, pathArg.c_str(), fileLoop, folderRep, n, true)) {
+    sendJson(400, "{\"error\":\"bad play\"}");
     return;
   }
   sendStatus(200);
@@ -536,6 +622,7 @@ void WifiSetup::begin() {
   s_server.on("/forget", HTTP_POST, handleForget);
   s_server.on("/brightness", HTTP_POST, handleBrightness);
   s_server.on("/live", HTTP_POST, handleLive);
+  s_server.on("/play", HTTP_POST, handlePlay);
   s_server.on("/generate_204", HTTP_GET, handleCaptive);
   s_server.on("/gen_204", HTTP_GET, handleCaptive);
   s_server.on("/hotspot-detect.html", HTTP_GET, handleCaptive);

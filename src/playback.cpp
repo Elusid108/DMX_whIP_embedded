@@ -3,6 +3,7 @@
 #include "dmxrec.h"
 #include "log.h"
 #include "pixel_map.h"
+#include "play_cfg.h"
 #include "sd_info.h"
 
 #include <Arduino.h>
@@ -22,7 +23,7 @@ static constexpr uint32_t kPlayDiscoverMs = 1000;
 static constexpr uint32_t kPlayTaskStack = 8192;
 static constexpr UBaseType_t kPlayTaskPrio = 1;
 static constexpr BaseType_t kPlayTaskCore = 1;
-static constexpr uint32_t kPlayPathLen = 64;
+static constexpr uint32_t kPlayPathLen = kSdPathLen;
 
 struct Slot {
   uint32_t t_us;
@@ -45,12 +46,18 @@ static uint8_t s_tail = 0;
 static uint8_t s_count = 0;
 
 static char s_path[kPlayPathLen];
+static char s_list[kSdMaxPlayFiles][kPlayPathLen];
+static uint8_t s_listN = 0;
+static uint8_t s_listI = 0;
+static uint8_t s_passLeft = 0;
 static bool s_hasFile = false;
 static volatile bool s_run = false;
 static bool s_playing = true;
 static bool s_loop = true;
 static bool s_underrun = false;
 static bool s_begun = false;
+static bool s_exhausted = false;
+static bool s_reload = false;
 static bool s_loggedNoFile = false;
 static bool s_loggedLoop = false;
 static bool s_loggedNoMatch = false;
@@ -107,6 +114,55 @@ static bool frameForThisNode(uint32_t universe, uint16_t protocol) {
   }
   return false;
 }
+
+static char asciiLower(char c) {
+  if (c >= 'A' && c <= 'Z') {
+    return static_cast<char>(c + ('a' - 'A'));
+  }
+  return c;
+}
+
+static bool ieq(const char *a, const char *b) {
+  while (*a && *b) {
+    if (asciiLower(*a++) != asciiLower(*b++)) {
+      return false;
+    }
+  }
+  return *a == *b;
+}
+
+static bool isRootFilePath(const char *p) {
+  if (!p || p[0] != '/') {
+    return false;
+  }
+  return strchr(p + 1, '/') == nullptr;
+}
+
+static bool parentDir(const char *path, char *out, size_t n) {
+  if (!out || n < 2) {
+    return false;
+  }
+  if (!path || path[0] == '\0') {
+    snprintf(out, n, "/");
+    return true;
+  }
+  const char *slash = strrchr(path, '/');
+  if (!slash || slash == path) {
+    snprintf(out, n, "/");
+    return true;
+  }
+  const size_t len = static_cast<size_t>(slash - path);
+  if (len >= n) {
+    return false;
+  }
+  memcpy(out, path, len);
+  out[len] = '\0';
+  return true;
+}
+
+static bool wrapShow();
+static bool bindPath(const char *path);
+static bool tryBindPlaylist();
 
 static void lockPlay() {
   if (s_mu) {
@@ -405,20 +461,97 @@ static bool applySeek() {
   return true;
 }
 
-static void onFileEnd() {
+static void exhaustPlaylist() {
+  closeFile();
   lockPlay();
-  const bool loop = s_loop;
+  s_exhausted = true;
+  s_hasFile = false;
+  s_run = false;
+  s_path[0] = '\0';
+  s_payload = 0;
+  s_frameCount = 0;
+  resetRingLocked();
   unlockPlay();
-  if (!loop) {
-    vTaskDelay(pdMS_TO_TICKS(20));
-    return;
-  }
-  if (!wrapShow()) {
-    lockPlay();
-    s_run = false;
-    unlockPlay();
-  }
+  LOG_V("play", "done (black)");
 }
+
+static bool bindIndex(uint8_t i) {
+  if (i >= s_listN) {
+    return false;
+  }
+  closeFile();
+  lockPlay();
+  resetRingLocked();
+  s_listI = i;
+  unlockPlay();
+  return bindPath(s_list[i]);
+}
+
+static bool advancePlaylist() {
+  lockPlay();
+  const bool wrap = s_loop;
+  const uint8_t n = s_listN;
+  uint8_t i = s_listI;
+  const uint8_t left = s_passLeft;
+  unlockPlay();
+
+  if (!wrap) {
+    vTaskDelay(pdMS_TO_TICKS(20));
+    return false;
+  }
+  if (n == 0) {
+    exhaustPlaylist();
+    return false;
+  }
+
+  if (n == 1) {
+    if (left == 1) {
+      exhaustPlaylist();
+      return false;
+    }
+    if (left > 1) {
+      lockPlay();
+      s_passLeft = static_cast<uint8_t>(left - 1);
+      unlockPlay();
+    }
+    if (!wrapShow()) {
+      lockPlay();
+      s_run = false;
+      unlockPlay();
+      return false;
+    }
+    return true;
+  }
+
+  i = static_cast<uint8_t>(i + 1);
+  if (i >= n) {
+    if (left == 1) {
+      exhaustPlaylist();
+      return false;
+    }
+    if (left > 1) {
+      lockPlay();
+      s_passLeft = static_cast<uint8_t>(left - 1);
+      unlockPlay();
+    }
+    i = 0;
+    LOG_V("play", "wrap list");
+  }
+
+  for (uint8_t k = 0; k < n; ++k) {
+    const uint8_t idx = static_cast<uint8_t>((i + k) % n);
+    if (bindIndex(idx)) {
+      LOG_V("play", "next %s", s_path);
+      return true;
+    }
+  }
+  lockPlay();
+  s_run = false;
+  unlockPlay();
+  return false;
+}
+
+static void onFileEnd() { advancePlaylist(); }
 
 static bool bindPath(const char *path) {
   DmxrecHeader h;
@@ -489,42 +622,130 @@ static bool bindPath(const char *path) {
   return true;
 }
 
-static bool tryBindFile() {
-  if (!SdInfo::ok()) {
+static bool tryBindPlaylist() {
+  if (!SdInfo::ok() || s_exhausted) {
     return false;
   }
-  char path[kPlayPathLen];
-  if (!SdInfo::findDmx(path, sizeof(path))) {
+
+  char list[kSdMaxPlayFiles][kPlayPathLen];
+  uint8_t n = 0;
+  uint8_t startI = 0;
+  const PlaySrc src = PlayCfg::src();
+  const char *sel = PlayCfg::path();
+
+  if (src == PlaySrc::File && PlayCfg::fileLoop() == PlayFileLoop::One) {
+    snprintf(list[0], kPlayPathLen, "%s", sel);
+    n = 1;
+  } else if (src == PlaySrc::Root ||
+             (src == PlaySrc::File && isRootFilePath(sel))) {
+    SdInfo::collectPlaylist("/", false, list, kSdMaxPlayFiles, &n);
+  } else {
+    char dir[kPlayPathLen];
+    if (src == PlaySrc::Folder) {
+      snprintf(dir, sizeof(dir), "%s", sel);
+    } else if (!parentDir(sel, dir, sizeof(dir))) {
+      snprintf(dir, sizeof(dir), "/");
+    }
+    SdInfo::collectPlaylist(dir, true, list, kSdMaxPlayFiles, &n);
+  }
+
+  if (n == 0) {
     if (!s_loggedNoFile) {
       LOG_V("play", "no .dmx (idle)");
-      LOG_V("sd", "no .dmx in / (want /show.dmx or first *.dmx)");
       s_loggedNoFile = true;
     }
     return false;
   }
-  return bindPath(path);
+
+  if (src == PlaySrc::File && PlayCfg::fileLoop() == PlayFileLoop::All) {
+    for (uint8_t i = 0; i < n; ++i) {
+      if (ieq(list[i], sel)) {
+        startI = i;
+        break;
+      }
+    }
+  }
+
+  uint8_t passes = 0;
+  if (src == PlaySrc::Folder &&
+      PlayCfg::folderRep() == PlayFolderRep::Count) {
+    passes = PlayCfg::folderN();
+  }
+
+  lockPlay();
+  s_listN = n;
+  s_listI = startI;
+  s_passLeft = passes;
+  for (uint8_t i = 0; i < n; ++i) {
+    snprintf(s_list[i], kPlayPathLen, "%s", list[i]);
+  }
+  unlockPlay();
+
+  LOG_V("play", "list n=%u start=%u src=%s pass=%u", n, startI,
+        PlayCfg::srcName(), passes);
+
+  for (uint8_t k = 0; k < n; ++k) {
+    const uint8_t i = static_cast<uint8_t>((startI + k) % n);
+    if (bindPath(s_list[i])) {
+      lockPlay();
+      s_listI = i;
+      unlockPlay();
+      return true;
+    }
+  }
+  return false;
 }
 
 static void clearBind() {
+  closeFile();
   lockPlay();
   s_hasFile = false;
   s_run = false;
+  s_exhausted = false;
   s_path[0] = '\0';
   s_payload = 0;
   s_frameCount = 0;
+  s_listN = 0;
+  s_listI = 0;
   s_loggedNoMatch = false;
   s_seekKind = SeekKind::None;
   resetRingLocked();
   unlockPlay();
 }
 
+static void handleReload() {
+  closeFile();
+  lockPlay();
+  s_exhausted = false;
+  s_loggedNoFile = false;
+  s_loggedNoMatch = false;
+  s_hasFile = false;
+  s_run = false;
+  s_path[0] = '\0';
+  s_listN = 0;
+  s_listI = 0;
+  s_seekKind = SeekKind::None;
+  resetRingLocked();
+  unlockPlay();
+  tryBindPlaylist();
+}
+
 static void playbackTask(void *) {
   for (;;) {
     lockPlay();
+    const bool reload = s_reload;
+    if (reload) {
+      s_reload = false;
+    }
     const bool run = s_run;
     const bool has = s_hasFile;
     const SeekKind seek = s_seekKind;
     unlockPlay();
+
+    if (reload) {
+      handleReload();
+      continue;
+    }
 
     if (!run || !has) {
       closeFile();
@@ -598,7 +819,7 @@ void Playback::begin() {
   }
   LOG_V("play", "ring slots=%u payload=%u (DMXREC; no FastLED)", kPlayRingSlots,
         kPlayMaxPayload);
-  tryBindFile();
+  tryBindPlaylist();
   if (s_task == nullptr) {
     const BaseType_t ok =
         xTaskCreatePinnedToCore(playbackTask, "play", kPlayTaskStack, nullptr,
@@ -621,7 +842,7 @@ void Playback::service() {
   s_lastDiscover = now;
 
   if (!SdInfo::ok()) {
-    if (s_hasFile || s_run) {
+    if (s_hasFile || s_run || s_exhausted) {
       LOG_V("play", "sd gone");
       clearBind();
     }
@@ -630,10 +851,21 @@ void Playback::service() {
   }
 
   lockPlay();
+  const bool reload = s_reload;
   const bool has = s_hasFile;
+  const bool exhausted = s_exhausted;
   unlockPlay();
-  if (!has && !s_fileOpen) {
-    tryBindFile();
+  if (reload) {
+    if (s_task == nullptr) {
+      lockPlay();
+      s_reload = false;
+      unlockPlay();
+      handleReload();
+    }
+    return;
+  }
+  if (!has && !s_fileOpen && !exhausted) {
+    tryBindPlaylist();
   }
 }
 
@@ -642,10 +874,14 @@ void Playback::start() {
     begin();
   }
   lockPlay();
+  const bool exhausted = s_exhausted;
   bool has = s_hasFile;
   unlockPlay();
+  if (exhausted) {
+    return;
+  }
   if (!has) {
-    has = tryBindFile();
+    has = tryBindPlaylist();
   }
   if (!has) {
     return;
@@ -693,6 +929,18 @@ void Playback::pause() {
 void Playback::setLoop(bool on) {
   lockPlay();
   s_loop = on;
+  unlockPlay();
+}
+
+void Playback::reload() {
+  if (!s_begun) {
+    return;
+  }
+  lockPlay();
+  s_exhausted = false;
+  s_loggedNoFile = false;
+  s_reload = true;
+  s_run = false;
   unlockPlay();
 }
 

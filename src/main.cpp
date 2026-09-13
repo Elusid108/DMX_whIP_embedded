@@ -10,6 +10,7 @@
 #include "log.h"
 #include "playback.h"
 #include "pixel_map.h"
+#include "play_cfg.h"
 #include "sd_info.h"
 #include "sync.h"
 #include "version.h"
@@ -39,6 +40,7 @@ void setup() {
   LiveInput::begin();
   SdInfo::begin();
   PixelMap::begin();
+  PlayCfg::begin();
   Playback::begin();
   Sync::begin();
 

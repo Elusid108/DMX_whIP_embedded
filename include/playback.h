@@ -30,6 +30,7 @@ public:
   static void play();
   static void pause();
   static void setLoop(bool on);
+  static void reload();
 
   static bool hasFile();
   static bool running();
