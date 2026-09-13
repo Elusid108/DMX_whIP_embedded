@@ -100,6 +100,10 @@ static void sendJson(int code, const String &body) {
   s_server.send(code, "application/json", body);
 }
 
+static bool portalParked() {
+  return LiveInput::active() && LiveCfg::park();
+}
+
 static void sendPage() {
   s_server.sendHeader("Cache-Control", "no-store");
   s_server.sendHeader("Connection", "close");
@@ -282,6 +286,10 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(LiveCfg::fps());
   out += ",\"buf\":";
   out += static_cast<unsigned>(LiveCfg::buf());
+  out += ",\"park\":";
+  jsonEscape(out, String(LiveCfg::parkName()));
+  out += ",\"live\":";
+  out += LiveInput::active() ? "true" : "false";
   out += ",\"play\":{\"src\":";
   jsonEscape(out, String(PlayCfg::srcName()));
   out += ",\"path\":";
@@ -387,7 +395,7 @@ static void handleIdentify() {
 }
 
 static void handleBrightness() {
-  if (LiveInput::active()) {
+  if (portalParked()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
@@ -407,7 +415,7 @@ static void handleBrightness() {
 }
 
 static void handleLive() {
-  if (LiveInput::active()) {
+  if (portalParked()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
@@ -447,7 +455,20 @@ static void handleLive() {
     buf = static_cast<uint8_t>(v);
   }
 
-  if (!LiveCfg::set(proto, fps, buf, true)) {
+  bool park = LiveCfg::park();
+  if (s_server.hasArg("park")) {
+    const String parkArg = s_server.arg("park");
+    if (parkArg == "yes") {
+      park = true;
+    } else if (parkArg == "no") {
+      park = false;
+    } else {
+      sendJson(400, "{\"error\":\"bad park\"}");
+      return;
+    }
+  }
+
+  if (!LiveCfg::set(proto, fps, buf, park, true)) {
     sendJson(400, "{\"error\":\"bad live\"}");
     return;
   }
@@ -617,7 +638,7 @@ static void handleUploadDone() {
 }
 
 static void handleName() {
-  if (LiveInput::active()) {
+  if (portalParked()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
@@ -891,7 +912,7 @@ static void handlePlay() {
 }
 
 static void handleConnect() {
-  if (LiveInput::active()) {
+  if (portalParked()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
@@ -921,7 +942,7 @@ static void handleConnect() {
 }
 
 static void handleForget() {
-  if (LiveInput::active()) {
+  if (portalParked()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
@@ -1096,7 +1117,8 @@ void WifiSetup::begin() {
 void WifiSetup::service() {
   pollScan();
   pollConnect();
-  if (LiveInput::active() && WiFi.status() == WL_CONNECTED) {
+  if (LiveCfg::park() && LiveInput::active() &&
+      WiFi.status() == WL_CONNECTED) {
     stopAp();
     return;
   }

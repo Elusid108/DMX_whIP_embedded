@@ -114,6 +114,8 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div><label class="lab" for="buf">Buffer</label>
 <select id="buf"><option value="0">0 latest</option><option value="1">1 frame</option><option value="2">2 frames</option><option value="3">3 frames</option></select></div>
 </div>
+<label class="lab" for="park">Park portal while live</label>
+<select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
 <p id="ver" class="readout">dmxwhip</p>
 <script>
@@ -135,6 +137,7 @@ const playnowEl=document.getElementById('playnow');
 const protoEl=document.getElementById('proto');
 const fpsEl=document.getElementById('fps');
 const bufEl=document.getElementById('buf');
+const parkEl=document.getElementById('park');
 const fileloopEl=document.getElementById('fileloop');
 const folderrepEl=document.getElementById('folderrep');
 const foldernEl=document.getElementById('foldern');
@@ -238,6 +241,7 @@ function applyLive(s){
   if(s.proto) protoEl.value=s.proto;
   if(typeof s.fps==='number') fpsEl.value=String(s.fps);
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
+  if(s.park) parkEl.value=s.park;
 }
 function applyMeta(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
@@ -245,7 +249,10 @@ function applyMeta(s){
   const sd=s.sd;
   const sdLine=!sd?'no SD':!sd.ok?'SD not mounted':'SD '+sd.used_mb+'/'+sd.size_mb+' MB';
   const now=s.play&&s.play.now?displayName(s.play.now):'stopped';
-  metaEl.textContent=[s.ip?('STA '+s.ip):null,s.ver?('fw '+s.ver):null,sdLine,'idle','now '+now].filter(Boolean).join(' · ');
+  const live=!!s.live;
+  ['prev','play','stop','next','rename'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});
+  idBtn.disabled=live;
+  metaEl.textContent=[s.ip?('STA '+s.ip):null,s.ver?('fw '+s.ver):null,sdLine,live?'live':'idle','now '+now].filter(Boolean).join(' · ');
   if(s.saved){savedRow.className='on';savedLab.textContent='saved '+s.saved+' (connects at boot)'+(s.ip?(' · STA '+s.ip):'');}
   else {savedRow.className='';savedLab.textContent='';}
   if(typeof s.bri==='number'&&!briDirty) showBri(s.bri);
@@ -361,7 +368,7 @@ briEl.oninput=()=>scheduleBri(+briEl.value);
 brinum.oninput=()=>{const n=parseBriNum();if(n!==null) scheduleBri(n);};
 brinum.onchange=()=>{const n=parseBriNum();if(n===null) showBri(+briEl.value); else scheduleBri(n);};
 function postLive(){
-  postForm('/live',{proto:protoEl.value,fps:fpsEl.value,buf:bufEl.value})
+  postForm('/live',{proto:protoEl.value,fps:fpsEl.value,buf:bufEl.value,park:parkEl.value})
     .then(async r=>{if(!r.ok) throw new Error('http');liveDirty=false;applyMeta(await r.json());})
     .catch(dropHint);
 }
@@ -397,6 +404,7 @@ function adjacent(step){
 protoEl.onchange=scheduleLive;
 fpsEl.onchange=scheduleLive;
 bufEl.onchange=scheduleLive;
+parkEl.onchange=scheduleLive;
 folderrepEl.onchange=showPlayOpts;
 tabPlay.onclick=()=>showTab('play');
 tabSetup.onclick=()=>showTab('setup');

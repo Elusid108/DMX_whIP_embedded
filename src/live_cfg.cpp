@@ -14,6 +14,7 @@ static constexpr uint8_t kBufDefault = 0;
 static LiveProto s_proto = LiveProto::Auto;
 static uint8_t s_fps = kFpsDefault;
 static uint8_t s_buf = kBufDefault;
+static bool s_park = true;
 static bool s_loaded = false;
 
 static bool validFps(uint8_t fps) {
@@ -41,6 +42,7 @@ static void loadNvs() {
   if (buf <= 3) {
     s_buf = buf;
   }
+  s_park = prefs.getUChar("park", 1) != 0;
   prefs.end();
 }
 
@@ -53,6 +55,7 @@ static void saveNvs() {
   prefs.putUChar("proto", static_cast<uint8_t>(s_proto));
   prefs.putUChar("fps", s_fps);
   prefs.putUChar("buf", s_buf);
+  prefs.putUChar("park", s_park ? 1 : 0);
   prefs.end();
 }
 
@@ -60,7 +63,8 @@ static void saveNvs() {
 
 void LiveCfg::begin() {
   loadNvs();
-  LOG_V("live", "cfg proto=%s fps=%u buf=%u", protoName(), s_fps, s_buf);
+  LOG_V("live", "cfg proto=%s fps=%u buf=%u park=%s", protoName(), s_fps, s_buf,
+        parkName());
 }
 
 LiveProto LiveCfg::proto() {
@@ -76,6 +80,11 @@ uint8_t LiveCfg::fps() {
 uint8_t LiveCfg::buf() {
   loadNvs();
   return s_buf;
+}
+
+bool LiveCfg::park() {
+  loadNvs();
+  return s_park;
 }
 
 uint32_t LiveCfg::showIntervalMs() {
@@ -96,21 +105,29 @@ const char *LiveCfg::protoName() {
   }
 }
 
-bool LiveCfg::set(LiveProto proto, uint8_t fps, uint8_t buf, bool save) {
+const char *LiveCfg::parkName() {
+  loadNvs();
+  return s_park ? "yes" : "no";
+}
+
+bool LiveCfg::set(LiveProto proto, uint8_t fps, uint8_t buf, bool park,
+                  bool save) {
   if (!validFps(fps) || buf > 3) {
     return false;
   }
   loadNvs();
   const bool changed =
-      proto != s_proto || fps != s_fps || buf != s_buf;
+      proto != s_proto || fps != s_fps || buf != s_buf || park != s_park;
   s_proto = proto;
   s_fps = fps;
   s_buf = buf;
+  s_park = park;
   if (save) {
     saveNvs();
   }
   if (changed) {
-    LOG_V("live", "cfg proto=%s fps=%u buf=%u", protoName(), s_fps, s_buf);
+    LOG_V("live", "cfg proto=%s fps=%u buf=%u park=%s", protoName(), s_fps,
+          s_buf, parkName());
     LiveInput::applyCfg();
   }
   return true;
