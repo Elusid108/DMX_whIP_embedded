@@ -1,5 +1,6 @@
 #include "wifi_setup.h"
 
+#include "identify.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
 #include "live_input.h"
@@ -347,6 +348,29 @@ static void handleScan() {
 
 static void handleStatus() { sendStatus(200); }
 
+static void handleIdentify() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  uint32_t ms = 3000;
+  if (s_server.hasArg("ms")) {
+    const String arg = s_server.arg("ms");
+    char *end = nullptr;
+    const long v = strtol(arg.c_str(), &end, 10);
+    if (end == arg.c_str() || *end != '\0' || v < 200 || v > 15000) {
+      sendJson(400, "{\"error\":\"bad ms\"}");
+      return;
+    }
+    ms = static_cast<uint32_t>(v);
+  }
+  Identify::start(ms);
+  String out = "{\"identify\":true,\"ms\":";
+  out += static_cast<unsigned>(ms);
+  out += '}';
+  sendJson(200, out);
+}
+
 static void handleBrightness() {
   if (!s_server.hasArg("v")) {
     sendJson(400, "{\"error\":\"bad v\"}");
@@ -621,6 +645,7 @@ void WifiSetup::begin() {
   s_server.on("/connect", HTTP_POST, handleConnect);
   s_server.on("/forget", HTTP_POST, handleForget);
   s_server.on("/brightness", HTTP_POST, handleBrightness);
+  s_server.on("/identify", HTTP_POST, handleIdentify);
   s_server.on("/live", HTTP_POST, handleLive);
   s_server.on("/play", HTTP_POST, handlePlay);
   s_server.on("/generate_204", HTTP_GET, handleCaptive);

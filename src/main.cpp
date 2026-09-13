@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "board_matrix.h"
+#include "identify.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
 #include "live_input.h"
@@ -58,11 +59,16 @@ void loop() {
 
   const bool live = LiveInput::active();
   if (live) {
+    Identify::cancel();
     if (Playback::running()) {
       LOG_V("main", "live preempts play");
       s_livePreemptedPlay = true;
     }
     Playback::stop();
+  } else if (Identify::active()) {
+    if (Playback::playing()) {
+      Playback::pause();
+    }
   } else {
     Playback::service();
     if (Playback::hasFile()) {
@@ -81,6 +87,9 @@ void loop() {
           s_livePreemptedPlay = false;
         }
         Playback::start();
+        Playback::play();
+      } else if (!Playback::playing()) {
+        Playback::play();
       }
     }
   }
@@ -131,6 +140,8 @@ void loop() {
         renderRgb(d, len);
       }
     }
+  } else if (Identify::active()) {
+    Identify::render(leds, kLedCount, now);
   } else if (Playback::hasFile()) {
     if (Sync::cueFollow()) {
       if (cuePulse && Sync::cuePlaying() &&
