@@ -1,10 +1,12 @@
 # DMX_whIP_embedded
 
-Version: **0.4.1**
+Version: **0.4.2**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
 The 18-month-old [`Esp32-s3 Pixel Playback — Rebuild Plan (step-by-step).pdf`](Esp32-s3%20Pixel%20Playback%20%E2%80%94%20Rebuild%20Plan%20(step-by-step).pdf) is **historical**. Do not copy its `platformio.ini` starter (`qspi_opi`, 8MB-class flash, SDMMC, huge rings, AsyncWebServer + LittleFS SPA). This README is the living plan.
+
+Local `ARCHIVE/` is gitignored. It is the old generic ESP32-S3 controller (GPIO 15, 256 LEDs, SPIFFS SPA, AsyncWebServer). **Do not port it onto `[env:matrix]`**. Harvest ideas only: pixel-map fields, a `DMXProtocol`-style adapter, ArtPoll, sACN multicast `239.255.(uni>>8).(uni&0xFF)`, and archive `DMXREC` as a v0 file layout to replace.
 
 ## Current hardware (`[env:matrix]`)
 
@@ -33,7 +35,7 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 ## Art-Net / sACN (Resolume)
 
 - Art-Net: UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). sACN: UDP **5568**, universe **1**, unicast to STA IP or multicast `239.255.0.1`. 64 pixels = 192 RGB channels, **1:1** onto the strip. FastLED maps RGB → GRB.
-- Live path: buf 0 = drop-to-latest; buf 1–3 = small jitter queue (drop oldest if full). Show rate from portal FPS. Idle is **black**. Serial `[V][artnet]` / `[V][sacn]` first packet + 5 s counters; `[V][live] auto lock …`; `[V][ap] down (live)` / `[V][ap] up (idle)`.
+- Live path: buf 0 = drop-to-latest; buf 1–3 = small jitter queue (drop oldest if full). Show rate from portal FPS. Idle is **black** (bring-up). Serial `[V][artnet]` / `[V][sacn]` first packet + 5 s counters; `[V][live] auto lock …`; `[V][ap] down (live)` / `[V][ap] up (idle)`.
 
 ## Living milestone list
 
@@ -48,7 +50,7 @@ Bring-up (this board)
 - [x] STA credentials persist in NVS and reconnect at boot — implemented
 - [x] Captive probe handlers + viewport-fixed portal + Forget + version in `/status` — implemented (this rev; captive auto-open not verified)
 - [x] SoftAP IP `4.3.2.1` (DHCP gateway + DNS) — implemented
-- [x] SoftAP stops ~45 s after STA IP (STA-only for live); AP returns if STA drops — implemented
+- [x] SoftAP stops ~45 s after STA IP (STA-only for live); AP returns if STA drops — implemented (superseded: AP is down only while `LiveInput` is fresh; see next item)
 - [x] Idle = black panel + SoftAP/HTTP; live protocol = pixels + portal down; AP returns after ~2 s silence — implemented (not verified)
 - [x] Live Art-Net 1:1 channel → LED index (no firmware snake remap) — implemented (not verified)
 - [x] Portal max brightness 0–255 (default 10, NVS, warn >64) — implemented (not verified)
@@ -63,31 +65,94 @@ From the historical PDF (adapted)
 - [ ] RTOS layout: RX on APP CPU, render on PRO CPU, SD I/O task; rings allocated at boot
 - [ ] Protocol adapter interface + DMX universe assembler (seq, late, missing, dupes)
 - [x] Art-Net (UDP 6454) → assembler → test pattern / 64 pixels — implemented (universe 0 → 8×8; no multi-universe assembler yet; not verified)
-- [x] sACN / E1.31 multicast + frame fence — implemented (universe 1, unicast + `239.255.0.1`; single-packet universe; not verified)
-- [ ] KiNet (optional; after Art-Net and sACN)
-- [x] LED manager: (universe, channel) → framebuffer; double-buffer (triple if SD + net) — implemented (64-pixel drop-to-latest + 25 ms show; not a full LED manager)
+- [x] sACN / E1.31 multicast + frame fence — implemented (universe 1, unicast + `239.255.0.1`; single-packet universe; no 5–8 ms fence, CID, or sync PDU; not verified)
+- [ ] KiNet (optional; after live + SD + sync)
+- [x] LED manager: (universe, channel) → framebuffer; double-buffer (triple if SD + net) — implemented (64-pixel 1:1 copy + drop-to-latest; not a full LED manager)
 - [x] Render scheduler at target FPS; drop-to-latest for live — implemented (portal 20/30/40/60 FPS; buf 0–3; not verified)
 - [ ] SD async reader (SPI on this board; SDMMC only on boards that have it); ring sized from profile — not 128–512 KB on the Matrix
-- [ ] Recording file spec v1 (header + timestamped frames + CRC + index)
+- [ ] Recording file spec v1 (header + timestamped frames + CRC + index) — replace archive `DMXREC` + 10-byte headers; show-relative timestamps
 - [ ] Playback engine; pause on underrun
 - [ ] Web UI beyond SoftAP (protocol + playback + stats). Stay on PROGMEM/`WebServer` until the UI outgrows it; no AsyncWebServer / LittleFS SPA yet
 - [ ] Watchdog + `/api/logs`; soak test
 
+Pixel map and live discovery
+
+- [ ] Node identity + pixel map as data: chipset, data/clock GPIO, count, start universe/channel, chips/pixel, split-across-universes, brightness (Matrix = 64 px, GPIO 14, 1:1)
+- [ ] ArtPoll / ArtPollReply (discovery for multiple nodes)
+- [ ] sACN multicast join for the mapped universe (`239.255.(uni>>8).(uni&0xFF)`); length-safe parse
+
+Playback vs live
+
+- [ ] Idle: play SD if a file is present; live packets preempt; after ~2 s silence resume playback (bring-up black-idle stays above until this lands)
+
+Multi-device sync
+
+- [ ] Live lock: ArtSync and/or E1.31 synchronization PDUs + existing buf 0–3
+- [ ] Playback lock: multicast (or companion PC) cue bus — play / pause / seek / frame index; late node resyncs to the tick, does not free-run on `millis()`
+
 Companion PC (sibling repo, not this tree)
 
-- [ ] Art-Net / sACN test sender
+- [ ] Art-Net / sACN test sender that can also emit ArtSync / E1.31 sync / playback cues
 - [ ] Later: recorder and SD file pull; node exposes the files/API this app will use
 
 ## Architecture (keep)
 
 - Incremental, testable milestones
 - One firmware tree; board profile is data
-- Live: drop-to-latest. Playback: pause on underrun
+- Live: drop-to-latest. Playback: pause on underrun, then catch the cue
+- `FastLED.show()` only on the render path, never in a UDP callback
+- No compile-time STA secrets; `ARCHIVE/` stays local-only
 - Observability: tagged logs now; stats/API later
-- Defer AsyncWebServer, ArduinoJson, LittleFS SPA, huge lwIP rings, KiNet until Art-Net then sACN work on this node
+- Defer AsyncWebServer, ArduinoJson, LittleFS/SPIFFS SPA, huge lwIP rings, KiNet, 8 outputs, and fixture FX until live + SD + sync work on this node
+
+## Multitask workstreams
+
+Later Cursor **Multitask**: one agent per stream. Do not bump version; do not rewrite unrelated checklist history; do not edit files outside the owned set; do not copy `ARCHIVE/` or the PDF starter. Hardware **verified** checkboxes stay human-only.
+
+```mermaid
+flowchart TD
+  wave0[Wave0_docs_done]
+  wave1a[WS1_pixel_map_new_files]
+  wave1b[WS2_ArtPollReply]
+  wave1c[WS3_sACN_mcast_parse]
+  wave1d[WS4_rec_format_header]
+  wave2[WS5_playback_engine]
+  wave3[WS6_live_preempts_playback]
+  wave4[WS7_sync_live_and_cues]
+  wave0 --> wave1a
+  wave0 --> wave1b
+  wave0 --> wave1c
+  wave0 --> wave1d
+  wave1d --> wave2
+  wave1a --> wave2
+  wave2 --> wave3
+  wave1b --> wave4
+  wave1c --> wave4
+  wave3 --> wave4
+```
+
+Wave 1 — four parallel agents (no shared files)
+
+- **WS1 Pixel map** — new `include/pixel_map.h` / `src/pixel_map.cpp`; pin/PSRAM constants stay in `include/board_matrix.h`. Matrix identity map (64 RGB, Art-Net universe 0 / sACN universe 1). Do not edit `artnet_rx.cpp`, `sacn_rx.cpp`, `wifi_setup.cpp`.
+- **WS2 ArtPollReply** — `src/artnet_rx.cpp` / `include/artnet_rx.h` only. Reply enough for a controller to see the node; no ArtSync yet.
+- **WS3 sACN join + length** — `src/sacn_rx.cpp` / `include/sacn_rx.h` only. Join `239.255.0.1` using `239.255.(uni>>8).(uni&0xFF)`; do not copy past `propCount`.
+- **WS4 Rec format v1** — new `include/rec_format.h` packed structs/constants only. No SD I/O. Spec: magic, version, fps, pixel_count, map, flags; per-frame `[t | size | payload | crc32]`; index; show-relative timestamps.
+
+Wave 2 — after WS1 + WS4
+
+- **WS5 Playback engine** — new `playback` module + `src/sd_info.cpp` as needed. Do not change live UDP. Pause on underrun. Do not call `FastLED.show()` from the reader.
+
+Wave 3 — after WS5
+
+- **WS6 Live preempts playback** — `src/main.cpp`, `src/live_input.cpp`. Idle with a file = playback; `LiveInput::active()` wins; ~2 s silence resumes. Portal stays down while live.
+
+Wave 4 — after WS2, WS3, WS6
+
+- **WS7 Sync** — new small module for ArtSync / E1.31 sync + cue UDP. Touch protocol RX and playback only as needed to honor a fence/tick.
 
 ## Version history
 
+- **0.4.2** — Living plan: `ARCHIVE/` is local-only; pixel map / playback / multi-node sync path; SoftAP-while-live note
 - **0.4.1** — Fix portal live FPS/buffer POST so the dropdowns persist
 - **0.4.0** — Portal Auto/Art-Net/sACN, show FPS, jitter buffer 0–3; sACN universe 1; Wi-Fi PS off while live
 - **0.3.1** — Brightness number field; Wi-Fi scan on portal load; SD removal + automount while idle
