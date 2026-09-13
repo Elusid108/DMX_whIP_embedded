@@ -16,7 +16,11 @@ static constexpr uint32_t kRootData = 0x00000004;
 static constexpr uint8_t kAcnId[12] = {'A', 'S', 'C', '-', 'E', '1',
                                        '.', '1', '7', 0,   0,   0};
 static constexpr uint32_t kFramingData = 0x00000002;
-static const IPAddress kMcast(239, 255, 0, 1);
+static constexpr int kMinPkt = 126;
+static constexpr int kDmpValuesOff = 125;
+static constexpr int kDmxOff = 126;
+static constexpr uint16_t kMaxDmx = 512;
+static constexpr uint16_t kDestRgb = 192;  // 64 pixels
 
 static WiFiUDP s_udp;
 static uint8_t s_pkt[kMaxPkt];
@@ -39,12 +43,17 @@ static uint32_t rd32(const uint8_t *p) {
          (static_cast<uint32_t>(p[2]) << 8) | p[3];
 }
 
+static IPAddress multicastGroup(uint16_t uni) {
+  return IPAddress(kSacnMcastA, kSacnMcastB, sacnMcastC(uni), sacnMcastD(uni));
+}
+
 static bool joinMcast() {
   if (!s_up || WiFi.status() != WL_CONNECTED) {
     return false;
   }
+  const IPAddress group = multicastGroup(kSacnUniverse);
   s_udp.stop();
-  if (!s_udp.beginMulticast(kMcast, kSacnPort)) {
+  if (!s_udp.beginMulticast(group, kSacnPort)) {
     LOG_C("sacn", "mcast join failed");
     if (!s_udp.begin(kSacnPort)) {
       s_up = false;
@@ -54,13 +63,14 @@ static bool joinMcast() {
     return false;
   }
   s_mcast = true;
-  LOG_V("sacn", "mcast 239.255.0.1:%u", kSacnPort);
+  LOG_V("sacn", "mcast %s:%u uni=%u", group.toString().c_str(), kSacnPort,
+        kSacnUniverse);
   return true;
 }
 
 static void parsePacket(int n, const IPAddress &from) {
   ++s_pkts;
-  if (n < 126) {
+  if (n < kMinPkt) {
     return;
   }
   if (memcmp(s_pkt + 4, kAcnId, sizeof(kAcnId)) != 0) {
@@ -88,18 +98,31 @@ static void parsePacket(int n, const IPAddress &from) {
   if (propCount < 2) {
     return;
   }
-  if (s_pkt[125] != 0) {
+
+  // DMP property values (start code + slots) begin at kDmpValuesOff.
+  // Copy at most propCount bytes from that layer; ignore trailing junk.
+  const uint16_t pktAvail = static_cast<uint16_t>(n - kDmpValuesOff);
+  uint16_t take = propCount;
+  if (take > pktAvail) {
+    take = pktAvail;
+  }
+  if (take < 2) {
     return;
   }
-  uint16_t len = static_cast<uint16_t>(propCount - 1);
-  if (len > 512) {
-    len = 512;
+  if (s_pkt[kDmpValuesOff] != 0) {
+    return;
   }
-  if (static_cast<int>(126 + len) > n) {
-    len = static_cast<uint16_t>(n - 126);
+
+  uint16_t len = static_cast<uint16_t>(take - 1);
+  if (len > kMaxDmx) {
+    len = kMaxDmx;
   }
+  if (len > kDestRgb) {
+    len = kDestRgb;
+  }
+
   s_seq = s_pkt[111];
-  if (!LiveInput::push(LiveSource::Sacn, s_pkt + 126, len)) {
+  if (!LiveInput::push(LiveSource::Sacn, s_pkt + kDmxOff, len)) {
     return;
   }
   ++s_dmxOk;
