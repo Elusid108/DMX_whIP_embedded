@@ -5,6 +5,7 @@
 #include "live_cfg.h"
 #include "live_input.h"
 #include "log.h"
+#include "node_id.h"
 #include "play_cfg.h"
 #include "playback.h"
 #include "sd_info.h"
@@ -14,10 +15,13 @@
 #include <Arduino.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <SD.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>
 
 namespace {
 
@@ -50,6 +54,13 @@ static volatile bool s_gotIp = false;
 static volatile bool s_discPending = false;
 static volatile bool s_lostPending = false;
 static volatile uint8_t s_discReason = 0;
+
+static File s_uploadFile;
+static char s_uploadPath[kSdPathLen];
+static uint32_t s_uploadBytes = 0;
+static bool s_uploadOk = false;
+static bool s_uploadLocked = false;
+static const char *s_uploadError = nullptr;
 
 static const char *stateName() {
   if (s_scanRunning) {
@@ -222,6 +233,10 @@ static void sendStatus(int code) {
   out += stateName();
   out += "\",\"ver\":";
   jsonEscape(out, String(kFirmwareVersion));
+  out += ",\"name\":";
+  jsonEscape(out, String(NodeId::longName()));
+  out += ",\"short\":";
+  jsonEscape(out, String(NodeId::shortName()));
   String ssid = s_pendingSsid;
   if (ssid.isEmpty() && WiFi.status() == WL_CONNECTED) {
     ssid = WiFi.SSID();
@@ -278,7 +293,7 @@ static void sendStatus(int code) {
   out += ",\"n\":";
   out += static_cast<unsigned>(PlayCfg::folderN());
   out += ",\"now\":";
-  jsonEscape(out, String(Playback::path()));
+  jsonEscape(out, String(Playback::parked() ? "" : Playback::path()));
   out += ",\"files\":[";
   for (uint8_t i = 0; i < SdInfo::fileCount(); ++i) {
     if (i) {
@@ -372,6 +387,10 @@ static void handleIdentify() {
 }
 
 static void handleBrightness() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
   if (!s_server.hasArg("v")) {
     sendJson(400, "{\"error\":\"bad v\"}");
     return;
@@ -388,6 +407,10 @@ static void handleBrightness() {
 }
 
 static void handleLive() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
   const String protoArg = s_server.arg("proto");
   LiveProto proto = LiveCfg::proto();
   if (protoArg == "auto") {
@@ -431,9 +454,386 @@ static void handleLive() {
   sendStatus(200);
 }
 
+static bool endsWithDmx(const char *p) {
+  const size_t n = p ? strlen(p) : 0;
+  return n >= 4 && strcasecmp(p + n - 4, ".dmx") == 0;
+}
+
+static bool validUploadPath(const char *p) {
+  if (!p || p[0] != '/' || strstr(p, "..") != nullptr) {
+    return false;
+  }
+  const size_t n = strlen(p);
+  if (n < 6 || n >= kSdPathLen || p[n - 1] == '/') {
+    return false;
+  }
+  return endsWithDmx(p);
+}
+
+static const char *fileBase(const char *path) {
+  const char *slash = path ? strrchr(path, '/') : nullptr;
+  return slash ? slash + 1 : path;
+}
+
+static void stripOrderPrefix(const char *base, char *out, size_t outLen) {
+  const char *src = base && base[0] ? base : "";
+  if (isdigit(static_cast<unsigned char>(src[0])) &&
+      isdigit(static_cast<unsigned char>(src[1])) && src[2] == '_') {
+    src += 3;
+  }
+  snprintf(out, outLen, "%s", src);
+}
+
+static void remapPlayPath(const char *from, const char *to) {
+  if (!from || !to || strcmp(from, to) == 0) {
+    return;
+  }
+  if (PlayCfg::src() != PlaySrc::File || strcmp(PlayCfg::path(), from) != 0) {
+    return;
+  }
+  PlayCfg::set(PlaySrc::File, to, PlayCfg::fileLoop(), PlayCfg::folderRep(),
+               PlayCfg::folderN(), true);
+}
+
+static void resetUploadState() {
+  s_uploadOk = false;
+  s_uploadBytes = 0;
+  s_uploadError = nullptr;
+  s_uploadPath[0] = '\0';
+}
+
+static void closeUploadFile() {
+  if (s_uploadFile) {
+    s_uploadFile.close();
+  }
+}
+
+static void releaseUploadLock() {
+  if (s_uploadLocked) {
+    SdInfo::unlock();
+    s_uploadLocked = false;
+  }
+}
+
+static void handleUploadFile() {
+  HTTPUpload &up = s_server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    resetUploadState();
+    if (LiveInput::active()) {
+      s_uploadError = "live";
+      return;
+    }
+    if (!SdInfo::ok()) {
+      s_uploadError = "no sd";
+      return;
+    }
+    String path = s_server.arg("path");
+    path.trim();
+    if (!path.length() && up.filename.length()) {
+      path = "/";
+      path += up.filename;
+    }
+    if (!validUploadPath(path.c_str())) {
+      s_uploadError = "bad path";
+      return;
+    }
+    snprintf(s_uploadPath, sizeof(s_uploadPath), "%s", path.c_str());
+    Playback::park();
+    delay(80);
+    if (!SdInfo::lock(2000)) {
+      s_uploadError = "busy";
+      return;
+    }
+    s_uploadLocked = true;
+    s_uploadFile = SD.open(s_uploadPath, FILE_WRITE);
+    if (!s_uploadFile) {
+      releaseUploadLock();
+      s_uploadError = "write failed";
+      return;
+    }
+    LOG_V("http", "upload start %s", s_uploadPath);
+    return;
+  }
+  if (up.status == UPLOAD_FILE_WRITE) {
+    if (s_uploadError || !s_uploadFile) {
+      return;
+    }
+    if (s_uploadFile.write(up.buf, up.currentSize) != up.currentSize) {
+      s_uploadError = "write failed";
+    } else {
+      s_uploadBytes += up.currentSize;
+    }
+    yield();
+    return;
+  }
+  if (up.status == UPLOAD_FILE_END || up.status == UPLOAD_FILE_ABORTED) {
+    closeUploadFile();
+    const bool aborted = up.status == UPLOAD_FILE_ABORTED;
+    if (aborted && !s_uploadError) {
+      s_uploadError = "aborted";
+    }
+    if (s_uploadPath[0] && s_uploadError &&
+        (strcmp(s_uploadError, "write failed") == 0 ||
+         strcmp(s_uploadError, "aborted") == 0)) {
+      SD.remove(s_uploadPath);
+    }
+    releaseUploadLock();
+    if (!s_uploadError && !aborted) {
+      SdInfo::refreshTree();
+      s_uploadOk = true;
+      LOG_V("http", "upload ok %s bytes=%u", s_uploadPath,
+            static_cast<unsigned>(s_uploadBytes));
+    }
+  }
+}
+
+static void handleUploadDone() {
+  if (s_uploadError) {
+    if (strcmp(s_uploadError, "live") == 0) {
+      sendJson(503, "{\"error\":\"live\"}");
+    } else if (strcmp(s_uploadError, "no sd") == 0) {
+      sendJson(503, "{\"error\":\"no sd\"}");
+    } else if (strcmp(s_uploadError, "busy") == 0) {
+      sendJson(503, "{\"error\":\"busy\"}");
+    } else if (strcmp(s_uploadError, "write failed") == 0) {
+      sendJson(500, "{\"error\":\"write failed\"}");
+    } else if (strcmp(s_uploadError, "aborted") == 0) {
+      sendJson(400, "{\"error\":\"aborted\"}");
+    } else {
+      sendJson(400, "{\"error\":\"bad path\"}");
+    }
+    return;
+  }
+  if (!s_uploadOk) {
+    sendJson(400, "{\"error\":\"no file\"}");
+    return;
+  }
+  String out = "{\"ok\":true,\"path\":";
+  jsonEscape(out, String(s_uploadPath));
+  out += ",\"bytes\":";
+  out += s_uploadBytes;
+  out += '}';
+  sendJson(200, out);
+}
+
+static void handleName() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  String longName = s_server.arg("long");
+  longName.trim();
+  String shortName = s_server.arg("short");
+  shortName.trim();
+  if (!NodeId::set(longName.c_str(),
+                   shortName.length() ? shortName.c_str() : nullptr, true)) {
+    sendJson(400, "{\"error\":\"bad name\"}");
+    return;
+  }
+  sendStatus(200);
+}
+
+static void handleRename() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  if (!SdInfo::ok()) {
+    sendJson(503, "{\"error\":\"no sd\"}");
+    return;
+  }
+  String from = s_server.arg("from");
+  String to = s_server.arg("to");
+  from.trim();
+  to.trim();
+  if (!validUploadPath(from.c_str()) || !validUploadPath(to.c_str())) {
+    sendJson(400, "{\"error\":\"bad path\"}");
+    return;
+  }
+  if (from == to) {
+    sendStatus(200);
+    return;
+  }
+  Playback::park();
+  delay(80);
+  if (!SdInfo::lock(2000)) {
+    sendJson(503, "{\"error\":\"busy\"}");
+    return;
+  }
+  if (!SD.exists(from.c_str())) {
+    SdInfo::unlock();
+    sendJson(404, "{\"error\":\"missing\"}");
+    return;
+  }
+  if (SD.exists(to.c_str())) {
+    SdInfo::unlock();
+    sendJson(409, "{\"error\":\"exists\"}");
+    return;
+  }
+  const bool ok = SD.rename(from.c_str(), to.c_str());
+  SdInfo::unlock();
+  if (!ok) {
+    sendJson(500, "{\"error\":\"rename failed\"}");
+    return;
+  }
+  SdInfo::refreshTree();
+  remapPlayPath(from.c_str(), to.c_str());
+  sendStatus(200);
+}
+
+static void handleFileGet() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  if (!SdInfo::ok()) {
+    sendJson(503, "{\"error\":\"no sd\"}");
+    return;
+  }
+  String path = s_server.arg("path");
+  path.trim();
+  if (!validUploadPath(path.c_str())) {
+    sendJson(400, "{\"error\":\"bad path\"}");
+    return;
+  }
+  Playback::park();
+  delay(80);
+  if (!SdInfo::lock(2000)) {
+    sendJson(503, "{\"error\":\"busy\"}");
+    return;
+  }
+  File f = SD.open(path.c_str(), FILE_READ);
+  if (!f) {
+    SdInfo::unlock();
+    sendJson(404, "{\"error\":\"missing\"}");
+    return;
+  }
+  s_server.sendHeader("Cache-Control", "no-store");
+  String disp = "attachment; filename=\"";
+  disp += fileBase(path.c_str());
+  disp += '"';
+  s_server.sendHeader("Content-Disposition", disp);
+  s_server.streamFile(f, "application/octet-stream");
+  f.close();
+  SdInfo::unlock();
+}
+
+static void handleOrder() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  if (!SdInfo::ok()) {
+    sendJson(503, "{\"error\":\"no sd\"}");
+    return;
+  }
+
+  char froms[kSdMaxListFiles][kSdPathLen];
+  char dests[kSdMaxListFiles][kSdPathLen];
+  uint8_t n = 0;
+  const int args = s_server.args();
+  for (int i = 0; i < args && n < kSdMaxListFiles; ++i) {
+    if (s_server.argName(i) != "path") {
+      continue;
+    }
+    String p = s_server.arg(i);
+    p.trim();
+    if (!validUploadPath(p.c_str())) {
+      sendJson(400, "{\"error\":\"bad path\"}");
+      return;
+    }
+    snprintf(froms[n], kSdPathLen, "%s", p.c_str());
+    char stripped[kSdPathLen];
+    stripOrderPrefix(fileBase(froms[n]), stripped, sizeof(stripped));
+    if (!stripped[0] || !endsWithDmx(stripped)) {
+      sendJson(400, "{\"error\":\"bad path\"}");
+      return;
+    }
+    const int wrote =
+        snprintf(dests[n], kSdPathLen, "/%02u_%s", n + 1, stripped);
+    if (wrote < 0 || wrote >= static_cast<int>(kSdPathLen)) {
+      sendJson(400, "{\"error\":\"bad path\"}");
+      return;
+    }
+    ++n;
+  }
+  if (n == 0) {
+    sendJson(400, "{\"error\":\"bad path\"}");
+    return;
+  }
+  for (uint8_t i = 0; i < n; ++i) {
+    for (uint8_t j = static_cast<uint8_t>(i + 1); j < n; ++j) {
+      if (strcmp(froms[i], froms[j]) == 0 || strcmp(dests[i], dests[j]) == 0) {
+        sendJson(409, "{\"error\":\"exists\"}");
+        return;
+      }
+    }
+  }
+
+  Playback::park();
+  delay(80);
+  if (!SdInfo::lock(4000)) {
+    sendJson(503, "{\"error\":\"busy\"}");
+    return;
+  }
+  for (uint8_t i = 0; i < n; ++i) {
+    if (!SD.exists(froms[i])) {
+      SdInfo::unlock();
+      sendJson(404, "{\"error\":\"missing\"}");
+      return;
+    }
+  }
+  bool ok = true;
+  char temps[kSdMaxListFiles][kSdPathLen];
+  for (uint8_t i = 0; i < n && ok; ++i) {
+    snprintf(temps[i], kSdPathLen, "/@%02u.dmx", i + 1);
+    if (strcmp(froms[i], temps[i]) == 0) {
+      continue;
+    }
+    if (SD.exists(temps[i]) && !SD.remove(temps[i])) {
+      ok = false;
+      break;
+    }
+    ok = SD.rename(froms[i], temps[i]);
+  }
+  for (uint8_t i = 0; i < n && ok; ++i) {
+    const char *src = SD.exists(temps[i]) ? temps[i] : froms[i];
+    if (strcmp(src, dests[i]) == 0) {
+      continue;
+    }
+    if (SD.exists(dests[i]) && !SD.remove(dests[i])) {
+      ok = false;
+      break;
+    }
+    ok = SD.rename(src, dests[i]);
+  }
+  SdInfo::unlock();
+  if (!ok) {
+    SdInfo::refreshTree();
+    sendJson(500, "{\"error\":\"order failed\"}");
+    return;
+  }
+  SdInfo::refreshTree();
+  for (uint8_t i = 0; i < n; ++i) {
+    remapPlayPath(froms[i], dests[i]);
+  }
+  sendStatus(200);
+}
+
 static void handlePlay() {
-  PlaySrc src = PlayCfg::src();
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
   const String srcArg = s_server.arg("src");
+  const String actionArg = s_server.arg("action");
+  if (srcArg == "stop" || actionArg == "stop") {
+    Playback::park();
+    sendStatus(200);
+    return;
+  }
+
+  PlaySrc src = PlayCfg::src();
   if (srcArg == "root") {
     src = PlaySrc::Root;
   } else if (srcArg == "file") {
@@ -486,10 +886,15 @@ static void handlePlay() {
     sendJson(400, "{\"error\":\"bad play\"}");
     return;
   }
+  Playback::reload();
   sendStatus(200);
 }
 
 static void handleConnect() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
   if (s_scanRunning) {
     sendJson(409, "{\"error\":\"scan in progress\"}");
     return;
@@ -516,6 +921,10 @@ static void handleConnect() {
 }
 
 static void handleForget() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, false);
   clearCreds();
@@ -648,6 +1057,11 @@ void WifiSetup::begin() {
   s_server.on("/identify", HTTP_POST, handleIdentify);
   s_server.on("/live", HTTP_POST, handleLive);
   s_server.on("/play", HTTP_POST, handlePlay);
+  s_server.on("/upload", HTTP_POST, handleUploadDone, handleUploadFile);
+  s_server.on("/name", HTTP_POST, handleName);
+  s_server.on("/rename", HTTP_POST, handleRename);
+  s_server.on("/file", HTTP_GET, handleFileGet);
+  s_server.on("/order", HTTP_POST, handleOrder);
   s_server.on("/generate_204", HTTP_GET, handleCaptive);
   s_server.on("/gen_204", HTTP_GET, handleCaptive);
   s_server.on("/hotspot-detect.html", HTTP_GET, handleCaptive);

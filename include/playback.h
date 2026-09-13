@@ -27,12 +27,14 @@ public:
   static void service();
   static void start();
   static void stop();
+  static void park();
   static void play();
   static void pause();
   static void setLoop(bool on);
   static void reload();
 
   static bool hasFile();
+  static bool parked();
   static bool running();
   static bool playing();
   static bool underrun();

@@ -2,6 +2,7 @@
 
 #include "live_input.h"
 #include "log.h"
+#include "node_id.h"
 #include "sync.h"
 #include "version.h"
 
@@ -132,11 +133,10 @@ static void buildPollReply(const IPAddress &ip) {
   s_reply[21] = 0xFF;
   s_reply[23] = 0xC0;
 
-  snprintf(reinterpret_cast<char *>(s_reply + 26), 18, "dmxwhip");
-  snprintf(reinterpret_cast<char *>(s_reply + 44), 64, "dmxwhip v%s",
-           kFirmwareVersion);
+  snprintf(reinterpret_cast<char *>(s_reply + 26), 18, "%s", NodeId::shortName());
+  snprintf(reinterpret_cast<char *>(s_reply + 44), 64, "%s", NodeId::longName());
   snprintf(reinterpret_cast<char *>(s_reply + 108), 64,
-           "#0001 [%04x] dmxwhip v%s", static_cast<unsigned>(pa),
+           "#0001 [%04x] %s v%s", static_cast<unsigned>(pa), NodeId::shortName(),
            kFirmwareVersion);
 
   s_reply[173] = 1;

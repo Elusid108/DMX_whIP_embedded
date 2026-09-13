@@ -9,6 +9,7 @@
 #include "live_cfg.h"
 #include "live_input.h"
 #include "log.h"
+#include "node_id.h"
 #include "playback.h"
 #include "pixel_map.h"
 #include "play_cfg.h"
@@ -36,6 +37,7 @@ void setup() {
   LOG_V("boot", "ESP32-S3-Matrix v%s", kFirmwareVersion);
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
+  NodeId::begin();
   WifiSetup::begin();
   LiveCfg::begin();
   LiveInput::begin();
@@ -71,7 +73,9 @@ void loop() {
     }
   } else {
     Playback::service();
-    if (Playback::hasFile()) {
+    if (Playback::parked()) {
+      // Stay black; NVS playlist is unchanged until the next /play.
+    } else if (Playback::hasFile()) {
       if (Sync::cueFollow()) {
         if (Sync::cuePlaying()) {
           Playback::play();

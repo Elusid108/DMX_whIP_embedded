@@ -52,6 +52,7 @@ static uint8_t s_listI = 0;
 static uint8_t s_passLeft = 0;
 static bool s_hasFile = false;
 static volatile bool s_run = false;
+static volatile bool s_parked = false;
 static bool s_playing = true;
 static bool s_loop = true;
 static bool s_underrun = false;
@@ -874,6 +875,10 @@ void Playback::start() {
     begin();
   }
   lockPlay();
+  if (s_parked) {
+    unlockPlay();
+    return;
+  }
   const bool exhausted = s_exhausted;
   bool has = s_hasFile;
   unlockPlay();
@@ -913,6 +918,15 @@ void Playback::stop() {
   }
 }
 
+void Playback::park() {
+  lockPlay();
+  s_run = false;
+  s_playing = false;
+  s_parked = true;
+  unlockPlay();
+  LOG_V("play", "park");
+}
+
 void Playback::play() {
   start();
   lockPlay();
@@ -941,10 +955,13 @@ void Playback::reload() {
   s_loggedNoFile = false;
   s_reload = true;
   s_run = false;
+  s_parked = false;
   unlockPlay();
 }
 
 bool Playback::hasFile() { return s_hasFile; }
+
+bool Playback::parked() { return s_parked; }
 
 bool Playback::running() { return s_run && s_hasFile; }
 

@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.7.0**
+Version: **0.9.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -30,7 +30,7 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 - Connecting STA may hop the SoftAP channel; if the page drops, rejoin `dmxwhip`. While a protocol is live the AP is gone — unicast to the **STA IP** (serial `[V][wifi] connected ... ip=`). While idle, use `dmxwhip` / `http://4.3.2.1`.
 - Max brightness slider **and number field** 0–255 (default 10, stored in NVS). Warning on the page above 64; the value is not capped. `/status` field `bri`. Live pixels use this as FastLED global scale.
 - Live block (set while idle, NVS): **protocol** Auto / Art-Net / sACN (`/status` `proto`); **show FPS** 20 / 30 / 40 / 60 (`fps`); **buffer** 0 latest … 3 frames (`buf`). Auto = first live protocol locks until 2 s silence. Wi-Fi power save off while live. **Identify:** `POST /identify` (form `ms`, default 3000, 200–15000) flashes cyan/white on the matrix while idle; it does not mark the node live, so SoftAP/HTTP stay up. 503 if a protocol is live. Locate scale is `max(saved bri, 64)` then restored.
-- SD line on the **Playback** tab is live while the portal is up: type, size MB, used, free (or `not mounted`). Pull the card → not mounted; reinsert → automount. Cached used/free refresh on mount only. `/status` object `sd`. Skip SD I/O while a protocol is live. Playback also lists `.dmx` files and folders (`/status` `play`) and POSTs `/play` for the idle playlist (NVS).
+- SD line on the **Playback** tab is live while the portal is up: type, size MB, used, free (or `not mounted`). Pull the card → not mounted; reinsert → automount. Cached used/free refresh on mount only. `/status` object `sd`. Skip SD I/O while a protocol is live. Playback also lists `.dmx` files and folders (`/status` `play`) and POSTs `/play` for the idle playlist (NVS). `src=stop` (or `action=stop`) parks playback without changing the saved playlist. Companion `POST /upload` (multipart `path` + `file`) streams a `.dmx` onto the card while idle.
 
 ## Art-Net / sACN (Resolume)
 
@@ -60,6 +60,8 @@ Bring-up (this board)
 - [x] Portal Network / Playback tabs; Playback lists SD `.dmx` / folders and sets the idle playlist — implemented (not verified)
 - [x] SD playlist: root `.dmx` alphabetical wrap; file loop one/all; folder recursive forever or N then black — implemented (not verified)
 - [x] Portal `POST /identify` locate flash (idle; no LiveInput; 503 if live) — implemented (not verified)
+- [x] Companion `POST /upload` stream `.dmx` to SD + `POST /play` `src=stop` — implemented (not verified)
+- [x] Companion node name + SD rename / stream pull / order prefixes — implemented (not verified)
 
 From the historical PDF (adapted)
 
@@ -98,12 +100,18 @@ Companion PC (sibling repo `DMX_whIP_companion`, not this tree)
 
 The companion discovers and locates nodes over the **selected NIC**. Contract:
 
-- **ArtPoll** (UDP 6454, opcode `0x2000`) — this firmware replies with **ArtPollReply** (`0x2100`, 239 bytes): long name `dmxwhip v…`, IP, MAC, BindIndex 1, one DMX-out port, Art-Net **universe 0**. Poll does not count as live input. **sACN-only** portal proto stops Art-Net UDP, so those nodes will not appear in ArtPoll.
+- **ArtPoll** (UDP 6454, opcode `0x2000`) — this firmware replies with **ArtPollReply** (`0x2100`, 239 bytes): short/long name from NVS (`POST /name`; default `dmxwhip` / `dmxwhip v…`), IP, MAC, BindIndex 1, one DMX-out port, Art-Net **universe 0**. Poll does not count as live input. **sACN-only** portal proto stops Art-Net UDP, so those nodes will not appear in ArtPoll.
 - **Universes** — live Art-Net **0** (Resolume “universe 1” is often 0). Live sACN is universe **1** and is not advertised in ArtPollReply.
 - **HTTP only while idle** — SoftAP `http://4.3.2.1` (SSID `dmxwhip` / `pass1234`) and the STA IP when connected. While live Art-Net/sACN is present (and STA is up), SoftAP and HTTP are down. They return ~2 s after the last live frame.
-- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `bri`, `proto`, `fps`, `buf`, `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`, `used_mb`, `free_mb`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `files`, `dirs`). When present: `ssid`, `saved`, `ip` (STA), `error`. Extra keys are additive.
+- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `name`, `short`, `bri`, `proto`, `fps`, `buf`, `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`, `used_mb`, `free_mb`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `files`, `dirs`). When present: `ssid`, `saved`, `ip` (STA), `error`. Extra keys are additive.
 - **POST `/identify`** — form `ms` (default 3000, 200–15000). Idle LED locate pattern. Must not call `LiveInput::push`. 503 when live. Show scale is `max(saved bri, 64)` for the flash only, then restored (not written to NVS).
-- **Phase F / later** — there is still **no** network API to push a library `.dmx` onto the SD. Portal `POST /play`, `POST /brightness`, `POST /live`, `POST /connect` exist for local control; companion Phase F will call those, not scrape HTML.
+- **POST `/upload`** — multipart form `path` (absolute, e.g. `/scene_1.dmx`) + file part `file`. Query `path=` is also accepted. Idle-only. Validates like playlist paths (leading `/`, no `..`, length &lt; 64) and requires a `.dmx` basename. 503 `live` / `no sd` / `busy`. Parks playback, writes chunks to SD, refreshes `/status` `play.files`. Success `200 {"ok":true,"path":"/foo.dmx","bytes":N}`. No sidecar JSON on the card.
+- **POST `/play`** — form `src` (`root` / `file` / `folder`), `path`, `file_loop`, `folder_rep`, `n`. `src=stop` or `action=stop` parks output and leaves the NVS playlist; `/status` `play.now` is empty until the next Play. 503 when live. Response is full `/status`.
+- **Portal-equivalent POSTs** (same as the SoftAP page; companion calls these, does not scrape HTML): `POST /brightness` (`v` 0–255), `POST /live` (`proto` auto/artnet/sacn, `fps` 20/30/40/60, `buf` 0–3), `GET /scan` (`?start=1` then poll until `networks`), `POST /connect` (`ssid`, `password`), `POST /forget`. 503 when live.
+- **POST `/name`** — form `long` (required, 1–63), optional `short` (1–17; else truncated `long`). Idle-only. Persists NVS; next ArtPollReply uses the names. 503 when live. Response is full `/status`.
+- **POST `/rename`** — form `from` + `to` (absolute `.dmx`, same path rules as `/upload`). Idle-only. 404 missing, 409 exists. Updates the NVS file playlist path if it matched `from`.
+- **GET `/file`** — query `path=/foo.dmx`. Idle-only. Streams the file (`streamFile`); no full-file RAM buffer. 404 missing.
+- **POST `/order`** — repeated form `path` in the desired order. Two-phase rename to `/01_basename.dmx`, `/02_…` (strips an existing `NN_` prefix). Idle-only. Response is full `/status`.
 
 - [ ] Art-Net / sACN test sender that can also emit ArtSync / E1.31 sync / playback cues
 - [ ] Later: recorder and SD file pull; node exposes the files/API this app will use
@@ -165,6 +173,8 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.9.0** — NVS node name (ArtPoll + `POST /name`); SD `POST /rename`, `GET /file`, `POST /order`
+- **0.8.0** — Idle `POST /upload` stream `.dmx` to SD; `POST /play` `src=stop` parks without clearing NVS
 - **0.7.0** — Idle `POST /identify` locate flash for the companion; document ArtPoll/`/status` contract
 - **0.6.0** — Portal Network/Playback tabs; idle SD playlist (root alphabetical wrap, file/folder default, folder recursive + optional repeat N)
 - **0.5.0** — SD playback of companion `DMXREC` `.dmx` (1:1 universe slice; console owns the map; live still preempts)
