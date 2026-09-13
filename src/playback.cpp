@@ -1,8 +1,8 @@
 #include "playback.h"
 
+#include "dmxrec.h"
 #include "log.h"
 #include "pixel_map.h"
-#include "rec_format.h"
 #include "sd_info.h"
 
 #include <Arduino.h>
@@ -17,21 +17,20 @@
 namespace {
 
 static constexpr uint32_t kSdLockForever = 0xFFFFFFFFu;
-static constexpr uint32_t kPlayCrcLogMs = 5000;
 static constexpr uint32_t kPlayUnderrunLogMs = 5000;
 static constexpr uint32_t kPlayDiscoverMs = 1000;
-static constexpr uint32_t kPlayMaxSkip = 4096;
 static constexpr uint32_t kPlayTaskStack = 8192;
 static constexpr UBaseType_t kPlayTaskPrio = 1;
 static constexpr BaseType_t kPlayTaskCore = 1;
 static constexpr uint32_t kPlayPathLen = 64;
 
 struct Slot {
-  RecFramePrefix prefix;
+  uint32_t t_us;
+  uint16_t size;
   uint8_t rgb[kPlayMaxPayload];
 };
 
-enum class ReadResult : uint8_t { Ok = 0, Drop = 1, Eof = 2, Fail = 3 };
+enum class ReadResult : uint8_t { Ok = 0, Skip = 1, Eof = 2, Fail = 3 };
 
 static SemaphoreHandle_t s_mu = nullptr;
 static TaskHandle_t s_task = nullptr;
@@ -43,7 +42,6 @@ static uint8_t s_head = 0;
 static uint8_t s_tail = 0;
 static uint8_t s_count = 0;
 
-static RecFileHeader s_hdr;
 static char s_path[kPlayPathLen];
 static bool s_hasFile = false;
 static volatile bool s_run = false;
@@ -51,17 +49,52 @@ static bool s_underrun = false;
 static bool s_begun = false;
 static bool s_loggedNoFile = false;
 static bool s_loggedLoop = false;
-static bool s_loggedCrc = false;
-static uint32_t s_lastCrcLog = 0;
+static bool s_loggedNoMatch = false;
 static uint32_t s_lastUnderrunLog = 0;
 static uint32_t s_lastDiscover = 0;
 static uint32_t s_off = 0;
 static uint32_t s_frameIndex = 0;
+static uint32_t s_frameCount = 0;
+static uint32_t s_matchedPass = 0;
 static uint32_t s_tUs = 0;
 static uint32_t s_payload = 0;
+static uint32_t s_dmxOff = 0;
 
-static RecFramePrefix s_readPrefix;
+static uint32_t s_readTUs = 0;
+static uint16_t s_readSize = 0;
 static uint8_t s_readRgb[kPlayMaxPayload];
+
+static uint32_t sliceBytes() {
+  const PixelMapCfg &m = PixelMap::cfg();
+  const uint32_t n =
+      static_cast<uint32_t>(m.pixelCount) * m.channelsPerPixel;
+  if (n == 0) {
+    return 0;
+  }
+  if (n > kPlayMaxPayload) {
+    return kPlayMaxPayload;
+  }
+  return n;
+}
+
+static uint32_t dmxStartOff() {
+  const uint16_t ch = PixelMap::cfg().startChannel;
+  if (ch == 0) {
+    return 0;
+  }
+  return static_cast<uint32_t>(ch - 1);
+}
+
+static bool frameForThisNode(uint32_t universe, uint16_t protocol) {
+  const PixelMapCfg &m = PixelMap::cfg();
+  if (protocol == kDmxrecProtoArtNet) {
+    return universe == m.startArtNetUniverse;
+  }
+  if (protocol == kDmxrecProtoSacn) {
+    return universe == m.startSacnUniverse;
+  }
+  return false;
+}
 
 static void lockPlay() {
   if (s_mu) {
@@ -89,102 +122,6 @@ static void noteUnderrunLocked() {
     LOG_C("play", "underrun");
     s_lastUnderrunLog = now;
   }
-}
-
-static bool mapMatches(const RecFileHeader &h, const char *&why) {
-  const PixelMapCfg &m = PixelMap::cfg();
-  if (h.pixel_count != m.pixelCount) {
-    why = "pixel_count";
-    return false;
-  }
-  if (h.chips_per_pixel != m.channelsPerPixel) {
-    why = "chips_per_pixel";
-    return false;
-  }
-  const bool rgbw = (h.flags & kRecFlagRgbw) != 0;
-  if (rgbw != (m.channelsPerPixel == 4)) {
-    why = "rgbw";
-    return false;
-  }
-  if (h.map_kind == kRecMapIdentity) {
-    if (h.map_bytes != 0) {
-      why = "identity_map_bytes";
-      return false;
-    }
-    if (h.start_universe != m.startArtNetUniverse &&
-        h.start_universe != m.startSacnUniverse) {
-      why = "start_universe";
-      return false;
-    }
-    if (m.startChannel == 0 ||
-        h.start_channel != static_cast<uint16_t>(m.startChannel - 1)) {
-      why = "start_channel";
-      return false;
-    }
-    if ((h.split_universes != 0) != m.splitAcrossUniverses) {
-      why = "split";
-      return false;
-    }
-  } else if (h.map_kind == kRecMapCustom) {
-    const uint32_t need =
-        h.pixel_count * static_cast<uint32_t>(sizeof(RecMapEntry));
-    if (h.map_bytes != need) {
-      why = "custom_map_bytes";
-      return false;
-    }
-  } else {
-    why = "map_kind";
-    return false;
-  }
-  return true;
-}
-
-static bool headerOk(const RecFileHeader &h, uint32_t fileBytes,
-                     const char *&why) {
-  if (!recMagicOk(h)) {
-    why = "magic";
-    return false;
-  }
-  if (!recVersionOk(h)) {
-    why = "version";
-    return false;
-  }
-  if (h.fps == 0) {
-    why = "fps";
-    return false;
-  }
-  if (h.frame_count == 0) {
-    why = "frame_count";
-    return false;
-  }
-  if (recHeaderCrc32(h) != h.header_crc32) {
-    why = "header_crc";
-    return false;
-  }
-  if (h.pixel_count > kPlayMaxPixels || h.chips_per_pixel > kPlayMaxChips) {
-    why = "too_large";
-    return false;
-  }
-  if (!mapMatches(h, why)) {
-    return false;
-  }
-  const uint32_t payload = recPayloadBytes(h);
-  if (payload == 0 || payload > kPlayMaxPayload) {
-    why = "payload";
-    return false;
-  }
-  const uint32_t dataOff = recFrameDataOffset(h);
-  const uint32_t one = recFrameOnDiskBytes(payload);
-  if (one == 0 || h.frame_count > (0xFFFFFFFFu - dataOff) / one) {
-    why = "size";
-    return false;
-  }
-  const uint32_t need = dataOff + one * h.frame_count;
-  if (fileBytes < need) {
-    why = "truncated";
-    return false;
-  }
-  return true;
 }
 
 static void closeFile() {
@@ -247,22 +184,6 @@ static bool sdRead(void *dst, size_t n) {
   return true;
 }
 
-static bool sdSkip(uint32_t n) {
-  if (!s_fileOpen) {
-    return false;
-  }
-  if (!SdInfo::lock(1000)) {
-    return false;
-  }
-  const uint32_t pos = s_file.position();
-  const bool ok = s_file.seek(pos + n);
-  if (ok) {
-    s_off = s_file.position();
-  }
-  SdInfo::unlock();
-  return ok;
-}
-
 static bool sdSeek(uint32_t off) {
   if (!s_fileOpen) {
     return false;
@@ -278,74 +199,49 @@ static bool sdSeek(uint32_t off) {
   return ok;
 }
 
-static void logCrc(const char *why) {
-  const uint32_t now = millis();
-  if (s_loggedCrc && now - s_lastCrcLog < kPlayCrcLogMs) {
-    return;
-  }
-  s_loggedCrc = true;
-  s_lastCrcLog = now;
-  LOG_C("play", "crc drop %s", why);
-}
-
 static ReadResult readOneFrame() {
-  if (!sdRead(&s_readPrefix, sizeof(s_readPrefix))) {
+  DmxrecFramePrefix prefix;
+  uint8_t dmx[kDmxrecDmxBytes];
+
+  if (!sdRead(&prefix, sizeof(prefix))) {
     lockPlay();
-    const bool eof = s_frameIndex >= s_hdr.frame_count;
+    const bool eof = s_frameIndex >= s_frameCount;
     unlockPlay();
     return eof ? ReadResult::Eof : ReadResult::Fail;
   }
+  if (!sdRead(dmx, sizeof(dmx))) {
+    return ReadResult::Fail;
+  }
 
   lockPlay();
-  const uint32_t expected = s_payload;
-  const uint32_t frames = s_hdr.frame_count;
-  uint32_t index = s_frameIndex;
-  unlockPlay();
-
-  if (s_readPrefix.size != expected) {
-    logCrc("size");
-    if (s_readPrefix.size > kPlayMaxSkip) {
-      return ReadResult::Fail;
-    }
-    if (!sdSkip(s_readPrefix.size + kRecFrameCrcBytes)) {
-      return ReadResult::Fail;
-    }
-    lockPlay();
-    s_frameIndex = index + 1;
-    unlockPlay();
-    if (index + 1 >= frames) {
-      return ReadResult::Eof;
-    }
-    return ReadResult::Drop;
-  }
-
-  if (s_readPrefix.size > kPlayMaxPayload) {
-    logCrc("payload");
-    return ReadResult::Fail;
-  }
-
-  if (!sdRead(s_readRgb, s_readPrefix.size)) {
-    return ReadResult::Fail;
-  }
-
-  uint32_t diskCrc = 0;
-  if (!sdRead(&diskCrc, sizeof(diskCrc))) {
-    return ReadResult::Fail;
-  }
-
-  const uint32_t crc = recFrameCrc32(s_readPrefix, s_readRgb);
-  lockPlay();
+  const uint32_t index = s_frameIndex;
+  const uint32_t frames = s_frameCount;
+  const uint32_t want = s_payload;
+  const uint32_t off = s_dmxOff;
   s_frameIndex = index + 1;
   unlockPlay();
 
-  if (crc != diskCrc) {
-    logCrc("frame");
-    if (index + 1 >= frames) {
-      return ReadResult::Eof;
-    }
-    return ReadResult::Drop;
+  if (index + 1 > frames) {
+    return ReadResult::Eof;
   }
 
+  if (!frameForThisNode(prefix.universe, prefix.protocol)) {
+    return ReadResult::Skip;
+  }
+
+  uint32_t take = want;
+  if (off >= kDmxrecDmxBytes) {
+    take = 0;
+  } else if (off + take > kDmxrecDmxBytes) {
+    take = kDmxrecDmxBytes - off;
+  }
+
+  memset(s_readRgb, 0, sizeof(s_readRgb));
+  if (take > 0) {
+    memcpy(s_readRgb, dmx + off, take);
+  }
+  s_readSize = static_cast<uint16_t>(want);
+  s_readTUs = prefix.t_ms * 1000u;
   return ReadResult::Ok;
 }
 
@@ -360,31 +256,41 @@ static void pushReadFrame() {
   lockPlay();
   if (s_count < kPlayRingSlots) {
     Slot &s = s_ring[s_head];
-    s.prefix = s_readPrefix;
-    memcpy(s.rgb, s_readRgb, s_readPrefix.size);
+    s.t_us = s_readTUs;
+    s.size = s_readSize;
+    memcpy(s.rgb, s_readRgb, s_readSize);
     s_head = static_cast<uint8_t>((s_head + 1) % kPlayRingSlots);
     s_count = static_cast<uint8_t>(s_count + 1);
+    s_matchedPass += 1;
   }
   unlockPlay();
 }
 
 static bool wrapShow() {
   lockPlay();
-  const uint32_t start = recFrameDataOffset(s_hdr);
+  const uint32_t matched = s_matchedPass;
   s_frameIndex = 0;
-  s_off = start;
+  s_off = kDmxrecHeaderBytes;
+  s_matchedPass = 0;
   const bool first = !s_loggedLoop;
-  s_loggedLoop = true;
   unlockPlay();
+
+  if (matched == 0) {
+    if (!s_loggedNoMatch) {
+      LOG_C("play", "no frames for this node %s", s_path);
+      s_loggedNoMatch = true;
+    }
+    return false;
+  }
   if (first) {
+    s_loggedLoop = true;
     LOG_V("play", "loop %s", s_path);
   }
-  return sdSeek(start);
+  return sdSeek(kDmxrecHeaderBytes);
 }
 
 static bool bindPath(const char *path) {
-  uint8_t raw[kRecHeaderBytes];
-  RecFileHeader h;
+  DmxrecHeader h;
   uint32_t fileBytes = 0;
 
   if (!SdInfo::lock(1000)) {
@@ -397,53 +303,55 @@ static bool bindPath(const char *path) {
     return false;
   }
   fileBytes = f.size();
-  const size_t got = f.read(raw, sizeof(raw));
+  const size_t got = f.read(reinterpret_cast<uint8_t *>(&h), sizeof(h));
   f.close();
   SdInfo::unlock();
 
-  if (got < 6) {
+  if (got != sizeof(h)) {
     LOG_C("play", "reject %s short", path);
     return false;
   }
-  if (recIsLegacyDmxrec(raw)) {
-    LOG_C("play", "reject %s legacy DMXREC", path);
+  if (!dmxrecMagicOk(h)) {
+    LOG_C("play", "reject %s magic", path);
     return false;
   }
-  if (got != sizeof(raw)) {
-    LOG_C("play", "reject %s short", path);
+  if (h.frame_count == 0) {
+    LOG_C("play", "reject %s empty", path);
     return false;
   }
-  memcpy(&h, raw, sizeof(h));
-
-  const char *why = "header";
-  if (!headerOk(h, fileBytes, why)) {
-    LOG_C("play", "reject %s %s px=%u chips=%u map=%u", path, why,
-          static_cast<unsigned>(h.pixel_count),
-          static_cast<unsigned>(h.chips_per_pixel),
-          static_cast<unsigned>(h.map_kind));
+  const uint32_t need = dmxrecFileBytes(h.frame_count);
+  if (fileBytes != need) {
+    LOG_C("play", "reject %s truncated have=%u need=%u", path,
+          static_cast<unsigned>(fileBytes), static_cast<unsigned>(need));
     return false;
   }
 
+  const uint32_t payload = sliceBytes();
+  const uint32_t off = dmxStartOff();
+  if (payload == 0) {
+    LOG_C("play", "reject %s payload", path);
+    return false;
+  }
+
+  const PixelMapCfg &m = PixelMap::cfg();
   lockPlay();
-  s_hdr = h;
   snprintf(s_path, sizeof(s_path), "%s", path);
   s_hasFile = true;
-  s_payload = recPayloadBytes(h);
-  s_off = recFrameDataOffset(h);
+  s_payload = payload;
+  s_dmxOff = off;
+  s_frameCount = h.frame_count;
   s_frameIndex = 0;
+  s_off = kDmxrecHeaderBytes;
+  s_matchedPass = 0;
   s_loggedLoop = false;
-  s_loggedCrc = false;
+  s_loggedNoMatch = false;
   s_loggedNoFile = false;
   unlockPlay();
 
-  LOG_V("play", "file=%s fps=%u frames=%u px=%u chips=%u payload=%u", s_path,
-        static_cast<unsigned>(h.fps), static_cast<unsigned>(h.frame_count),
-        static_cast<unsigned>(h.pixel_count),
-        static_cast<unsigned>(h.chips_per_pixel),
-        static_cast<unsigned>(s_payload));
-  if (recHasIndex(h)) {
-    LOG_V("play", "index off=%u", static_cast<unsigned>(h.index_offset));
-  }
+  LOG_V("play", "file=%s frames=%u payload=%u artnet=%u sacn=%u", s_path,
+        static_cast<unsigned>(h.frame_count), static_cast<unsigned>(payload),
+        static_cast<unsigned>(m.startArtNetUniverse),
+        static_cast<unsigned>(m.startSacnUniverse));
   return true;
 }
 
@@ -452,10 +360,10 @@ static bool tryBindFile() {
     return false;
   }
   char path[kPlayPathLen];
-  if (!SdInfo::findDwr(path, sizeof(path))) {
+  if (!SdInfo::findDmx(path, sizeof(path))) {
     if (!s_loggedNoFile) {
-      LOG_V("play", "no .dwr (idle)");
-      LOG_V("sd", "no .dwr in / (want /show.dwr or first *.dwr)");
+      LOG_V("play", "no .dmx (idle)");
+      LOG_V("sd", "no .dmx in / (want /show.dmx or first *.dmx)");
       s_loggedNoFile = true;
     }
     return false;
@@ -469,6 +377,8 @@ static void clearBind() {
   s_run = false;
   s_path[0] = '\0';
   s_payload = 0;
+  s_frameCount = 0;
+  s_loggedNoMatch = false;
   resetRingLocked();
   unlockPlay();
 }
@@ -499,35 +409,28 @@ static void playbackTask(void *) {
       continue;
     }
 
-    const ReadResult r = readOneFrame();
-    if (r == ReadResult::Ok) {
-      pushReadFrame();
-      lockPlay();
-      const bool wrapNext = s_frameIndex >= s_hdr.frame_count;
-      unlockPlay();
-      if (wrapNext && !wrapShow()) {
-        LOG_C("play", "loop seek failed");
+    lockPlay();
+    const bool atEnd = s_frameIndex >= s_frameCount;
+    unlockPlay();
+    if (atEnd) {
+      if (!wrapShow()) {
         lockPlay();
         s_run = false;
         unlockPlay();
       }
       continue;
     }
-    if (r == ReadResult::Drop) {
-      lockPlay();
-      const bool wrapNext = s_frameIndex >= s_hdr.frame_count;
-      unlockPlay();
-      if (wrapNext && !wrapShow()) {
-        LOG_C("play", "loop seek failed");
-        lockPlay();
-        s_run = false;
-        unlockPlay();
-      }
+
+    const ReadResult r = readOneFrame();
+    if (r == ReadResult::Ok) {
+      pushReadFrame();
+      continue;
+    }
+    if (r == ReadResult::Skip) {
       continue;
     }
     if (r == ReadResult::Eof) {
       if (!wrapShow()) {
-        LOG_C("play", "loop seek failed");
         lockPlay();
         s_run = false;
         unlockPlay();
@@ -558,8 +461,8 @@ void Playback::begin() {
   if (s_mu == nullptr) {
     s_mu = xSemaphoreCreateMutex();
   }
-  LOG_V("play", "ring slots=%u payload=%u (reader fills; no FastLED)",
-        kPlayRingSlots, kPlayMaxPayload);
+  LOG_V("play", "ring slots=%u payload=%u (DMXREC; no FastLED)", kPlayRingSlots,
+        kPlayMaxPayload);
   tryBindFile();
   if (s_task == nullptr) {
     const BaseType_t ok =
@@ -617,9 +520,14 @@ void Playback::start() {
     unlockPlay();
     return;
   }
+  if (s_loggedNoMatch) {
+    unlockPlay();
+    return;
+  }
   s_run = true;
   s_underrun = false;
   s_lastUnderrunLog = 0;
+  s_matchedPass = 0;
   unlockPlay();
   LOG_V("play", "start %s", s_path);
 }
@@ -656,7 +564,7 @@ bool Playback::peek(uint32_t &t_us) {
     unlockPlay();
     return false;
   }
-  t_us = s_ring[s_tail].prefix.t_us;
+  t_us = s_ring[s_tail].t_us;
   s_tUs = t_us;
   unlockPlay();
   return true;
@@ -674,8 +582,8 @@ const uint8_t *Playback::peekPayload(size_t &n, uint32_t &t_us) {
     return nullptr;
   }
   const Slot &s = s_ring[s_tail];
-  n = s.prefix.size;
-  t_us = s.prefix.t_us;
+  n = s.size;
+  t_us = s.t_us;
   s_tUs = t_us;
   const uint8_t *p = s.rgb;
   unlockPlay();
@@ -695,12 +603,12 @@ bool Playback::copyFrame(uint8_t *rgb, size_t n, uint32_t *t_us) {
     return false;
   }
   const Slot &s = s_ring[s_tail];
-  if (n < s.prefix.size) {
+  if (n < s.size) {
     unlockPlay();
     return false;
   }
-  memcpy(rgb, s.rgb, s.prefix.size);
-  s_tUs = s.prefix.t_us;
+  memcpy(rgb, s.rgb, s.size);
+  s_tUs = s.t_us;
   if (t_us) {
     *t_us = s_tUs;
   }
@@ -725,12 +633,7 @@ bool Playback::pop() {
 
 uint32_t Playback::tUs() { return s_tUs; }
 
-uint16_t Playback::fps() {
-  lockPlay();
-  const uint16_t fps = s_hasFile ? s_hdr.fps : 0;
-  unlockPlay();
-  return fps;
-}
+uint16_t Playback::fps() { return 0; }
 
 uint32_t Playback::payloadBytes() {
   lockPlay();

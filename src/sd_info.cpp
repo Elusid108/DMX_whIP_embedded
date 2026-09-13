@@ -69,19 +69,19 @@ static const char *baseName(const char *p) {
   return s ? s + 1 : p;
 }
 
-static bool nameIsDwr(const char *name) {
+static bool nameIsDmx(const char *name) {
   const char *b = baseName(name);
   const size_t n = strlen(b);
   if (n < 4) {
     return false;
   }
   const char *e = b + n - 4;
-  return e[0] == '.' && asciiLower(e[1]) == 'd' && asciiLower(e[2]) == 'w' &&
-         asciiLower(e[3]) == 'r';
+  return e[0] == '.' && asciiLower(e[1]) == 'd' && asciiLower(e[2]) == 'm' &&
+         asciiLower(e[3]) == 'x';
 }
 
-static bool nameIsShowDwr(const char *name) {
-  return ieq(baseName(name), "show.dwr");
+static bool nameIsShowDmx(const char *name) {
+  return ieq(baseName(name), "show.dmx");
 }
 
 static bool fillPath(char *path, size_t pathLen, const char *name) {
@@ -254,7 +254,7 @@ void SdInfo::unlock() {
 
 void SdInfo::setExclusiveIo(bool on) { s_exclusiveIo = on; }
 
-bool SdInfo::findDwr(char *path, size_t pathLen) {
+bool SdInfo::findDmx(char *path, size_t pathLen) {
   if (!path || pathLen < 3 || !s_ok) {
     return false;
   }
@@ -276,8 +276,8 @@ bool SdInfo::findDwr(char *path, size_t pathLen) {
     if (!entry) {
       break;
     }
-    if (!entry.isDirectory() && nameIsDwr(entry.name())) {
-      if (nameIsShowDwr(entry.name())) {
+    if (!entry.isDirectory() && nameIsDmx(entry.name())) {
+      if (nameIsShowDmx(entry.name())) {
         fillPath(show, sizeof(show), entry.name());
       } else if (first[0] == '\0') {
         fillPath(first, sizeof(first), entry.name());

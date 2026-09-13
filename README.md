@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.4.2**
+Version: **0.5.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -35,7 +35,7 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 ## Art-Net / sACN (Resolume)
 
 - Art-Net: UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). sACN: UDP **5568**, universe **1**, unicast to STA IP or multicast `239.255.0.1`. 64 pixels = 192 RGB channels, **1:1** onto the strip. FastLED maps RGB → GRB.
-- Live path: buf 0 = drop-to-latest; buf 1–3 = small jitter queue (drop oldest if full). Show rate from portal FPS. Idle is **black** (bring-up). Serial `[V][artnet]` / `[V][sacn]` first packet + 5 s counters; `[V][live] auto lock …`; `[V][ap] down (live)` / `[V][ap] up (idle)`.
+- Live path: buf 0 = drop-to-latest; buf 1–3 = small jitter queue (drop oldest if full). Show rate from portal FPS. Idle with a companion `DMXREC` `.dmx` on SD plays that file 1:1 (Art-Net universe 0 or sACN universe 1); no file = black. Serial `[V][artnet]` / `[V][sacn]` first packet + 5 s counters; `[V][live] auto lock …`; `[V][ap] down (live)` / `[V][ap] up (idle)`; `[V][play] file=`.
 
 ## Living milestone list
 
@@ -70,8 +70,8 @@ From the historical PDF (adapted)
 - [x] LED manager: (universe, channel) → framebuffer; double-buffer (triple if SD + net) — implemented (64-pixel 1:1 copy + drop-to-latest; not a full LED manager)
 - [x] Render scheduler at target FPS; drop-to-latest for live — implemented (portal 20/30/40/60 FPS; buf 0–3; not verified)
 - [x] SD async reader (SPI on this board; SDMMC only on boards that have it); ring sized from profile — not 128–512 KB on the Matrix — implemented (4-frame Matrix ring + `play` task; not verified)
-- [x] Recording file spec v1 (header + timestamped frames + CRC + index) — replace archive `DMXREC` + 10-byte headers; show-relative timestamps — implemented (structs/constants in `rec_format.h`; no SD I/O; not verified)
-- [x] Playback engine; pause on underrun — implemented (not verified)
+- [x] Recording file spec v1 (header + timestamped frames + CRC + index) — replace archive `DMXREC` + 10-byte headers; show-relative timestamps — implemented (structs in `rec_format.h`; SD player uses companion `DMXREC` `.dmx`; not verified)
+- [x] Playback engine; pause on underrun — implemented (companion `DMXREC` `.dmx`; 1:1 slice; not verified)
 - [ ] Web UI beyond SoftAP (protocol + playback + stats). Stay on PROGMEM/`WebServer` until the UI outgrows it; no AsyncWebServer / LittleFS SPA yet
 - [ ] Watchdog + `/api/logs`; soak test
 
@@ -83,7 +83,7 @@ Pixel map and live discovery
 
 Playback vs live
 
-- [x] Idle: play SD if a file is present; live packets preempt; after ~2 s silence resume playback (bring-up black-idle stays above until this lands; black-idle superseded when a `.dwr` is present)
+- [x] Idle: play SD if a file is present; live packets preempt; after ~2 s silence resume playback (bring-up black-idle stays above until this lands; black-idle superseded when a `.dmx` is present)
 
 Multi-device sync
 
@@ -152,6 +152,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.5.0** — SD playback of companion `DMXREC` `.dmx` (1:1 universe slice; console owns the map; live still preempts)
 - **0.4.2** — Living plan: `ARCHIVE/` is local-only; pixel map / playback / multi-node sync path; SoftAP-while-live note
 - **0.4.1** — Fix portal live FPS/buffer POST so the dropdowns persist
 - **0.4.0** — Portal Auto/Art-Net/sACN, show FPS, jitter buffer 0–3; sACN universe 1; Wi-Fi PS off while live

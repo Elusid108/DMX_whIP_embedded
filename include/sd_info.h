@@ -22,6 +22,6 @@ public:
   // steal the single handle.
   static void setExclusiveIo(bool on);
 
-  // Prefers "/show.dwr", else the first *.dwr in "/". False if unmounted/none.
-  static bool findDwr(char *path, size_t pathLen);
+  // Prefers "/show.dmx", else the first *.dmx in "/". False if unmounted/none.
+  static bool findDmx(char *path, size_t pathLen);
 };
