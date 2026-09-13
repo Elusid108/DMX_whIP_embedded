@@ -83,7 +83,7 @@ Pixel map and live discovery
 
 Playback vs live
 
-- [ ] Idle: play SD if a file is present; live packets preempt; after ~2 s silence resume playback (bring-up black-idle stays above until this lands)
+- [x] Idle: play SD if a file is present; live packets preempt; after ~2 s silence resume playback (bring-up black-idle stays above until this lands; black-idle superseded when a `.dwr` is present)
 
 Multi-device sync
 
