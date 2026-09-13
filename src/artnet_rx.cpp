@@ -2,6 +2,7 @@
 
 #include "live_input.h"
 #include "log.h"
+#include "sync.h"
 #include "version.h"
 
 #include <Arduino.h>
@@ -29,6 +30,7 @@ static uint32_t s_dmxOk = 0;
 static uint32_t s_polls = 0;
 static uint32_t s_replies = 0;
 static uint32_t s_wrongUni = 0;
+static uint32_t s_syncs = 0;
 static bool s_up = false;
 static bool s_loggedFirstDmx = false;
 static bool s_loggedFirstPoll = false;
@@ -242,6 +244,11 @@ static void parsePacket(int n, const IPAddress &from) {
     sendPollReply(from);
     return;
   }
+  if (op == kArtNetOpSync) {
+    ++s_syncs;
+    Sync::onArtSync();
+    return;
+  }
   if (op != kArtNetOpDmx) {
     return;
   }
@@ -316,12 +323,14 @@ void ArtNetRx::service() {
   const uint32_t now = millis();
   if (now - s_statMs >= kStatMs) {
     s_statMs = now;
-    if (s_pkts > 0 || s_dmxOk > 0 || s_polls > 0) {
+    if (s_pkts > 0 || s_dmxOk > 0 || s_polls > 0 || s_syncs > 0) {
       LOG_V("artnet",
-            "rx pkts=%u dmx=%u poll=%u reply=%u uni=%u seq=%u skip_uni=%u",
+            "rx pkts=%u dmx=%u sync=%u poll=%u reply=%u uni=%u seq=%u "
+            "skip_uni=%u",
             static_cast<unsigned>(s_pkts), static_cast<unsigned>(s_dmxOk),
-            static_cast<unsigned>(s_polls), static_cast<unsigned>(s_replies),
-            kArtNetUniverse, s_seq, static_cast<unsigned>(s_wrongUni));
+            static_cast<unsigned>(s_syncs), static_cast<unsigned>(s_polls),
+            static_cast<unsigned>(s_replies), kArtNetUniverse, s_seq,
+            static_cast<unsigned>(s_wrongUni));
     }
   }
 }

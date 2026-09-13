@@ -2,6 +2,7 @@
 
 #include "live_input.h"
 #include "log.h"
+#include "sync.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -13,9 +14,12 @@ namespace {
 static constexpr size_t kMaxPkt = 638;
 static constexpr uint32_t kStatMs = 5000;
 static constexpr uint32_t kRootData = 0x00000004;
+static constexpr uint32_t kRootExtended = 0x00000008;
 static constexpr uint8_t kAcnId[12] = {'A', 'S', 'C', '-', 'E', '1',
                                        '.', '1', '7', 0,   0,   0};
 static constexpr uint32_t kFramingData = 0x00000002;
+static constexpr uint32_t kFramingSync = 0x00000001;
+static constexpr int kMinSync = 49;
 static constexpr int kMinPkt = 126;
 static constexpr int kDmpValuesOff = 125;
 static constexpr int kDmxOff = 126;
@@ -29,6 +33,7 @@ static uint32_t s_statMs = 0;
 static uint32_t s_pkts = 0;
 static uint32_t s_dmxOk = 0;
 static uint32_t s_wrongUni = 0;
+static uint32_t s_syncOk = 0;
 static bool s_up = false;
 static bool s_mcast = false;
 static bool s_loggedFirst = false;
@@ -70,13 +75,29 @@ static bool joinMcast() {
 
 static void parsePacket(int n, const IPAddress &from) {
   ++s_pkts;
-  if (n < kMinPkt) {
+  if (n < 22) {
     return;
   }
   if (memcmp(s_pkt + 4, kAcnId, sizeof(kAcnId)) != 0) {
     return;
   }
-  if (rd32(s_pkt + 18) != kRootData) {
+  const uint32_t root = rd32(s_pkt + 18);
+  if (root == kRootExtended) {
+    if (n < kMinSync) {
+      return;
+    }
+    if (rd32(s_pkt + 40) != kFramingSync) {
+      return;
+    }
+    const uint16_t uni = rd16(s_pkt + 45);
+    ++s_syncOk;
+    Sync::onE131Sync(uni);
+    return;
+  }
+  if (n < kMinPkt) {
+    return;
+  }
+  if (root != kRootData) {
     return;
   }
   if (rd32(s_pkt + 40) != kFramingData) {
@@ -186,10 +207,11 @@ void SacnRx::service() {
   const uint32_t now = millis();
   if (now - s_statMs >= kStatMs) {
     s_statMs = now;
-    if (s_pkts > 0 || s_dmxOk > 0) {
-      LOG_V("sacn", "rx pkts=%u dmx=%u uni=%u seq=%u skip_uni=%u",
+    if (s_pkts > 0 || s_dmxOk > 0 || s_syncOk > 0) {
+      LOG_V("sacn", "rx pkts=%u dmx=%u sync=%u uni=%u seq=%u skip_uni=%u",
             static_cast<unsigned>(s_pkts), static_cast<unsigned>(s_dmxOk),
-            kSacnUniverse, s_seq, static_cast<unsigned>(s_wrongUni));
+            static_cast<unsigned>(s_syncOk), kSacnUniverse, s_seq,
+            static_cast<unsigned>(s_wrongUni));
     }
   }
 }

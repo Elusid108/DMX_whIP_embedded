@@ -11,6 +11,7 @@
 #include "playback.h"
 #include "pixel_map.h"
 #include "sd_info.h"
+#include "sync.h"
 #include "version.h"
 #include "wifi_setup.h"
 
@@ -39,6 +40,7 @@ void setup() {
   SdInfo::begin();
   PixelMap::begin();
   Playback::begin();
+  Sync::begin();
 
   FastLED.addLeds<WS2812B, kLedPin, GRB>(leds, kLedCount);
   LedCtrl::begin();
@@ -50,6 +52,7 @@ void setup() {
 void loop() {
   Log::service();
   LiveInput::service();
+  Sync::service();
 
   const bool live = LiveInput::active();
   if (live) {
@@ -60,12 +63,23 @@ void loop() {
     Playback::stop();
   } else {
     Playback::service();
-    if (Playback::hasFile() && !Playback::running()) {
-      if (s_livePreemptedPlay) {
-        LOG_V("main", "play resume after silence");
-        s_livePreemptedPlay = false;
+    if (Playback::hasFile()) {
+      if (Sync::cueFollow()) {
+        if (Sync::cuePlaying()) {
+          Playback::play();
+        } else {
+          Playback::pause();
+          if (!Playback::running()) {
+            Playback::start();
+          }
+        }
+      } else if (!Playback::running()) {
+        if (s_livePreemptedPlay) {
+          LOG_V("main", "play resume after silence");
+          s_livePreemptedPlay = false;
+        }
+        Playback::start();
       }
-      Playback::start();
     }
   }
 
@@ -74,28 +88,70 @@ void loop() {
 
   static uint32_t lastShow = 0;
   const uint32_t now = millis();
-  if (now - lastShow < LiveCfg::showIntervalMs()) {
+  const bool fpsDue = (now - lastShow >= LiveCfg::showIntervalMs());
+  const bool syncLive = live && Sync::liveSyncActive();
+  const bool liveFence = syncLive && Sync::hasLiveFence();
+  const bool cuePulse = !live && Sync::hasCuePulse();
+
+  if (!fpsDue && !liveFence && !cuePulse) {
     yield();
     return;
   }
-  lastShow = now;
+  if (liveFence) {
+    Sync::takeLiveFence();
+  }
+  if (cuePulse) {
+    Sync::takeCuePulse();
+  }
+  if (fpsDue) {
+    lastShow = now;
+  }
 
   if (live) {
-    const uint8_t *d = nullptr;
-    uint16_t len = 0;
-    if (LiveInput::pop(d, len)) {
-      renderRgb(d, len);
-    }
-  } else if (Playback::hasFile()) {
-    uint32_t t_us = 0;
-    if (Playback::peek(t_us)) {
-      uint8_t rgb[kPlayMaxPayload];
-      memset(rgb, 0, sizeof(rgb));
-      if (Playback::copyFrame(rgb, sizeof(rgb))) {
-        renderRgb(rgb, static_cast<uint16_t>(sizeof(rgb)));
+    if (syncLive) {
+      if (liveFence) {
+        const uint8_t *d = nullptr;
+        uint16_t len = 0;
+        const uint8_t *latest = nullptr;
+        uint16_t latestLen = 0;
+        while (LiveInput::pop(d, len)) {
+          latest = d;
+          latestLen = len;
+        }
+        if (latest) {
+          renderRgb(latest, latestLen);
+        }
+      }
+    } else {
+      const uint8_t *d = nullptr;
+      uint16_t len = 0;
+      if (LiveInput::pop(d, len)) {
+        renderRgb(d, len);
       }
     }
-  } else {
+  } else if (Playback::hasFile()) {
+    if (Sync::cueFollow()) {
+      if (cuePulse && Sync::cuePlaying() &&
+          (Sync::cueHasTime() || Sync::cueHasFrame())) {
+        uint8_t rgb[kPlayMaxPayload];
+        memset(rgb, 0, sizeof(rgb));
+        if (Playback::catchTick(rgb, sizeof(rgb), Sync::cueTargetMs(),
+                                Sync::cueTargetFrame(), Sync::cueHasTime(),
+                                Sync::cueHasFrame())) {
+          renderRgb(rgb, static_cast<uint16_t>(sizeof(rgb)));
+        }
+      }
+    } else if (fpsDue) {
+      uint32_t t_us = 0;
+      if (Playback::peek(t_us)) {
+        uint8_t rgb[kPlayMaxPayload];
+        memset(rgb, 0, sizeof(rgb));
+        if (Playback::copyFrame(rgb, sizeof(rgb))) {
+          renderRgb(rgb, static_cast<uint16_t>(sizeof(rgb)));
+        }
+      }
+    }
+  } else if (fpsDue) {
     FastLED.clear();
   }
   FastLED.show();

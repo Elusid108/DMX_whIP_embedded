@@ -87,8 +87,8 @@ Playback vs live
 
 Multi-device sync
 
-- [ ] Live lock: ArtSync and/or E1.31 synchronization PDUs + existing buf 0–3
-- [ ] Playback lock: multicast (or companion PC) cue bus — play / pause / seek / frame index; late node resyncs to the tick, does not free-run on `millis()`
+- [x] Live lock: ArtSync and/or E1.31 synchronization PDUs + existing buf 0–3
+- [x] Playback lock: multicast (or companion PC) cue bus — play / pause / seek / frame index; late node resyncs to the tick, does not free-run on `millis()`
 
 Companion PC (sibling repo, not this tree)
 

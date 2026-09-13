@@ -26,11 +26,13 @@ static constexpr uint32_t kPlayPathLen = 64;
 
 struct Slot {
   uint32_t t_us;
+  uint32_t frame;
   uint16_t size;
   uint8_t rgb[kPlayMaxPayload];
 };
 
 enum class ReadResult : uint8_t { Ok = 0, Skip = 1, Eof = 2, Fail = 3 };
+enum class SeekKind : uint8_t { None = 0, TimeMs = 1, Frame = 2 };
 
 static SemaphoreHandle_t s_mu = nullptr;
 static TaskHandle_t s_task = nullptr;
@@ -45,6 +47,8 @@ static uint8_t s_count = 0;
 static char s_path[kPlayPathLen];
 static bool s_hasFile = false;
 static volatile bool s_run = false;
+static bool s_playing = true;
+static bool s_loop = true;
 static bool s_underrun = false;
 static bool s_begun = false;
 static bool s_loggedNoFile = false;
@@ -57,10 +61,18 @@ static uint32_t s_frameIndex = 0;
 static uint32_t s_frameCount = 0;
 static uint32_t s_matchedPass = 0;
 static uint32_t s_tUs = 0;
+static uint32_t s_outFrame = 0;
 static uint32_t s_payload = 0;
 static uint32_t s_dmxOff = 0;
 
+static SeekKind s_seekKind = SeekKind::None;
+static uint32_t s_seekMs = 0;
+static uint32_t s_seekFrame = 0;
+static uint32_t s_landedReqMs = 0xFFFFFFFFu;
+static uint32_t s_landedReqFrame = 0xFFFFFFFFu;
+
 static uint32_t s_readTUs = 0;
+static uint32_t s_readFrame = 0;
 static uint16_t s_readSize = 0;
 static uint8_t s_readRgb[kPlayMaxPayload];
 
@@ -242,6 +254,7 @@ static ReadResult readOneFrame() {
   }
   s_readSize = static_cast<uint16_t>(want);
   s_readTUs = prefix.t_ms * 1000u;
+  s_readFrame = index;
   return ReadResult::Ok;
 }
 
@@ -254,9 +267,14 @@ static bool ringFull() {
 
 static void pushReadFrame() {
   lockPlay();
+  if (s_seekKind != SeekKind::None) {
+    unlockPlay();
+    return;
+  }
   if (s_count < kPlayRingSlots) {
     Slot &s = s_ring[s_head];
     s.t_us = s_readTUs;
+    s.frame = s_readFrame;
     s.size = s_readSize;
     memcpy(s.rgb, s_readRgb, s_readSize);
     s_head = static_cast<uint8_t>((s_head + 1) % kPlayRingSlots);
@@ -287,6 +305,119 @@ static bool wrapShow() {
     LOG_V("play", "loop %s", s_path);
   }
   return sdSeek(kDmxrecHeaderBytes);
+}
+
+static bool applySeek() {
+  lockPlay();
+  const SeekKind kind = s_seekKind;
+  const uint32_t wantMs = s_seekMs;
+  uint32_t wantFrame = s_seekFrame;
+  const uint32_t frames = s_frameCount;
+  s_seekKind = SeekKind::None;
+  unlockPlay();
+
+  if (kind == SeekKind::None) {
+    return true;
+  }
+  if (frames == 0) {
+    return false;
+  }
+
+  if (!s_fileOpen && !openFileAt(kDmxrecHeaderBytes)) {
+    lockPlay();
+    s_seekKind = kind;
+    s_seekMs = wantMs;
+    s_seekFrame = wantFrame;
+    unlockPlay();
+    return false;
+  }
+
+  uint32_t land = 0;
+  if (kind == SeekKind::Frame) {
+    land = wantFrame;
+    if (land >= frames) {
+      land = frames - 1;
+    }
+  } else {
+    if (!sdSeek(kDmxrecHeaderBytes)) {
+      lockPlay();
+      s_seekKind = kind;
+      s_seekMs = wantMs;
+      s_seekFrame = wantFrame;
+      unlockPlay();
+      return false;
+    }
+    uint32_t lastOwn = 0xFFFFFFFFu;
+    land = 0xFFFFFFFFu;
+    for (uint32_t idx = 0; idx < frames; ++idx) {
+      DmxrecFramePrefix prefix;
+      if (!sdRead(&prefix, sizeof(prefix))) {
+        lockPlay();
+        s_seekKind = kind;
+        s_seekMs = wantMs;
+        s_seekFrame = wantFrame;
+        unlockPlay();
+        return false;
+      }
+      if (frameForThisNode(prefix.universe, prefix.protocol)) {
+        lastOwn = idx;
+        if (prefix.t_ms >= wantMs) {
+          land = idx;
+          break;
+        }
+      }
+      if (!sdSeek(s_off + kDmxrecDmxBytes)) {
+        lockPlay();
+        s_seekKind = kind;
+        s_seekMs = wantMs;
+        s_seekFrame = wantFrame;
+        unlockPlay();
+        return false;
+      }
+    }
+    if (land == 0xFFFFFFFFu) {
+      land = (lastOwn == 0xFFFFFFFFu) ? 0 : lastOwn;
+    }
+  }
+
+  const uint32_t off = dmxrecFrameOffset(land);
+  if (!sdSeek(off)) {
+    lockPlay();
+    s_seekKind = kind;
+    s_seekMs = wantMs;
+    s_seekFrame = wantFrame;
+    unlockPlay();
+    return false;
+  }
+
+  lockPlay();
+  s_frameIndex = land;
+  s_off = off;
+  s_matchedPass = 0;
+  if (kind == SeekKind::TimeMs) {
+    s_landedReqMs = wantMs;
+    s_landedReqFrame = 0xFFFFFFFFu;
+  } else {
+    s_landedReqFrame = land;
+    s_landedReqMs = 0xFFFFFFFFu;
+  }
+  unlockPlay();
+  return true;
+}
+
+static void onFileEnd() {
+  lockPlay();
+  const bool loop = s_loop;
+  unlockPlay();
+  if (!loop) {
+    vTaskDelay(pdMS_TO_TICKS(20));
+    return;
+  }
+  if (!wrapShow()) {
+    lockPlay();
+    s_run = false;
+    unlockPlay();
+  }
 }
 
 static bool bindPath(const char *path) {
@@ -346,6 +477,9 @@ static bool bindPath(const char *path) {
   s_loggedLoop = false;
   s_loggedNoMatch = false;
   s_loggedNoFile = false;
+  s_seekKind = SeekKind::None;
+  s_landedReqMs = 0xFFFFFFFFu;
+  s_landedReqFrame = 0xFFFFFFFFu;
   unlockPlay();
 
   LOG_V("play", "file=%s frames=%u payload=%u artnet=%u sacn=%u", s_path,
@@ -379,6 +513,7 @@ static void clearBind() {
   s_payload = 0;
   s_frameCount = 0;
   s_loggedNoMatch = false;
+  s_seekKind = SeekKind::None;
   resetRingLocked();
   unlockPlay();
 }
@@ -388,11 +523,19 @@ static void playbackTask(void *) {
     lockPlay();
     const bool run = s_run;
     const bool has = s_hasFile;
+    const SeekKind seek = s_seekKind;
     unlockPlay();
 
     if (!run || !has) {
       closeFile();
       vTaskDelay(pdMS_TO_TICKS(50));
+      continue;
+    }
+
+    if (seek != SeekKind::None) {
+      if (!applySeek()) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+      }
       continue;
     }
 
@@ -413,11 +556,7 @@ static void playbackTask(void *) {
     const bool atEnd = s_frameIndex >= s_frameCount;
     unlockPlay();
     if (atEnd) {
-      if (!wrapShow()) {
-        lockPlay();
-        s_run = false;
-        unlockPlay();
-      }
+      onFileEnd();
       continue;
     }
 
@@ -430,11 +569,7 @@ static void playbackTask(void *) {
       continue;
     }
     if (r == ReadResult::Eof) {
-      if (!wrapShow()) {
-        lockPlay();
-        s_run = false;
-        unlockPlay();
-      }
+      onFileEnd();
       continue;
     }
 
@@ -542,9 +677,30 @@ void Playback::stop() {
   }
 }
 
+void Playback::play() {
+  start();
+  lockPlay();
+  s_playing = true;
+  unlockPlay();
+}
+
+void Playback::pause() {
+  lockPlay();
+  s_playing = false;
+  unlockPlay();
+}
+
+void Playback::setLoop(bool on) {
+  lockPlay();
+  s_loop = on;
+  unlockPlay();
+}
+
 bool Playback::hasFile() { return s_hasFile; }
 
 bool Playback::running() { return s_run && s_hasFile; }
+
+bool Playback::playing() { return s_playing && s_hasFile; }
 
 bool Playback::underrun() { return s_underrun; }
 
@@ -556,6 +712,11 @@ uint8_t Playback::available() {
 }
 
 bool Playback::peek(uint32_t &t_us) {
+  uint32_t frame = 0;
+  return peekFrame(t_us, frame);
+}
+
+bool Playback::peekFrame(uint32_t &t_us, uint32_t &frame) {
   lockPlay();
   if (s_count == 0) {
     if (s_run) {
@@ -564,8 +725,11 @@ bool Playback::peek(uint32_t &t_us) {
     unlockPlay();
     return false;
   }
-  t_us = s_ring[s_tail].t_us;
+  const Slot &s = s_ring[s_tail];
+  t_us = s.t_us;
+  frame = s.frame;
   s_tUs = t_us;
+  s_outFrame = frame;
   unlockPlay();
   return true;
 }
@@ -585,6 +749,7 @@ const uint8_t *Playback::peekPayload(size_t &n, uint32_t &t_us) {
   n = s.size;
   t_us = s.t_us;
   s_tUs = t_us;
+  s_outFrame = s.frame;
   const uint8_t *p = s.rgb;
   unlockPlay();
   return p;
@@ -609,12 +774,100 @@ bool Playback::copyFrame(uint8_t *rgb, size_t n, uint32_t *t_us) {
   }
   memcpy(rgb, s.rgb, s.size);
   s_tUs = s.t_us;
+  s_outFrame = s.frame;
   if (t_us) {
     *t_us = s_tUs;
   }
   s_tail = static_cast<uint8_t>((s_tail + 1) % kPlayRingSlots);
   s_count = static_cast<uint8_t>(s_count - 1);
   s_underrun = false;
+  unlockPlay();
+  return true;
+}
+
+bool Playback::catchTick(uint8_t *rgb, size_t n, uint32_t t_ms, uint32_t frame,
+                         bool hasTime, bool hasFrame) {
+  if (!rgb || (!hasTime && !hasFrame)) {
+    return false;
+  }
+  const uint32_t target_us = t_ms * 1000u;
+  lockPlay();
+  while (s_count > 0) {
+    const Slot &s = s_ring[s_tail];
+    bool behind = false;
+    if (hasTime) {
+      behind = s.t_us < target_us;
+    } else if (hasFrame) {
+      behind = s.frame < frame;
+    }
+    if (!behind) {
+      break;
+    }
+    s_tail = static_cast<uint8_t>((s_tail + 1) % kPlayRingSlots);
+    s_count = static_cast<uint8_t>(s_count - 1);
+  }
+  if (s_count == 0) {
+    if (s_run) {
+      noteUnderrunLocked();
+    }
+    unlockPlay();
+    return false;
+  }
+  const Slot &s = s_ring[s_tail];
+  if (n < s.size) {
+    unlockPlay();
+    return false;
+  }
+  memcpy(rgb, s.rgb, s.size);
+  s_tUs = s.t_us;
+  s_outFrame = s.frame;
+  s_tail = static_cast<uint8_t>((s_tail + 1) % kPlayRingSlots);
+  s_count = static_cast<uint8_t>(s_count - 1);
+  s_underrun = false;
+  unlockPlay();
+  return true;
+}
+
+bool Playback::seekMs(uint32_t t_ms) {
+  lockPlay();
+  if (!s_hasFile) {
+    unlockPlay();
+    return false;
+  }
+  if (s_seekKind == SeekKind::TimeMs && s_seekMs == t_ms) {
+    unlockPlay();
+    return true;
+  }
+  if (s_seekKind == SeekKind::None && s_landedReqMs == t_ms) {
+    unlockPlay();
+    return true;
+  }
+  s_seekKind = SeekKind::TimeMs;
+  s_seekMs = t_ms;
+  s_landedReqMs = 0xFFFFFFFFu;
+  resetRingLocked();
+  unlockPlay();
+  return true;
+}
+
+bool Playback::seekFrame(uint32_t index) {
+  lockPlay();
+  if (!s_hasFile) {
+    unlockPlay();
+    return false;
+  }
+  if (s_seekKind == SeekKind::Frame && s_seekFrame == index) {
+    unlockPlay();
+    return true;
+  }
+  if (s_seekKind == SeekKind::None && s_landedReqFrame == index) {
+    unlockPlay();
+    return true;
+  }
+  s_seekKind = SeekKind::Frame;
+  s_seekFrame = index;
+  s_landedReqFrame = 0xFFFFFFFFu;
+  resetRingLocked();
   unlockPlay();
   return true;
 }
@@ -632,6 +885,8 @@ bool Playback::pop() {
 }
 
 uint32_t Playback::tUs() { return s_tUs; }
+
+uint32_t Playback::frameIndex() { return s_outFrame; }
 
 uint16_t Playback::fps() { return 0; }
 
