@@ -1,5 +1,6 @@
 #include "wifi_setup.h"
 
+#include "board_profile.h"
 #include "identify.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
@@ -237,6 +238,12 @@ static void sendStatus(int code) {
   out += stateName();
   out += "\",\"ver\":";
   jsonEscape(out, String(kFirmwareVersion));
+  out += ",\"api\":";
+  out += static_cast<unsigned>(kFirmwareApi);
+  out += ",\"chip\":";
+  jsonEscape(out, String(BoardProfile::chip()));
+  out += ",\"board\":";
+  jsonEscape(out, String(BoardProfile::id()));
   out += ",\"name\":";
   jsonEscape(out, String(NodeId::longName()));
   out += ",\"short\":";
@@ -280,6 +287,17 @@ static void sendStatus(int code) {
     out += SdInfo::freeMb();
   }
   out += '}';
+  out += ",\"pins\":{\"led\":";
+  out += static_cast<unsigned>(BoardProfile::ledPin());
+  out += ",\"sd\":{\"cs\":";
+  out += static_cast<unsigned>(BoardProfile::sdCs());
+  out += ",\"mosi\":";
+  out += static_cast<unsigned>(BoardProfile::sdMosi());
+  out += ",\"clk\":";
+  out += static_cast<unsigned>(BoardProfile::sdClk());
+  out += ",\"miso\":";
+  out += static_cast<unsigned>(BoardProfile::sdMiso());
+  out += "}}";
   out += ",\"proto\":";
   jsonEscape(out, String(LiveCfg::protoName()));
   out += ",\"fps\":";
@@ -411,6 +429,44 @@ static void handleBrightness() {
     return;
   }
   LedCtrl::set(static_cast<uint8_t>(v), true);
+  sendStatus(200);
+}
+
+static bool parseGpioArg(const char *name, uint8_t &out) {
+  if (!s_server.hasArg(name)) {
+    return false;
+  }
+  const String arg = s_server.arg(name);
+  char *end = nullptr;
+  const long v = strtol(arg.c_str(), &end, 10);
+  if (end == arg.c_str() || *end != '\0' || v < 0 || v > kS3GpioMax) {
+    return false;
+  }
+  out = static_cast<uint8_t>(v);
+  return true;
+}
+
+static void handlePins() {
+  if (portalParked()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  uint8_t cs = 0;
+  uint8_t mosi = 0;
+  uint8_t clk = 0;
+  uint8_t miso = 0;
+  if (!parseGpioArg("cs", cs) || !parseGpioArg("mosi", mosi) ||
+      !parseGpioArg("clk", clk) || !parseGpioArg("miso", miso)) {
+    sendJson(400, "{\"error\":\"bad pins\"}");
+    return;
+  }
+  if (!BoardProfile::setSdPins(cs, mosi, clk, miso, true)) {
+    sendJson(400, "{\"error\":\"bad pins\"}");
+    return;
+  }
+  Playback::park();
+  delay(80);
+  SdInfo::remount();
   sendStatus(200);
 }
 
@@ -1075,6 +1131,7 @@ void WifiSetup::begin() {
   s_server.on("/connect", HTTP_POST, handleConnect);
   s_server.on("/forget", HTTP_POST, handleForget);
   s_server.on("/brightness", HTTP_POST, handleBrightness);
+  s_server.on("/pins", HTTP_POST, handlePins);
   s_server.on("/identify", HTTP_POST, handleIdentify);
   s_server.on("/live", HTTP_POST, handleLive);
   s_server.on("/play", HTTP_POST, handlePlay);

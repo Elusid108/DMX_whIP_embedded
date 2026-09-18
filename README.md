@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.11.0**
+Version: **0.12.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -67,7 +67,9 @@ Bring-up (this board)
 
 From the historical PDF (adapted)
 
-- [ ] Board profile as data (pins, flash, PSRAM, LED count, ring sizes); extra PlatformIO envs without forking `src/`
+- [x] Board profile as data (pins, flash, PSRAM, LED count, ring sizes); extra PlatformIO envs without forking `src/` — implemented (Matrix profile + NVS SD overlay; still one `[env:matrix]`; not verified)
+- [x] Companion `/status` `api` plus `chip` / `board` / `pins` — implemented (not verified)
+- [x] NVS SD pin overlay + idle `POST /pins` remount — implemented (not verified)
 - [ ] JSON `/api/stats` (Wi-Fi IP/RSSI, later queue depths / drops / FPS)
 - [ ] RTOS layout: RX on APP CPU, render on PRO CPU, SD I/O task; rings allocated at boot
 - [ ] Protocol adapter interface + DMX universe assembler (seq, late, missing, dupes)
@@ -105,7 +107,7 @@ The companion discovers and locates nodes over the **selected NIC**. Contract:
 - **ArtPoll** (UDP 6454, opcode `0x2000`) — this firmware replies with **ArtPollReply** (`0x2100`, 239 bytes): short/long name from NVS (`POST /name`; default `dmxwhip` / `dmxwhip v…`), IP, MAC, BindIndex 1, one DMX-out port, Art-Net **universe 0**. Poll does not count as live input. **sACN-only** portal proto stops Art-Net UDP, so those nodes will not appear in ArtPoll.
 - **Universes** — live Art-Net **0** (Resolume “universe 1” is often 0). Live sACN is universe **1** and is not advertised in ArtPollReply.
 - **HTTP while idle; optional while live** — SoftAP `http://4.3.2.1` (SSID `dmxwhip` / `pass1234`) and the STA IP when connected. **Park Yes** (default): while live Art-Net/sACN is present and STA is up, SoftAP and HTTP are down; they return ~2 s after the last live frame. **Park No:** SoftAP and HTTP stay up; `/status` and Setup POSTs still apply. SD routes (`/upload`, `/play`, `/rename`, `/file`, `/order`) and `/identify` stay 503 while live.
-- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `name`, `short`, `bri`, `proto`, `fps`, `buf`, `park` (`yes`/`no`), `live` (bool), `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`, `used_mb`, `free_mb`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `files`, `dirs`). When present: `ssid`, `saved`, `ip` (STA), `error`. Extra keys are additive.
+- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `api` (integer wire version; `1` here), `chip`, `board`, `name`, `short`, `bri`, `proto`, `fps`, `buf`, `park` (`yes`/`no`), `live` (bool), `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`, `used_mb`, `free_mb`), `pins` (`led`; `sd.cs` / `sd.mosi` / `sd.clk` / `sd.miso`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `files`, `dirs`). When present: `ssid`, `saved`, `ip` (STA), `error`. Extra keys are additive.
 - **POST `/identify`** — form `ms` (default 3000, 200–15000). Idle LED locate pattern. Must not call `LiveInput::push`. 503 when live. Show scale is `max(saved bri, 64)` for the flash only, then restored (not written to NVS).
 - **POST `/upload`** — multipart form `path` (absolute, e.g. `/scene_1.dmx`) + file part `file`. Query `path=` is also accepted. Idle-only. Validates like playlist paths (leading `/`, no `..`, length &lt; 64) and requires a `.dmx` basename. 503 `live` / `no sd` / `busy`. Parks playback, writes chunks to SD, refreshes `/status` `play.files`. Success `200 {"ok":true,"path":"/foo.dmx","bytes":N}`. No sidecar JSON on the card.
 - **POST `/play`** — form `src` (`root` / `file` / `folder`), `path`, `file_loop`, `folder_rep`, `n`. `src=stop` or `action=stop` parks output and leaves the NVS playlist; `/status` `play.now` is empty until the next Play. 503 when live. Response is full `/status`.
@@ -114,6 +116,7 @@ The companion discovers and locates nodes over the **selected NIC**. Contract:
 - **POST `/rename`** — form `from` + `to` (absolute `.dmx`, same path rules as `/upload`). Idle-only. 404 missing, 409 exists. Updates the NVS file playlist path if it matched `from`.
 - **GET `/file`** — query `path=/foo.dmx`. Idle-only. Streams the file (`streamFile`); no full-file RAM buffer. 404 missing.
 - **POST `/order`** — repeated form `path` in the desired order. Two-phase rename to `/01_basename.dmx`, `/02_…` (strips an existing `NN_` prefix). Idle-only. Response is full `/status`.
+- **POST `/pins`** — form `cs`, `mosi`, `clk`, `miso` (ESP32-S3 GPIO 0–48, four distinct). Idle / park-Yes-while-live 503 like other Setup POSTs. Persists NVS `board` overlay (missing/`0xFF` = Matrix compile-time defaults). Remounts SPI SD. LED data pin is not accepted. Response is full `/status`.
 
 - [ ] Art-Net / sACN test sender that can also emit ArtSync / E1.31 sync / playback cues
 - [ ] Later: recorder and SD file pull; node exposes the files/API this app will use
@@ -175,6 +178,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.12.0** — Board profile as data; `/status` `api`/`chip`/`board`/`pins`; NVS SD overlay + `POST /pins`
 - **0.11.0** — Park portal while live Yes/No (NVS default Yes); SoftAP/HTTP optional during a light stream
 - **0.10.0** — SoftAP faceplate: status strip, Playback / Setup, Identify, name, transport, scan list (zinc/cyan)
 - **0.9.0** — NVS node name (ArtPoll + `POST /name`); SD `POST /rename`, `GET /file`, `POST /order`

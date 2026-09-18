@@ -12,6 +12,7 @@ static constexpr uint8_t kSdMaxDepth = 6;
 class SdInfo {
 public:
   static void begin();
+  static bool remount();
   static void service();
   static bool ok();
   static const char *type();

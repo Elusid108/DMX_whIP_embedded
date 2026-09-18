@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "board_matrix.h"
+#include "board_profile.h"
 #include "identify.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
@@ -38,6 +39,7 @@ void setup() {
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
   NodeId::begin();
+  BoardProfile::begin();
   WifiSetup::begin();
   LiveCfg::begin();
   LiveInput::begin();

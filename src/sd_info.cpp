@@ -1,6 +1,6 @@
 #include "sd_info.h"
 
-#include "board_matrix.h"
+#include "board_profile.h"
 #include "live_input.h"
 #include "log.h"
 
@@ -323,7 +323,7 @@ static void clearCache() {
 
 // Caller holds s_mu.
 static bool tryMount() {
-  if (!SD.begin(kSdCs, SPI, kSdSpiHz)) {
+  if (!SD.begin(BoardProfile::sdCs(), SPI, BoardProfile::sdSpiHz())) {
     return false;
   }
   const uint8_t cardType = SD.cardType();
@@ -355,12 +355,18 @@ static bool tryMount() {
 
 } // namespace
 
+static void beginBus() {
+  LOG_V("sd", "spi cs=%u mosi=%u clk=%u miso=%u hz=%u", BoardProfile::sdCs(),
+        BoardProfile::sdMosi(), BoardProfile::sdClk(), BoardProfile::sdMiso(),
+        static_cast<unsigned>(BoardProfile::sdSpiHz()));
+  SPI.begin(BoardProfile::sdClk(), BoardProfile::sdMiso(), BoardProfile::sdMosi(),
+            BoardProfile::sdCs());
+}
+
 void SdInfo::begin() {
   clearCache();
   ensureMu();
-  LOG_V("sd", "spi cs=%u mosi=%u clk=%u miso=%u hz=%u", kSdCs, kSdMosi, kSdClk,
-        kSdMiso, static_cast<unsigned>(kSdSpiHz));
-  SPI.begin(kSdClk, kSdMiso, kSdMosi, kSdCs);
+  beginBus();
   if (!lock(kSdLockForever)) {
     LOG_C("sd", "mount failed");
     s_loggedFail = true;
@@ -373,6 +379,26 @@ void SdInfo::begin() {
   }
   LOG_C("sd", "mount failed");
   s_loggedFail = true;
+}
+
+bool SdInfo::remount() {
+  ensureMu();
+  if (!lock(4000)) {
+    LOG_C("sd", "remount busy");
+    return false;
+  }
+  SD.end();
+  SPI.end();
+  clearCache();
+  s_loggedFail = false;
+  beginBus();
+  const bool mounted = tryMount();
+  unlock();
+  if (!mounted) {
+    LOG_C("sd", "remount failed");
+    s_loggedFail = true;
+  }
+  return mounted;
 }
 
 void SdInfo::service() {
