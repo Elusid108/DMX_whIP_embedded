@@ -30,11 +30,14 @@ public:
   static void park();
   static void play();
   static void pause();
+  static void userPause();
+  static void userResume();
   static void setLoop(bool on);
   static void reload();
 
   static bool hasFile();
   static bool parked();
+  static bool userPaused();
   static bool running();
   static bool playing();
   static bool underrun();

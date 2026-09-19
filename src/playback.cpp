@@ -53,6 +53,7 @@ static uint8_t s_passLeft = 0;
 static bool s_hasFile = false;
 static volatile bool s_run = false;
 static volatile bool s_parked = false;
+static volatile bool s_userPaused = false;
 static bool s_playing = true;
 static bool s_loop = true;
 static bool s_underrun = false;
@@ -912,6 +913,7 @@ void Playback::stop() {
   lockPlay();
   const bool was = s_run;
   s_run = false;
+  s_userPaused = false;
   unlockPlay();
   if (was) {
     LOG_V("play", "stop");
@@ -923,6 +925,7 @@ void Playback::park() {
   s_run = false;
   s_playing = false;
   s_parked = true;
+  s_userPaused = false;
   unlockPlay();
   LOG_V("play", "park");
 }
@@ -931,6 +934,7 @@ void Playback::play() {
   start();
   lockPlay();
   s_playing = true;
+  s_userPaused = false;
   unlockPlay();
 }
 
@@ -938,6 +942,27 @@ void Playback::pause() {
   lockPlay();
   s_playing = false;
   unlockPlay();
+}
+
+void Playback::userPause() {
+  lockPlay();
+  if (s_parked) {
+    unlockPlay();
+    return;
+  }
+  s_userPaused = true;
+  s_playing = false;
+  unlockPlay();
+  LOG_V("play", "pause");
+}
+
+void Playback::userResume() {
+  lockPlay();
+  s_userPaused = false;
+  s_parked = false;
+  unlockPlay();
+  play();
+  LOG_V("play", "resume");
 }
 
 void Playback::setLoop(bool on) {
@@ -956,12 +981,15 @@ void Playback::reload() {
   s_reload = true;
   s_run = false;
   s_parked = false;
+  s_userPaused = false;
   unlockPlay();
 }
 
 bool Playback::hasFile() { return s_hasFile; }
 
 bool Playback::parked() { return s_parked; }
+
+bool Playback::userPaused() { return s_userPaused; }
 
 bool Playback::running() { return s_run && s_hasFile; }
 

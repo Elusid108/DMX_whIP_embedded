@@ -86,6 +86,8 @@ void loop() {
     Playback::service();
     if (Playback::parked()) {
       // Stay black; NVS playlist is unchanged until the next /play.
+    } else if (Playback::userPaused()) {
+      // Hold last pixels; do not auto-resume.
     } else if (Playback::hasFile()) {
       if (Sync::cueFollow()) {
         if (Sync::cuePlaying()) {
@@ -143,7 +145,7 @@ void loop() {
     }
   } else if (Identify::active()) {
     Identify::render(now);
-  } else if (Playback::hasFile()) {
+  } else if (Playback::hasFile() && !Playback::userPaused()) {
     if (Sync::cueFollow()) {
       if (cuePulse && Sync::cuePlaying() &&
           (Sync::cueHasTime() || Sync::cueHasFrame())) {

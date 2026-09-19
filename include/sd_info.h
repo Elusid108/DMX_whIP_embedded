@@ -8,6 +8,7 @@ static constexpr uint8_t kSdMaxListFiles = 48;
 static constexpr uint8_t kSdMaxListDirs = 24;
 static constexpr uint8_t kSdMaxPlayFiles = 24;
 static constexpr uint8_t kSdMaxDepth = 6;
+static constexpr uint8_t kSdTitleLen = 49;
 
 class SdInfo {
 public:
@@ -33,6 +34,7 @@ public:
   static void refreshTree();
   static uint8_t fileCount();
   static const char *fileAt(uint8_t i);
+  static const char *titleAt(uint8_t i);
   static uint8_t dirCount();
   static const char *dirAt(uint8_t i);
 

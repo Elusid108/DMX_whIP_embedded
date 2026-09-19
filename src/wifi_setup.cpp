@@ -375,7 +375,7 @@ static void appendOutputs(String &out) {
 
 static void sendStatus(int code) {
   String out;
-  out.reserve(8192);
+  out.reserve(12288);
   out += "{\"state\":\"";
   out += stateName();
   out += "\",\"ver\":";
@@ -456,12 +456,21 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(PlayCfg::folderN());
   out += ",\"now\":";
   jsonEscape(out, String(Playback::parked() ? "" : Playback::path()));
+  out += ",\"paused\":";
+  out += Playback::userPaused() ? "true" : "false";
   out += ",\"files\":[";
   for (uint8_t i = 0; i < SdInfo::fileCount(); ++i) {
     if (i) {
       out += ',';
     }
     jsonEscape(out, String(SdInfo::fileAt(i)));
+  }
+  out += "],\"titles\":[";
+  for (uint8_t i = 0; i < SdInfo::fileCount(); ++i) {
+    if (i) {
+      out += ',';
+    }
+    jsonEscape(out, String(SdInfo::titleAt(i)));
   }
   out += "],\"dirs\":[";
   for (uint8_t i = 0; i < SdInfo::dirCount(); ++i) {
@@ -600,6 +609,8 @@ static void sendStats() {
   jsonEscape(out, String(Playback::parked() ? "" : Playback::path()));
   out += ",\"parked\":";
   out += Playback::parked() ? "true" : "false";
+  out += ",\"paused\":";
+  out += Playback::userPaused() ? "true" : "false";
   out += ",\"underrun\":";
   out += Playback::underrun() ? "true" : "false";
   out += ",\"frame\":";
@@ -1059,6 +1070,105 @@ static bool endsWithDmx(const char *p) {
   return n >= 4 && strcasecmp(p + n - 4, ".dmx") == 0;
 }
 
+static bool sidecarPath(const char *dmx, char *out, size_t n) {
+  if (!dmx || !out || n < 8) {
+    return false;
+  }
+  const size_t len = strlen(dmx);
+  if (len < 5 || len + 2 > n || !endsWithDmx(dmx)) {
+    return false;
+  }
+  snprintf(out, n, "%s", dmx);
+  const size_t base = len - 4;
+  if (base + 6 > n) {
+    return false;
+  }
+  memcpy(out + base, ".json", 6);
+  return true;
+}
+
+static void removeSidecar(const char *dmx) {
+  char side[kSdPathLen];
+  if (sidecarPath(dmx, side, sizeof(side)) && SD.exists(side)) {
+    SD.remove(side);
+  }
+}
+
+static void renameSidecar(const char *from, const char *to) {
+  char src[kSdPathLen];
+  char dest[kSdPathLen];
+  if (!sidecarPath(from, src, sizeof(src)) ||
+      !sidecarPath(to, dest, sizeof(dest))) {
+    return;
+  }
+  if (strcmp(src, dest) == 0) {
+    return;
+  }
+  if (!SD.exists(src)) {
+    return;
+  }
+  if (SD.exists(dest)) {
+    SD.remove(dest);
+  }
+  SD.rename(src, dest);
+}
+
+static void sanitizeTitle(const char *in, char *out, size_t n) {
+  if (!out || n < 2) {
+    return;
+  }
+  out[0] = '\0';
+  if (!in) {
+    return;
+  }
+  size_t i = 0;
+  while (*in && static_cast<unsigned char>(*in) <= ' ') {
+    in++;
+  }
+  while (*in && i + 1 < n && i + 1 < kSdTitleLen) {
+    const unsigned char c = static_cast<unsigned char>(*in++);
+    if (c < 0x20 || c == '<' || c == '>' || c == ':' || c == '"' || c == '/' ||
+        c == '\\' || c == '|' || c == '?' || c == '*') {
+      continue;
+    }
+    out[i++] = static_cast<char>(c);
+  }
+  while (i > 0 && (out[i - 1] == ' ' || out[i - 1] == '.')) {
+    i--;
+  }
+  out[i] = '\0';
+}
+
+static bool writeSidecarName(const char *dmx, const char *name) {
+  char side[kSdPathLen];
+  if (!sidecarPath(dmx, side, sizeof(side))) {
+    return false;
+  }
+  if (!name || !name[0]) {
+    if (SD.exists(side)) {
+      SD.remove(side);
+    }
+    return true;
+  }
+  if (SD.exists(side)) {
+    SD.remove(side);
+  }
+  File f = SD.open(side, FILE_WRITE);
+  if (!f) {
+    return false;
+  }
+  f.print("{\"name\":\"");
+  for (const char *p = name; *p; ++p) {
+    if (*p == '\\' || *p == '"') {
+      f.write('\\');
+    }
+    f.write(static_cast<uint8_t>(*p));
+  }
+  f.print("\"}\n");
+  f.close();
+  return true;
+}
+
 static bool validUploadPath(const char *p) {
   if (!p || p[0] != '/' || strstr(p, "..") != nullptr) {
     return false;
@@ -1267,6 +1377,9 @@ static void handleRename() {
     return;
   }
   const bool ok = SD.rename(from.c_str(), to.c_str());
+  if (ok) {
+    renameSidecar(from.c_str(), to.c_str());
+  }
   SdInfo::unlock();
   if (!ok) {
     sendJson(500, "{\"error\":\"rename failed\"}");
@@ -1274,6 +1387,121 @@ static void handleRename() {
   }
   SdInfo::refreshTree();
   remapPlayPath(from.c_str(), to.c_str());
+  sendStatus(200);
+}
+
+static void handleMeta() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  if (!SdInfo::ok()) {
+    sendJson(503, "{\"error\":\"no sd\"}");
+    return;
+  }
+  String path = s_server.arg("path");
+  path.trim();
+  if (!validUploadPath(path.c_str())) {
+    sendJson(400, "{\"error\":\"bad path\"}");
+    return;
+  }
+  char title[kSdTitleLen];
+  sanitizeTitle(s_server.arg("name").c_str(), title, sizeof(title));
+  if (!SdInfo::lock(2000)) {
+    sendJson(503, "{\"error\":\"busy\"}");
+    return;
+  }
+  if (!SD.exists(path.c_str())) {
+    SdInfo::unlock();
+    sendJson(404, "{\"error\":\"missing\"}");
+    return;
+  }
+  const bool ok = writeSidecarName(path.c_str(), title);
+  SdInfo::unlock();
+  if (!ok) {
+    sendJson(500, "{\"error\":\"meta failed\"}");
+    return;
+  }
+  SdInfo::refreshTree();
+  LOG_V("http", "meta %s", path.c_str());
+  sendStatus(200);
+}
+
+static void handleDelete() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  if (!SdInfo::ok()) {
+    sendJson(503, "{\"error\":\"no sd\"}");
+    return;
+  }
+
+  char paths[kSdMaxListFiles][kSdPathLen];
+  uint8_t n = 0;
+  const int args = s_server.args();
+  for (int i = 0; i < args && n < kSdMaxListFiles; ++i) {
+    if (s_server.argName(i) != "path") {
+      continue;
+    }
+    String p = s_server.arg(i);
+    p.trim();
+    if (!validUploadPath(p.c_str())) {
+      sendJson(400, "{\"error\":\"bad path\"}");
+      return;
+    }
+    bool dup = false;
+    for (uint8_t j = 0; j < n; ++j) {
+      if (strcmp(paths[j], p.c_str()) == 0) {
+        dup = true;
+        break;
+      }
+    }
+    if (dup) {
+      continue;
+    }
+    snprintf(paths[n], kSdPathLen, "%s", p.c_str());
+    n = static_cast<uint8_t>(n + 1);
+  }
+  if (n == 0) {
+    sendJson(400, "{\"error\":\"bad path\"}");
+    return;
+  }
+
+  Playback::park();
+  delay(80);
+  if (!SdInfo::lock(2000)) {
+    sendJson(503, "{\"error\":\"busy\"}");
+    return;
+  }
+  for (uint8_t i = 0; i < n; ++i) {
+    if (!SD.exists(paths[i])) {
+      SdInfo::unlock();
+      sendJson(404, "{\"error\":\"missing\"}");
+      return;
+    }
+  }
+  bool hitPlaylist = false;
+  for (uint8_t i = 0; i < n; ++i) {
+    if (PlayCfg::src() == PlaySrc::File &&
+        strcmp(PlayCfg::path(), paths[i]) == 0) {
+      hitPlaylist = true;
+    }
+    if (!SD.remove(paths[i])) {
+      SdInfo::unlock();
+      sendJson(500, "{\"error\":\"delete failed\"}");
+      return;
+    }
+    removeSidecar(paths[i]);
+  }
+  SdInfo::unlock();
+  SdInfo::refreshTree();
+  if (hitPlaylist) {
+    PlayCfg::set(PlaySrc::Root, "/", PlayCfg::fileLoop(), PlayCfg::folderRep(),
+                 PlayCfg::folderN(), true);
+    Playback::park();
+  }
+  LOG_V("http", "delete n=%u", static_cast<unsigned>(n));
   sendStatus(200);
 }
 
@@ -1403,6 +1631,11 @@ static void handleOrder() {
     }
     ok = SD.rename(src, dests[i]);
   }
+  if (ok) {
+    for (uint8_t i = 0; i < n; ++i) {
+      renameSidecar(froms[i], dests[i]);
+    }
+  }
   SdInfo::unlock();
   if (!ok) {
     SdInfo::refreshTree();
@@ -1425,6 +1658,16 @@ static void handlePlay() {
   const String actionArg = s_server.arg("action");
   if (srcArg == "stop" || actionArg == "stop") {
     Playback::park();
+    sendStatus(200);
+    return;
+  }
+  if (srcArg == "pause" || actionArg == "pause") {
+    Playback::userPause();
+    sendStatus(200);
+    return;
+  }
+  if (srcArg == "resume" || actionArg == "resume") {
+    Playback::userResume();
     sendStatus(200);
     return;
   }
@@ -1652,6 +1895,8 @@ void WifiSetup::begin() {
   s_server.on("/upload", HTTP_POST, handleUploadDone, handleUploadFile);
   s_server.on("/name", HTTP_POST, handleName);
   s_server.on("/rename", HTTP_POST, handleRename);
+  s_server.on("/meta", HTTP_POST, handleMeta);
+  s_server.on("/delete", HTTP_POST, handleDelete);
   s_server.on("/file", HTTP_GET, handleFileGet);
   s_server.on("/order", HTTP_POST, handleOrder);
   s_server.on("/generate_204", HTTP_GET, handleCaptive);

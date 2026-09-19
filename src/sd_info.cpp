@@ -34,6 +34,7 @@ static SemaphoreHandle_t s_mu = nullptr;
 static uint8_t s_nFiles = 0;
 static uint8_t s_nDirs = 0;
 static char s_files[kSdMaxListFiles][kSdPathLen];
+static char s_titles[kSdMaxListFiles][kSdTitleLen];
 static char s_dirs[kSdMaxListDirs][kSdPathLen];
 
 static char s_pend[kSdMaxListDirs + 1][kSdPathLen];
@@ -268,9 +269,96 @@ static void walkFill(const char *root, bool recursive, char files[][kSdPathLen],
   }
 }
 
+static bool sidecarPath(const char *dmx, char *out, size_t n) {
+  if (!dmx || !out || n < 8) {
+    return false;
+  }
+  const size_t len = strlen(dmx);
+  if (len < 5 || len + 2 > n || !nameIsDmx(dmx)) {
+    return false;
+  }
+  snprintf(out, n, "%s", dmx);
+  const size_t base = len - 4;
+  if (base + 6 > n) {
+    return false;
+  }
+  memcpy(out + base, ".json", 6);
+  return true;
+}
+
+static bool extractJsonString(const char *buf, const char *key, char *out,
+                              size_t outLen) {
+  if (!buf || !key || !out || outLen < 2) {
+    return false;
+  }
+  char needle[24];
+  snprintf(needle, sizeof(needle), "\"%s\"", key);
+  const char *p = strstr(buf, needle);
+  if (!p) {
+    return false;
+  }
+  p += strlen(needle);
+  while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+    p++;
+  }
+  if (*p != ':') {
+    return false;
+  }
+  p++;
+  while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') {
+    p++;
+  }
+  if (*p != '"') {
+    return false;
+  }
+  p++;
+  size_t i = 0;
+  while (*p && *p != '"' && i + 1 < outLen) {
+    if (*p == '\\' && p[1]) {
+      p++;
+      out[i++] = *p++;
+      continue;
+    }
+    if (static_cast<unsigned char>(*p) < 0x20) {
+      p++;
+      continue;
+    }
+    out[i++] = *p++;
+  }
+  out[i] = '\0';
+  return i > 0;
+}
+
+static void loadTitlesLocked() {
+  for (uint8_t i = 0; i < kSdMaxListFiles; ++i) {
+    s_titles[i][0] = '\0';
+  }
+  char side[kSdPathLen];
+  char buf[512];
+  for (uint8_t i = 0; i < s_nFiles; ++i) {
+    if (!sidecarPath(s_files[i], side, sizeof(side))) {
+      continue;
+    }
+    File f = SD.open(side, FILE_READ);
+    if (!f) {
+      continue;
+    }
+    const int n = f.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
+    f.close();
+    if (n <= 0) {
+      continue;
+    }
+    buf[n] = '\0';
+    extractJsonString(buf, "name", s_titles[i], kSdTitleLen);
+  }
+}
+
 static void clearTree() {
   s_nFiles = 0;
   s_nDirs = 0;
+  for (uint8_t i = 0; i < kSdMaxListFiles; ++i) {
+    s_titles[i][0] = '\0';
+  }
 }
 
 static void fillUsageLocked() {
@@ -298,6 +386,7 @@ static void fillTreeLocked() {
   bool trunc = false;
   walkFill("/", true, s_files, kSdMaxListFiles, &s_nFiles, s_dirs,
            kSdMaxListDirs, &s_nDirs, &trunc);
+  loadTitlesLocked();
   if (trunc) {
     LOG_V("sd", "list truncated");
   }
@@ -524,6 +613,10 @@ uint8_t SdInfo::fileCount() { return s_nFiles; }
 
 const char *SdInfo::fileAt(uint8_t i) {
   return i < s_nFiles ? s_files[i] : "";
+}
+
+const char *SdInfo::titleAt(uint8_t i) {
+  return i < s_nFiles ? s_titles[i] : "";
 }
 
 uint8_t SdInfo::dirCount() { return s_nDirs; }

@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.20.1</title>
+<title>dmxwhip v0.21.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -72,8 +72,16 @@ body.editing #nameView{display:none}
 .lab{display:block;margin:8px 0 2px;font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .mod{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
 #list,#plist{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:6px;margin:6px 0;padding:3px;background:var(--bg)}
-.net,.playrow{display:flex;justify-content:space-between;gap:8px;padding:8px 10px;margin:3px;background:var(--chrome);border:1px solid var(--border);border-radius:6px;cursor:pointer}
+.net,.playrow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;margin:3px;background:var(--chrome);border:1px solid var(--border);border-radius:6px;cursor:pointer;user-select:none;-webkit-user-select:none}
 .net.sel,.playrow.sel{border-color:#22d3ee66;box-shadow:inset 2px 0 0 var(--accent)}
+.playrow.now{border-color:#86efac66}
+.playrow .playname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.playrow .playfile{flex:0 1 auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
+.playrow .chev{width:1.15rem;flex:0 0 auto;padding:0;margin:0;border:0;background:transparent;color:var(--muted);font-size:.7rem;line-height:1}
+.playrow input{flex:1;min-width:0;width:auto;padding:2px 6px;margin:0;font-size:.85rem}
+.transport{justify-content:center;align-items:center}
+.tbtn{width:2.5rem;height:2.5rem;padding:6px;margin:0;display:inline-flex;align-items:center;justify-content:center}
+.tbtn svg{width:18px;height:18px;fill:currentColor;display:block}
 .row{display:flex;flex-wrap:wrap;gap:6px;flex:0 0 auto}
 .row button{width:auto;margin:0;flex:0 0 auto}
 input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:1rem;border-radius:6px;border:1px solid var(--border);background:var(--chrome);color:var(--text)}
@@ -82,8 +90,8 @@ input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:
 #brinum{width:4.6rem;flex:0 0 4.6rem;padding:8px 6px;text-align:right;font-family:ui-monospace,monospace}
 button{background:var(--chrome);border:1px solid var(--border);margin:6px 0 0;font-weight:600;color:var(--text)}
 button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
-#savedrow,#renrow,#fileopts,#folderopts,#foldernrow,#note{display:none}
-#savedrow.on,#renrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#note.on{display:block}
+#savedrow,#fileopts,#folderopts,#foldernrow,#note{display:none}
+#savedrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#note.on{display:block}
 .clkrow,.briwarn,.cntwarn{display:none}
 .clkrow.on,.briwarn.on,.cntwarn.on{display:block}
 .tog{display:flex;align-items:center;gap:8px;margin:8px 0 0}
@@ -157,6 +165,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <p class="tmono">frame <span id="lpFrame">—</span></p>
 <div class="pips">
 <span class="pip" id="lpPark"><i></i>parked</span>
+<span class="pip" id="lpPause"><i></i>paused</span>
 <span class="pip" id="lpUr"><i></i>underrun</span>
 </div>
 </div>
@@ -170,19 +179,13 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <p class="hint">Idle plays SD. Live Art-Net/sACN preempts.</p>
 <div id="plist"></div>
 <p class="readout" id="playnow"></p>
-<div class="row">
-<button id="prev" type="button">Prev</button>
-<button class="pri" id="play" type="button">Play</button>
-<button id="stop" type="button">Stop</button>
-<button id="next" type="button">Next</button>
-<button id="rename" type="button">Rename</button>
-</div>
-<div id="renrow">
-<input id="rendraft" maxlength="48" autocomplete="off">
-<div class="row">
-<button class="pri" id="renok" type="button">Save name</button>
-<button id="rencancel" type="button">Cancel</button>
-</div>
+<div class="row transport">
+<button id="prev" class="tbtn" type="button" aria-label="Previous"><svg viewBox="0 0 24 24"><path d="M7 6h2v12H7zm3 6 8 6V6z"/></svg></button>
+<button id="play" class="tbtn pri" type="button" aria-label="Play"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+<button id="pause" class="tbtn" type="button" aria-label="Pause"><svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg></button>
+<button id="stop" class="tbtn" type="button" aria-label="Stop"><svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg></button>
+<button id="next" class="tbtn" type="button" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M15 6h2v12h-2zM6 6l8 6-8 6z"/></svg></button>
+<button id="del" class="tbtn" type="button" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h5v2H3V5h5zm1 6h2v10h-2zm4 0h2v10h-2z"/></svg></button>
 </div>
 <div id="fileopts"><label class="lab" for="fileloop">Loop</label>
 <select id="fileloop"><option value="one">This file</option><option value="all">All in this folder</option></select></div>
@@ -224,7 +227,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.20.1</p>
+<p id="ver" class="readout">dmxwhip v0.21.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -252,8 +255,6 @@ const foldernEl=document.getElementById('foldern');
 const fileopts=document.getElementById('fileopts');
 const folderopts=document.getElementById('folderopts');
 const foldernrow=document.getElementById('foldernrow');
-const renrow=document.getElementById('renrow');
-const rendraft=document.getElementById('rendraft');
 const viewLive=document.getElementById('viewLive');
 const viewPlay=document.getElementById('viewPlay');
 const viewPixels=document.getElementById('viewPixels');
@@ -351,7 +352,9 @@ function uniReadout(row){
 function setTxt(id,v){const el=document.getElementById(id);if(el) el.textContent=v==null||v===''?'—':String(v);}
 let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0;
 let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,scanning=false;
-let playSrc='root',playPath='/',playListKey='',lastFiles=[];
+let playSrc='root',playPath='/',playListKey='',lastFiles=[],lastTitles=[],lastDirs=[];
+let playSel=new Set(['root\t/']),playAnchor='root\t/',playCollapsed={},playPaused=false,playNow='',titleEdit=null;
+let cfgSrc='root',cfgPath='/';
 let tab='live',setupScanned=false,lastName='dmxwhip';
 function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t||'';}
 function setNote(t,cls){noteEl.className=t?(cls||'err')+' on':'';noteEl.textContent=t||'';}
@@ -376,49 +379,149 @@ function displayName(p){
   const base=String(p||'').split('/').pop()||'';
   return base.replace(/\.dmx$/i,'').replace(/^\d{2}_/,'')||p;
 }
+function fileBase(p){return String(p||'').split('/').pop()||'';}
+function parentDir(p){
+  const s=String(p||'');
+  const i=s.lastIndexOf('/');
+  if(i<=0) return '/';
+  return s.slice(0,i);
+}
+function rowKey(src,path){return src+'\t'+path;}
+function fileTitle(p){
+  const i=lastFiles.indexOf(p);
+  const t=i>=0&&lastTitles[i]?String(lastTitles[i]).trim():'';
+  return t||displayName(p);
+}
 function showBri(){}
 function showPlayOpts(){
   fileopts.className=playSrc==='file'?'on':'';
   folderopts.className=playSrc==='folder'?'on':'';
   foldernrow.className=(playSrc==='folder'&&folderrepEl.value==='count')?'on':'';
 }
+function playRows(){
+  const dirs=lastDirs.slice().sort();
+  const files=lastFiles.slice();
+  const rows=[{src:'root',path:'/',depth:0,kind:'root'}];
+  function kids(parent){
+    return {
+      dirs:dirs.filter(d=>parentDir(d)===parent),
+      files:files.filter(f=>parentDir(f)===parent)
+    };
+  }
+  function walk(parent,depth){
+    const k=kids(parent);
+    k.dirs.forEach(d=>{
+      rows.push({src:'folder',path:d,depth:depth,kind:'dir'});
+      if(!playCollapsed[d]) walk(d,depth+1);
+    });
+    k.files.forEach(f=>rows.push({src:'file',path:f,depth:depth,kind:'dmx'}));
+  }
+  walk('/',1);
+  return rows;
+}
 function markPlaySel(){
   const kids=plist.children;
   for(let i=0;i<kids.length;i++){
     const el=kids[i];
-    if(!el.dataset) continue;
-    const on=el.dataset.src===playSrc&&(playSrc==='root'||el.dataset.path===playPath);
-    el.className='playrow'+(on?' sel':'');
+    if(!el.dataset||!el.dataset.src) continue;
+    const key=rowKey(el.dataset.src,el.dataset.path);
+    const on=playSel.has(key);
+    const now=el.dataset.src==='file'&&playNow&&el.dataset.path===playNow;
+    el.className='playrow'+(on?' sel':'')+(now?' now':'');
   }
 }
-function renderPlayList(p){
-  const files=p.files||[];
-  const dirs=p.dirs||[];
-  lastFiles=files;
-  const key=(p.src||'')+'|'+(p.path||'')+'|'+files.join('\n')+'|'+dirs.join('\n');
-  if(key===playListKey){markPlaySel();return;}
-  playListKey=key;
-  plist.innerHTML='';
-  function row(src,path,label,kind){
-    const d=document.createElement('div');
-    d.className='playrow';
-    d.dataset.src=src;
-    d.dataset.path=path;
-    d.innerHTML='<span>'+escapeHtml(label)+'</span><span class="readout">'+kind+'</span>';
-    d.onclick=()=>{
-      playDirty=true;
-      playSrc=src;
-      playPath=path;
-      renrow.className='';
-      markPlaySel();
-      showPlayOpts();
-    };
-    plist.appendChild(d);
+function beginTitleEdit(el,path){
+  if(titleEdit) return;
+  titleEdit=path;
+  const name=el.querySelector('.playname');
+  if(!name) return;
+  const input=document.createElement('input');
+  input.maxLength=48;
+  input.value=fileTitle(path);
+  input.onclick=e=>e.stopPropagation();
+  const done=(save)=>{
+    if(titleEdit!==path) return;
+    titleEdit=null;
+    const raw=save?input.value.trim():'';
+    if(save&&raw!==fileTitle(path)){
+      postForm('/meta',{path:path,name:raw}).then(async r=>{
+        const s=await r.json();
+        if(!r.ok){setNote(s.error||'Rename failed','err');return;}
+        setNote('');
+        applyMeta(s);
+      }).catch(dropHint);
+      return;
+    }
+    paintPlayList();
+  };
+  input.onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();input.blur();}
+    if(e.key==='Escape'){e.preventDefault();done(false);}
+  };
+  input.onblur=()=>done(true);
+  name.replaceWith(input);
+  input.focus();
+  input.select();
+}
+function onPlayRow(ev,src,path){
+  if(titleEdit) return;
+  ev.preventDefault();
+  const key=rowKey(src,path);
+  const rows=playRows();
+  const keys=rows.map(r=>rowKey(r.src,r.path));
+  if(ev.shiftKey&&playAnchor){
+    const a=keys.indexOf(playAnchor);
+    const b=keys.indexOf(key);
+    if(a>=0&&b>=0){
+      const lo=Math.min(a,b),hi=Math.max(a,b);
+      playSel=new Set(keys.slice(lo,hi+1));
+    }else{
+      playSel=new Set([key]);
+      playAnchor=key;
+    }
+  }else if(ev.ctrlKey||ev.metaKey){
+    if(playSel.has(key)) playSel.delete(key);
+    else playSel.add(key);
+    if(!playSel.size) playSel.add(key);
+  }else{
+    if(playSel.size===1&&playSel.has(key)&&playSrc===src&&playPath===path&&src==='file'){
+      beginTitleEdit(ev.currentTarget,path);
+      return;
+    }
+    playSel=new Set([key]);
+    playAnchor=key;
   }
-  row('root','/','All .dmx in /','default');
-  dirs.forEach(d=>row('folder',d,displayName(d),'dir'));
-  files.forEach(f=>row('file',f,displayName(f),'.dmx'));
-  if(!files.length&&!dirs.length){
+  playDirty=true;
+  playSrc=src;
+  playPath=path;
+  markPlaySel();
+  showPlayOpts();
+}
+function paintPlayList(){
+  plist.innerHTML='';
+  const rows=playRows();
+  rows.forEach(r=>{
+    const d=document.createElement('div');
+    d.dataset.src=r.src;
+    d.dataset.path=r.path;
+    d.style.paddingLeft=(8+r.depth*14)+'px';
+    if(r.src==='folder'){
+      const open=!playCollapsed[r.path];
+      d.innerHTML='<button type="button" class="chev" aria-label="Toggle">'+(open?'▾':'▸')+'</button><span class="playname">'+escapeHtml(fileBase(r.path))+'</span>';
+      d.querySelector('.chev').onclick=ev=>{
+        ev.stopPropagation();
+        playCollapsed[r.path]=!playCollapsed[r.path];
+        paintPlayList();
+      };
+    }else if(r.src==='file'){
+      d.innerHTML='<span class="playname">'+escapeHtml(fileTitle(r.path))+'</span><span class="playfile">'+escapeHtml(fileBase(r.path))+'</span>';
+    }else{
+      d.innerHTML='<span class="playname">All looks</span>';
+    }
+    d.onclick=ev=>onPlayRow(ev,r.src,r.path);
+    plist.appendChild(d);
+  });
+  if(!lastFiles.length&&!lastDirs.length){
     const e=document.createElement('p');
     e.className='hint';
     e.textContent='No .dmx files.';
@@ -426,19 +529,34 @@ function renderPlayList(p){
   }
   markPlaySel();
 }
+function renderPlayList(p){
+  lastFiles=p.files||[];
+  lastDirs=p.dirs||[];
+  lastTitles=p.titles||[];
+  playListKey=lastFiles.join('\n')+'|'+lastDirs.join('\n')+'|'+lastTitles.join('\n');
+  if(titleEdit) return;
+  paintPlayList();
+}
 function applyPlay(s){
   const p=s.play;
-  if(!p){playnowEl.textContent='Now stopped';return;}
+  if(!p){playnowEl.textContent='Now stopped';playNow='';playPaused=false;return;}
+  playNow=p.now||'';
+  playPaused=!!p.paused;
+  cfgSrc=p.src||'root';
+  cfgPath=p.path||'/';
   if(!playDirty){
     playSrc=p.src||'root';
     playPath=p.path||'/';
+    playSel=new Set([rowKey(playSrc,playPath)]);
+    playAnchor=rowKey(playSrc,playPath);
     if(p.file_loop) fileloopEl.value=p.file_loop;
     if(p.folder_rep) folderrepEl.value=p.folder_rep;
     if(typeof p.n==='number') foldernEl.value=String(p.n);
   }
   showPlayOpts();
   renderPlayList(p);
-  playnowEl.textContent=p.now?'Now '+displayName(p.now):'Now stopped';
+  if(playPaused&&p.now) playnowEl.textContent='Paused '+fileTitle(p.now);
+  else playnowEl.textContent=p.now?'Now '+fileTitle(p.now):'Now stopped';
 }
 function applyLive(s){
   if(liveDirty) return;
@@ -473,7 +591,7 @@ function applyChrome(s){
   if(modeLab) modeLab.textContent=mode;
   const live=!!s.live;
   if(liveLock) liveLock.className=live?'on':'';
-  ['prev','play','stop','next','rename'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});
+  ['prev','play','pause','stop','next','del'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});
   idBtn.disabled=live;
   idBtn.title=live?'Unavailable while live':'';
   if(mapSave) mapSave.disabled=live;
@@ -545,9 +663,11 @@ function applyStats(s){
     cap.className='cap'+(!locked?' idle':(typeof s.age_ms==='number'&&s.age_ms>1000?' stale':''));
   }
   const p=s.play||{};
-  setTxt('lpNow',p.now?displayName(p.now):'stopped');
+  setTxt('lpNow',p.now?fileTitle(p.now):'stopped');
   const parkPip=document.getElementById('lpPark');
   if(parkPip) parkPip.className='pip'+(p.parked?' on':'');
+  const pausePip=document.getElementById('lpPause');
+  if(pausePip) pausePip.className='pip'+(p.paused?' on':'');
   const urPip=document.getElementById('lpUr');
   if(urPip) urPip.className='pip'+(p.underrun?' warn':'');
   setTxt('lpFrame',typeof p.frame==='number'?p.frame:'—');
@@ -566,7 +686,13 @@ async function jget(url){
   return r.json();
 }
 function postForm(url,fields){
-  return fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(fields)});
+  const b=new URLSearchParams();
+  Object.keys(fields||{}).forEach(k=>{
+    const v=fields[k];
+    if(Array.isArray(v)) v.forEach(x=>b.append(k,String(x)));
+    else if(v!=null) b.append(k,String(v));
+  });
+  return fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});
 }
 function renderNets(nets){
   list.innerHTML='';
@@ -969,10 +1095,35 @@ tabSetup.onclick=()=>showTab('setup');
 document.getElementById('scan').onclick=()=>scan(true);
 document.getElementById('go').onclick=connect;
 document.getElementById('forget').onclick=forget;
-document.getElementById('play').onclick=()=>postPlay();
-document.getElementById('stop').onclick=()=>postForm('/play',{src:'stop'}).then(async r=>{if(!r.ok) throw new Error('http');applyMeta(await r.json());}).catch(dropHint);
-document.getElementById('prev').onclick=()=>{const t=adjacent(-1);if(t){playDirty=true;playSrc='file';playPath=t;markPlaySel();showPlayOpts();postPlay('file',t);}};
-document.getElementById('next').onclick=()=>{const t=adjacent(1);if(t){playDirty=true;playSrc='file';playPath=t;markPlaySel();showPlayOpts();postPlay('file',t);}};
+function applyPlayPost(r){return r.json().then(s=>{if(!r.ok) throw new Error('http');playDirty=false;applyMeta(s);});}
+document.getElementById('play').onclick=()=>{
+  const same=playSrc===cfgSrc&&(playSrc==='root'||playPath===cfgPath);
+  if(same&&playPaused){
+    postForm('/play',{action:'resume'}).then(async r=>applyPlayPost(r)).catch(dropHint);
+    return;
+  }
+  postPlay();
+};
+document.getElementById('pause').onclick=()=>postForm('/play',{action:'pause'}).then(async r=>applyPlayPost(r)).catch(dropHint);
+document.getElementById('stop').onclick=()=>postForm('/play',{src:'stop'}).then(async r=>applyPlayPost(r)).catch(dropHint);
+document.getElementById('prev').onclick=()=>{const t=adjacent(-1);if(t){playDirty=true;playSrc='file';playPath=t;playSel=new Set([rowKey('file',t)]);playAnchor=rowKey('file',t);markPlaySel();showPlayOpts();postPlay('file',t);}};
+document.getElementById('next').onclick=()=>{const t=adjacent(1);if(t){playDirty=true;playSrc='file';playPath=t;playSel=new Set([rowKey('file',t)]);playAnchor=rowKey('file',t);markPlaySel();showPlayOpts();postPlay('file',t);}};
+document.getElementById('del').onclick=()=>{
+  const paths=[];
+  playSel.forEach(k=>{
+    const i=k.indexOf('\t');
+    if(k.slice(0,i)==='file') paths.push(k.slice(i+1));
+  });
+  if(!paths.length) return;
+  if(!window.confirm('Delete '+paths.length+' look'+(paths.length>1?'s':'')+' from this node?')) return;
+  postForm('/delete',{path:paths}).then(async r=>{
+    const s=await r.json();
+    if(!r.ok){setNote(s.error||'Delete failed','err');return;}
+    playDirty=false;
+    setNote('');
+    applyMeta(s);
+  }).catch(dropHint);
+};
 nameView.onclick=startEdit;
 nameEl.onkeydown=e=>{
   if(e.key==='Enter'){e.preventDefault();nameEl.blur();}
@@ -994,28 +1145,6 @@ rebootBtn.onclick=()=>{
     if(!r.ok){rebootBtn.disabled=false;const s=await r.json().catch(()=>({}));setNote(s.error||'Reboot failed','err');return;}
     setNote('Rebooting…');
   }).catch(()=>{rebootBtn.disabled=false;dropHint();});
-};
-document.getElementById('rename').onclick=()=>{
-  if(playSrc!=='file'||!playPath) return;
-  rendraft.value=displayName(playPath);
-  renrow.className='on';
-};
-document.getElementById('rencancel').onclick=()=>{renrow.className='';};
-document.getElementById('renok').onclick=()=>{
-  if(playSrc!=='file'||!playPath) return;
-  const raw=rendraft.value.trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g,'').replace(/[. ]+$/,'')||'show';
-  const base=playPath.split('/').pop()||'';
-  const prefix=/^\d{2}_/.test(base)?base.slice(0,3):'';
-  const dir=playPath.slice(0,playPath.lastIndexOf('/'))||'';
-  const to=dir+'/'+prefix+raw+'.dmx';
-  postForm('/rename',{from:playPath,to}).then(async r=>{
-    const s=await r.json();
-    if(!r.ok){setNote(s.error||'Rename failed','err');return;}
-    playDirty=false;
-    renrow.className='';
-    setNote('');
-    applyMeta(s);
-  }).catch(dropHint);
 };
 renderPatch();
 (async()=>{
