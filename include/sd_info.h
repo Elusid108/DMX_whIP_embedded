@@ -17,6 +17,7 @@ public:
   static bool ok();
   static const char *type();
   static uint32_t sizeMb();
+  static bool haveUsage();
   static uint32_t usedMb();
   static uint32_t freeMb();
 

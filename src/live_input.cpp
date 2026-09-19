@@ -63,15 +63,15 @@ static void startSockets() {
   }
 }
 
-static void setPs(bool live) {
-  if (live && !s_psOff) {
+static void setPs(bool staUp) {
+  if (staUp && !s_psOff) {
     esp_wifi_set_ps(WIFI_PS_NONE);
     s_psOff = true;
-    LOG_V("wifi", "ps none (live)");
-  } else if (!live && s_psOff) {
+    LOG_V("wifi", "ps none (sta)");
+  } else if (!staUp && s_psOff) {
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
     s_psOff = false;
-    LOG_V("wifi", "ps default (idle)");
+    LOG_V("wifi", "ps default (ap)");
   }
 }
 
@@ -111,12 +111,20 @@ void LiveInput::applyCfg() {
   startSockets();
 }
 
-void LiveInput::onStaGotIp() { SacnRx::onStaGotIp(); }
+void LiveInput::onStaGotIp() {
+  const LiveProto p = LiveCfg::proto();
+  if (p == LiveProto::ArtNet || p == LiveProto::Auto) {
+    ArtNetRx::onStaGotIp();
+  }
+  if (p == LiveProto::Sacn || p == LiveProto::Auto) {
+    SacnRx::onStaGotIp();
+  }
+}
 
 void LiveInput::service() {
   ArtNetRx::service();
   SacnRx::service();
-  setPs(active());
+  setPs(WiFi.status() == WL_CONNECTED);
 
   const uint32_t now = millis();
   if (now - s_statMs >= 5000) {

@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip</title>
+<title>dmxwhip v0.13.1</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -114,10 +114,10 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div><label class="lab" for="buf">Buffer</label>
 <select id="buf"><option value="0">0 latest</option><option value="1">1 frame</option><option value="2">2 frames</option><option value="3">3 frames</option></select></div>
 </div>
-<label class="lab" for="park">Park portal while live</label>
+<label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip</p>
+<p id="ver" class="readout">dmxwhip v0.13.1</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -247,7 +247,7 @@ function applyMeta(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
   if(!nameDirty&&s.name) nameEl.value=s.name;
   const sd=s.sd;
-  const sdLine=!sd?'no SD':!sd.ok?'SD not mounted':'SD '+sd.used_mb+'/'+sd.size_mb+' MB';
+  const sdLine=!sd?'no SD':!sd.ok?'SD not mounted':(sd.used_mb!=null?'SD '+sd.used_mb+'/'+sd.size_mb+' MB':'SD '+sd.size_mb+' MB');
   const now=s.play&&s.play.now?displayName(s.play.now):'stopped';
   const live=!!s.live;
   ['prev','play','stop','next','rename'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});

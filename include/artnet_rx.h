@@ -14,5 +14,6 @@ class ArtNetRx {
 public:
   static void begin();
   static void stop();
+  static void onStaGotIp();
   static void service();
 };

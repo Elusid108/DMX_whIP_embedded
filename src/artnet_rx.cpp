@@ -303,6 +303,14 @@ void ArtNetRx::stop() {
   LOG_V("artnet", "stop");
 }
 
+void ArtNetRx::onStaGotIp() {
+  if (s_up) {
+    s_udp.stop();
+    s_up = false;
+  }
+  begin();
+}
+
 void ArtNetRx::service() {
   if (!s_up) {
     return;

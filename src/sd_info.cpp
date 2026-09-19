@@ -20,6 +20,7 @@ static constexpr uint32_t kSdListMs = 3000;
 static constexpr uint32_t kSdLockForever = 0xFFFFFFFFu;
 
 static bool s_ok = false;
+static bool s_haveUsage = false;
 static const char *s_type = "";
 static uint32_t s_sizeMb = 0;
 static uint32_t s_usedMb = 0;
@@ -272,6 +273,23 @@ static void clearTree() {
   s_nDirs = 0;
 }
 
+static void fillUsageLocked() {
+  if (!s_ok || s_haveUsage) {
+    return;
+  }
+  const uint64_t card = static_cast<uint64_t>(s_sizeMb) * 1024ULL * 1024ULL;
+  const uint64_t total = SD.totalBytes();
+  const uint64_t used = SD.usedBytes();
+  s_usedMb = static_cast<uint32_t>(used / (1024ULL * 1024ULL));
+  const uint64_t cap = total ? total : card;
+  s_freeMb = cap > used
+                 ? static_cast<uint32_t>((cap - used) / (1024ULL * 1024ULL))
+                 : 0;
+  s_haveUsage = true;
+  LOG_V("sd", "usage used_MB=%u free_MB=%u", static_cast<unsigned>(s_usedMb),
+        static_cast<unsigned>(s_freeMb));
+}
+
 static void fillTreeLocked() {
   if (!s_ok) {
     clearTree();
@@ -314,6 +332,7 @@ static void listSdRoot() {
 
 static void clearCache() {
   s_ok = false;
+  s_haveUsage = false;
   s_type = "";
   s_sizeMb = 0;
   s_usedMb = 0;
@@ -321,7 +340,8 @@ static void clearCache() {
   clearTree();
 }
 
-// Caller holds s_mu.
+// Caller holds s_mu. Mount only — usedBytes() and the tree walk run later
+// from service() so setup() does not stall the STA handshake.
 static bool tryMount() {
   if (!SD.begin(BoardProfile::sdCs(), SPI, BoardProfile::sdSpiHz())) {
     return false;
@@ -334,22 +354,15 @@ static bool tryMount() {
 
   s_type = sdCardTypeName(cardType);
   const uint64_t card = SD.cardSize();
-  const uint64_t total = SD.totalBytes();
-  const uint64_t used = SD.usedBytes();
   s_sizeMb = static_cast<uint32_t>(card / (1024ULL * 1024ULL));
-  s_usedMb = static_cast<uint32_t>(used / (1024ULL * 1024ULL));
-  const uint64_t cap = total ? total : card;
-  s_freeMb = cap > used
-                 ? static_cast<uint32_t>((cap - used) / (1024ULL * 1024ULL))
-                 : 0;
+  s_usedMb = 0;
+  s_freeMb = 0;
+  s_haveUsage = false;
   s_ok = true;
   s_loggedFail = false;
-  LOG_V("sd", "mount OK type=%s size_MB=%u used_MB=%u free_MB=%u", s_type,
-        static_cast<unsigned>(s_sizeMb), static_cast<unsigned>(s_usedMb),
-        static_cast<unsigned>(s_freeMb));
-  listSdRoot();
-  fillTreeLocked();
-  s_lastList = millis();
+  LOG_V("sd", "mount OK type=%s size_MB=%u", s_type,
+        static_cast<unsigned>(s_sizeMb));
+  s_lastList = 0;
   return true;
 }
 
@@ -445,14 +458,22 @@ void SdInfo::service() {
   if (!s_ok) {
     return;
   }
-  if (now - s_lastList < kSdListMs) {
+  const bool needUsage = !s_haveUsage && !s_exclusiveIo;
+  const bool needList = (s_lastList == 0) || (now - s_lastList >= kSdListMs);
+  if (!needUsage && !needList) {
     return;
   }
   if (!lock(200)) {
     return;
   }
-  fillTreeLocked();
-  s_lastList = millis();
+  if (needUsage) {
+    fillUsageLocked();
+    listSdRoot();
+  }
+  if (needList) {
+    fillTreeLocked();
+    s_lastList = millis();
+  }
   unlock();
 }
 
@@ -461,6 +482,8 @@ bool SdInfo::ok() { return s_ok; }
 const char *SdInfo::type() { return s_type; }
 
 uint32_t SdInfo::sizeMb() { return s_sizeMb; }
+
+bool SdInfo::haveUsage() { return s_haveUsage; }
 
 uint32_t SdInfo::usedMb() { return s_usedMb; }
 

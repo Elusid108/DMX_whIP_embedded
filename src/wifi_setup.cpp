@@ -50,6 +50,7 @@ static ConnectStatus s_connectStatus = ConnectStatus::Idle;
 static bool s_scanRunning = false;
 static bool s_haveScan = false;
 static uint32_t s_connectStart = 0;
+static bool s_connectTimerArmed = false;
 static bool s_apUp = false;
 static volatile bool s_gotIp = false;
 static volatile bool s_discPending = false;
@@ -101,12 +102,10 @@ static void sendJson(int code, const String &body) {
   s_server.send(code, "application/json", body);
 }
 
-static bool portalParked() {
-  return LiveInput::active() && LiveCfg::park();
-}
-
 static void sendPage() {
-  s_server.sendHeader("Cache-Control", "no-store");
+  s_server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  s_server.sendHeader("Pragma", "no-cache");
+  s_server.sendHeader("Expires", "0");
   s_server.sendHeader("Connection", "close");
   s_server.send_P(200, "text/html", kWifiSetupHtml);
 }
@@ -177,8 +176,7 @@ static void startAp() {
     LOG_C("ap", "dns failed");
   }
   s_apUp = true;
-  LOG_V("ap", "up (idle) ssid=%s ip=%s", kApSsid,
-        WiFi.softAPIP().toString().c_str());
+  LOG_V("ap", "up ssid=%s ip=%s", kApSsid, WiFi.softAPIP().toString().c_str());
 }
 
 static void stopAp() {
@@ -188,7 +186,7 @@ static void stopAp() {
   s_dns.stop();
   WiFi.softAPdisconnect(false);
   s_apUp = false;
-  LOG_V("ap", "down (live)");
+  LOG_V("ap", "down (sta)");
 }
 
 static void failConnect(const char *why) {
@@ -281,10 +279,12 @@ static void sendStatus(int code) {
     jsonEscape(out, String(SdInfo::type()));
     out += ",\"size_mb\":";
     out += SdInfo::sizeMb();
-    out += ",\"used_mb\":";
-    out += SdInfo::usedMb();
-    out += ",\"free_mb\":";
-    out += SdInfo::freeMb();
+    if (SdInfo::haveUsage()) {
+      out += ",\"used_mb\":";
+      out += SdInfo::usedMb();
+      out += ",\"free_mb\":";
+      out += SdInfo::freeMb();
+    }
   }
   out += '}';
   out += ",\"pins\":{\"led\":";
@@ -413,10 +413,6 @@ static void handleIdentify() {
 }
 
 static void handleBrightness() {
-  if (portalParked()) {
-    sendJson(503, "{\"error\":\"live\"}");
-    return;
-  }
   if (!s_server.hasArg("v")) {
     sendJson(400, "{\"error\":\"bad v\"}");
     return;
@@ -447,7 +443,7 @@ static bool parseGpioArg(const char *name, uint8_t &out) {
 }
 
 static void handlePins() {
-  if (portalParked()) {
+  if (LiveInput::active()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
@@ -471,10 +467,6 @@ static void handlePins() {
 }
 
 static void handleLive() {
-  if (portalParked()) {
-    sendJson(503, "{\"error\":\"live\"}");
-    return;
-  }
   const String protoArg = s_server.arg("proto");
   LiveProto proto = LiveCfg::proto();
   if (protoArg == "auto") {
@@ -694,10 +686,6 @@ static void handleUploadDone() {
 }
 
 static void handleName() {
-  if (portalParked()) {
-    sendJson(503, "{\"error\":\"live\"}");
-    return;
-  }
   String longName = s_server.arg("long");
   longName.trim();
   String shortName = s_server.arg("short");
@@ -968,10 +956,6 @@ static void handlePlay() {
 }
 
 static void handleConnect() {
-  if (portalParked()) {
-    sendJson(503, "{\"error\":\"live\"}");
-    return;
-  }
   if (s_scanRunning) {
     sendJson(409, "{\"error\":\"scan in progress\"}");
     return;
@@ -998,10 +982,6 @@ static void handleConnect() {
 }
 
 static void handleForget() {
-  if (portalParked()) {
-    sendJson(503, "{\"error\":\"live\"}");
-    return;
-  }
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, false);
   clearCreds();
@@ -1172,14 +1152,19 @@ void WifiSetup::begin() {
 }
 
 void WifiSetup::service() {
+  if (!s_connectTimerArmed) {
+    s_connectTimerArmed = true;
+    if (s_connectStatus == ConnectStatus::Connecting) {
+      s_connectStart = millis();
+    }
+  }
   pollScan();
   pollConnect();
-  if (LiveCfg::park() && LiveInput::active() &&
-      WiFi.status() == WL_CONNECTED) {
+  if (LiveCfg::park() && WiFi.status() == WL_CONNECTED) {
     stopAp();
-    return;
+  } else {
+    startAp();
   }
-  startAp();
   if (s_apUp) {
     s_dns.processNextRequest();
   }
