@@ -7,6 +7,7 @@
 #include "live_input.h"
 #include "log.h"
 #include "node_id.h"
+#include "pixel_map.h"
 #include "play_cfg.h"
 #include "playback.h"
 #include "sd_info.h"
@@ -229,6 +230,57 @@ static void startScan() {
   LOG_V("wifi", "scan start");
 }
 
+static const char *modeName() {
+  if (LiveInput::active()) {
+    return "live";
+  }
+  if (Playback::playing()) {
+    return "play";
+  }
+  return "idle";
+}
+
+static void appendSd(String &out) {
+  out += "\"sd\":{\"ok\":";
+  out += SdInfo::ok() ? "true" : "false";
+  if (SdInfo::ok()) {
+    out += ",\"type\":";
+    jsonEscape(out, String(SdInfo::type()));
+    out += ",\"size_mb\":";
+    out += SdInfo::sizeMb();
+    if (SdInfo::haveUsage()) {
+      out += ",\"used_mb\":";
+      out += SdInfo::usedMb();
+      out += ",\"free_mb\":";
+      out += SdInfo::freeMb();
+    }
+  }
+  out += '}';
+}
+
+static void appendMap(String &out) {
+  const PixelMapCfg &m = PixelMap::cfg();
+  out += "\"map\":{\"chip\":";
+  jsonEscape(out, String(PixelMap::chipsetName()));
+  out += ",\"order\":";
+  jsonEscape(out, String(PixelMap::colorOrderName()));
+  out += ",\"data\":";
+  out += static_cast<unsigned>(m.dataGpio);
+  out += ",\"clk\":";
+  out += static_cast<unsigned>(m.clockGpio);
+  out += ",\"count\":";
+  out += static_cast<unsigned>(m.pixelCount);
+  out += ",\"artnet\":";
+  out += static_cast<unsigned>(m.startArtNetUniverse);
+  out += ",\"sacn\":";
+  out += static_cast<unsigned>(m.startSacnUniverse);
+  out += ",\"ch\":";
+  out += static_cast<unsigned>(m.startChannel);
+  out += ",\"split\":";
+  out += m.splitAcrossUniverses ? "true" : "false";
+  out += '}';
+}
+
 static void sendStatus(int code) {
   String out;
   out.reserve(4096);
@@ -261,7 +313,8 @@ static void sendStatus(int code) {
   if (WiFi.status() == WL_CONNECTED) {
     out += ",\"ip\":\"";
     out += WiFi.localIP().toString();
-    out += '"';
+    out += "\",\"rssi\":";
+    out += WiFi.RSSI();
   }
   out += ",\"ap_ip\":\"";
   out += WiFi.softAPIP().toString();
@@ -272,21 +325,8 @@ static void sendStatus(int code) {
   }
   out += ",\"bri\":";
   out += static_cast<unsigned>(LedCtrl::get());
-  out += ",\"sd\":{\"ok\":";
-  out += SdInfo::ok() ? "true" : "false";
-  if (SdInfo::ok()) {
-    out += ",\"type\":";
-    jsonEscape(out, String(SdInfo::type()));
-    out += ",\"size_mb\":";
-    out += SdInfo::sizeMb();
-    if (SdInfo::haveUsage()) {
-      out += ",\"used_mb\":";
-      out += SdInfo::usedMb();
-      out += ",\"free_mb\":";
-      out += SdInfo::freeMb();
-    }
-  }
-  out += '}';
+  out += ',';
+  appendSd(out);
   out += ",\"pins\":{\"led\":";
   out += static_cast<unsigned>(BoardProfile::ledPin());
   out += ",\"sd\":{\"cs\":";
@@ -387,7 +427,96 @@ static void handleScan() {
   sendScanResults();
 }
 
+static void sendStats() {
+  const bool live = LiveInput::active();
+  String out;
+  out.reserve(1536);
+  out += "{\"state\":\"";
+  out += stateName();
+  out += "\",\"ver\":";
+  jsonEscape(out, String(kFirmwareVersion));
+  out += ",\"api\":";
+  out += static_cast<unsigned>(kFirmwareApi);
+  out += ",\"chip\":";
+  jsonEscape(out, String(BoardProfile::chip()));
+  out += ",\"board\":";
+  jsonEscape(out, String(BoardProfile::id()));
+  out += ",\"name\":";
+  jsonEscape(out, String(NodeId::longName()));
+  String ssid = s_pendingSsid;
+  if (ssid.isEmpty() && WiFi.status() == WL_CONNECTED) {
+    ssid = WiFi.SSID();
+  }
+  if (ssid.length()) {
+    out += ",\"ssid\":";
+    jsonEscape(out, ssid);
+  }
+  if (s_savedSsid.length()) {
+    out += ",\"saved\":";
+    jsonEscape(out, s_savedSsid);
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    out += ",\"ip\":\"";
+    out += WiFi.localIP().toString();
+    out += "\",\"rssi\":";
+    out += WiFi.RSSI();
+  }
+  out += ",\"ap_ip\":\"";
+  out += WiFi.softAPIP().toString();
+  out += '"';
+  if (s_connectStatus == ConnectStatus::Failed && s_error[0] != '\0') {
+    out += ",\"error\":";
+    jsonEscape(out, String(s_error));
+  }
+  out += ",\"bri\":";
+  out += static_cast<unsigned>(LedCtrl::get());
+  out += ',';
+  appendSd(out);
+  out += ",\"proto\":";
+  jsonEscape(out, String(LiveCfg::protoName()));
+  out += ",\"fps\":";
+  out += static_cast<unsigned>(LiveCfg::fps());
+  out += ",\"buf\":";
+  out += static_cast<unsigned>(LiveCfg::buf());
+  out += ",\"park\":";
+  jsonEscape(out, String(LiveCfg::parkName()));
+  out += ",\"live\":";
+  out += live ? "true" : "false";
+  out += ",\"src\":";
+  jsonEscape(out, String(live ? LiveInput::sourceName() : "none"));
+  out += ",\"age_ms\":";
+  out += static_cast<unsigned>(LiveInput::ageMs());
+  out += ",\"queued\":";
+  out += static_cast<unsigned>(LiveInput::queued());
+  out += ",\"drops\":";
+  out += static_cast<unsigned>(LiveInput::drops());
+  out += ",\"pps\":";
+  out += static_cast<unsigned>(LiveInput::pps());
+  out += ",\"mode\":";
+  jsonEscape(out, String(modeName()));
+  out += ",\"heap\":";
+  out += static_cast<unsigned>(ESP.getFreeHeap());
+  out += ",\"psram\":";
+  out += static_cast<unsigned>(ESP.getFreePsram());
+  out += ",\"up_ms\":";
+  out += static_cast<unsigned>(millis());
+  out += ",\"play\":{\"now\":";
+  jsonEscape(out, String(Playback::parked() ? "" : Playback::path()));
+  out += ",\"parked\":";
+  out += Playback::parked() ? "true" : "false";
+  out += ",\"underrun\":";
+  out += Playback::underrun() ? "true" : "false";
+  out += ",\"frame\":";
+  out += static_cast<unsigned>(Playback::frameIndex());
+  out += "},";
+  appendMap(out);
+  out += '}';
+  sendJson(200, out);
+}
+
 static void handleStatus() { sendStatus(200); }
+
+static void handleStats() { sendStats(); }
 
 static void handleIdentify() {
   if (LiveInput::active()) {
@@ -1108,6 +1237,7 @@ void WifiSetup::begin() {
   s_server.on("/", HTTP_GET, sendPage);
   s_server.on("/scan", HTTP_GET, handleScan);
   s_server.on("/status", HTTP_GET, handleStatus);
+  s_server.on("/api/stats", HTTP_GET, handleStats);
   s_server.on("/connect", HTTP_POST, handleConnect);
   s_server.on("/forget", HTTP_POST, handleForget);
   s_server.on("/brightness", HTTP_POST, handleBrightness);

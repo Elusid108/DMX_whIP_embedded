@@ -13,6 +13,12 @@ public:
   static void applyCfg();
   static void onStaGotIp();
   static bool active();
+  static LiveSource source();
+  static const char *sourceName();
+  static uint32_t drops();
+  static uint8_t queued();
+  static uint32_t ageMs();
+  static uint16_t pps();
   static bool pop(const uint8_t *&dmx, uint16_t &len);
   static bool push(LiveSource src, const uint8_t *data, uint16_t len);
 };

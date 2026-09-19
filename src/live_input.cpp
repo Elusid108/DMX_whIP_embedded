@@ -28,10 +28,14 @@ static uint8_t s_count = 0;
 static uint32_t s_lastMs = 0;
 static uint32_t s_drops = 0;
 static uint32_t s_statMs = 0;
+static uint32_t s_rx = 0;
+static uint32_t s_rxMark = 0;
+static uint32_t s_ppsMs = 0;
+static uint16_t s_pps = 0;
 static LiveSource s_lock = LiveSource::None;
 static bool s_psOff = false;
 
-static const char *sourceName(LiveSource src) {
+static const char *nameOf(LiveSource src) {
   switch (src) {
   case LiveSource::ArtNet:
     return "artnet";
@@ -87,7 +91,7 @@ static bool accept(LiveSource src) {
       (s_lastMs != 0 && (millis() - s_lastMs) >= kLiveTimeoutMs)) {
     if (s_lock != src) {
       resetRing();
-      LOG_V("live", "auto lock %s", sourceName(src));
+      LOG_V("live", "auto lock %s", nameOf(src));
     }
     s_lock = src;
     return true;
@@ -127,6 +131,12 @@ void LiveInput::service() {
   setPs(WiFi.status() == WL_CONNECTED);
 
   const uint32_t now = millis();
+  if (now - s_ppsMs >= 1000) {
+    s_ppsMs = now;
+    const uint32_t n = s_rx - s_rxMark;
+    s_rxMark = s_rx;
+    s_pps = n > 65535u ? 65535u : static_cast<uint16_t>(n);
+  }
   if (now - s_statMs >= 5000) {
     s_statMs = now;
     if (s_drops > 0) {
@@ -135,6 +145,23 @@ void LiveInput::service() {
     }
   }
 }
+
+LiveSource LiveInput::source() { return s_lock; }
+
+const char *LiveInput::sourceName() { return nameOf(s_lock); }
+
+uint32_t LiveInput::drops() { return s_drops; }
+
+uint8_t LiveInput::queued() { return s_count; }
+
+uint32_t LiveInput::ageMs() {
+  if (s_lastMs == 0) {
+    return 0;
+  }
+  return millis() - s_lastMs;
+}
+
+uint16_t LiveInput::pps() { return s_pps; }
 
 bool LiveInput::active() {
   if (s_lastMs == 0) {
@@ -157,6 +184,7 @@ bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len) {
   if (len > 512) {
     len = 512;
   }
+  ++s_rx;
 
   const uint8_t depth = LiveCfg::buf();
   if (depth == 0) {

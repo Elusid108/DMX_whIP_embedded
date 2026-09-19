@@ -7,20 +7,27 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.13.1</title>
+<title>dmxwhip v0.14.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
 body{display:flex;flex-direction:column;box-sizing:border-box;padding:10px 12px;font-family:system-ui,sans-serif;background:var(--bg);color:var(--text);max-width:28rem;margin:0 auto}
-.strip{flex:0 0 auto;padding:0 0 8px;margin:0 0 8px;border-bottom:1px solid var(--border)}
-.namerow{display:flex;gap:6px;align-items:center}
-.namerow input{flex:1 1 auto;min-width:0}
+.strip{flex:0 0 auto;padding:0 0 8px;margin:0 0 8px;border-bottom:1px solid var(--border);text-align:center}
+#nameView{margin:0;font-size:1.35rem;font-weight:700;cursor:pointer;word-break:break-word}
+#name{display:none;text-align:center;font-weight:700}
+body.editing #name{display:block}
+body.editing #nameView{display:none}
+#identify{width:auto;min-width:7rem;margin:8px auto 0;display:inline-block}
+.mode{display:inline-block;margin:8px auto 0;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border:1px solid var(--border)}
+.mode.live{color:var(--accent);border-color:#22d3ee66}
+.mode.play{color:#86efac;border-color:#86efac66}
 .readout{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.35;word-break:break-word}
 .tabs{display:flex;gap:0;flex:0 0 auto;border-bottom:1px solid var(--border);margin:0 0 8px}
-.tabs button{flex:1;margin:0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-weight:500}
+.tabs button{flex:1;margin:0;padding:8px 4px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-weight:500;font-size:.8rem}
 .tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
-#viewPlay,#viewSetup{flex:1 1 auto;min-height:0;display:none;flex-direction:column}
-#viewPlay.on,#viewSetup.on{display:flex}
+#viewLive,#viewPlay,#viewPixels,#viewSetup{flex:1 1 auto;min-height:0;display:none;flex-direction:column}
+#viewLive.on,#viewPlay.on,#viewPixels.on,#viewSetup.on{display:flex}
+#viewLive,#viewPixels{overflow-y:auto;-webkit-overflow-scrolling:touch}
 .lab{display:block;margin:8px 0 2px;font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .mod{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
 #list,#plist{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:6px;margin:6px 0;padding:3px;background:var(--bg)}
@@ -47,19 +54,33 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </head>
 <body>
 <div class="strip">
-<div class="namerow">
-<input id="name" maxlength="63" autocomplete="off">
-<button id="saveName" type="button">Save</button>
+<h1 id="nameView">dmxwhip</h1>
+<input id="name" maxlength="63" autocomplete="off" aria-label="Device name">
 <button class="pri" id="identify" type="button">Identify</button>
-</div>
-<p class="readout" id="meta"></p>
+<div class="mode" id="mode">idle</div>
 <p id="note"></p>
 </div>
 <div class="tabs">
-<button class="on" id="tabPlay" type="button">Playback</button>
+<button class="on" id="tabLive" type="button">Live</button>
+<button id="tabPlay" type="button">Playback</button>
+<button id="tabPixels" type="button">Pixels</button>
 <button id="tabSetup" type="button">Setup</button>
 </div>
-<div id="viewPlay" class="on">
+<div id="viewLive" class="on">
+<div class="lab">Radio</div>
+<p class="readout" id="liveRadio"></p>
+<div class="lab">Node</div>
+<p class="readout" id="liveNode"></p>
+<div class="lab">Storage</div>
+<p class="readout" id="liveSd"></p>
+<div class="lab">Transport</div>
+<p class="readout" id="liveXport"></p>
+<div class="lab">Playback</div>
+<p class="readout" id="livePlay"></p>
+<div class="lab">Health</div>
+<p class="readout" id="liveHealth"></p>
+</div>
+<div id="viewPlay">
 <p class="hint">Idle plays SD. Live Art-Net/sACN preempts.</p>
 <div id="plist"></div>
 <p class="readout" id="playnow"></p>
@@ -83,6 +104,15 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <select id="folderrep"><option value="forever">Forever</option><option value="count">Set times</option></select>
 <div id="foldernrow"><label class="lab" for="foldern">Times</label>
 <input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric"></div></div>
+</div>
+<div id="viewPixels">
+<p class="hint">This board’s pixel identity. Editing comes later.</p>
+<div class="lab">Output</div>
+<p class="readout" id="pxMap"></p>
+<div class="lab">Universes</div>
+<p class="readout" id="pxUni"></p>
+<div class="lab">Brightness</div>
+<p class="readout" id="pxBri"></p>
 </div>
 <div id="viewSetup">
 <p class="hint">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
@@ -117,7 +147,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.13.1</p>
+<p id="ver" class="readout">dmxwhip v0.14.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -128,8 +158,9 @@ const noteEl=document.getElementById('note');
 const savedRow=document.getElementById('savedrow');
 const savedLab=document.getElementById('savedlab');
 const verEl=document.getElementById('ver');
-const metaEl=document.getElementById('meta');
+const nameView=document.getElementById('nameView');
 const nameEl=document.getElementById('name');
+const modeEl=document.getElementById('mode');
 const briEl=document.getElementById('bri');
 const brinum=document.getElementById('brinum');
 const briwarn=document.getElementById('briwarn');
@@ -146,23 +177,46 @@ const folderopts=document.getElementById('folderopts');
 const foldernrow=document.getElementById('foldernrow');
 const renrow=document.getElementById('renrow');
 const rendraft=document.getElementById('rendraft');
+const viewLive=document.getElementById('viewLive');
 const viewPlay=document.getElementById('viewPlay');
+const viewPixels=document.getElementById('viewPixels');
 const viewSetup=document.getElementById('viewSetup');
+const tabLive=document.getElementById('tabLive');
 const tabPlay=document.getElementById('tabPlay');
+const tabPixels=document.getElementById('tabPixels');
 const tabSetup=document.getElementById('tabSetup');
 const idBtn=document.getElementById('identify');
+const liveRadio=document.getElementById('liveRadio');
+const liveNode=document.getElementById('liveNode');
+const liveSd=document.getElementById('liveSd');
+const liveXport=document.getElementById('liveXport');
+const livePlay=document.getElementById('livePlay');
+const liveHealth=document.getElementById('liveHealth');
+const pxMap=document.getElementById('pxMap');
+const pxUni=document.getElementById('pxUni');
+const pxBri=document.getElementById('pxBri');
 let pollTimer=0,briTimer=0,liveTimer=0;
 let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,scanning=false;
 let playSrc='root',playPath='/',playListKey='',lastFiles=[];
+let tab='live',setupScanned=false,lastName='dmxwhip';
 function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t||'';}
 function setNote(t,cls){noteEl.className=t?(cls||'err')+' on':'';noteEl.textContent=t||'';}
 function dropHint(){setNote('Page dropped. Rejoin dmxwhip and open http://4.3.2.1','err');}
 function showTab(name){
-  const play=name==='play';
-  viewPlay.className=play?'on':'';
-  viewSetup.className=play?'':'on';
-  tabPlay.className=play?'on':'';
-  tabSetup.className=play?'':'on';
+  tab=name;
+  viewLive.className=name==='live'?'on':'';
+  viewPlay.className=name==='play'?'on':'';
+  viewPixels.className=name==='pixels'?'on':'';
+  viewSetup.className=name==='setup'?'on':'';
+  tabLive.className=name==='live'?'on':'';
+  tabPlay.className=name==='play'?'on':'';
+  tabPixels.className=name==='pixels'?'on':'';
+  tabSetup.className=name==='setup'?'on':'';
+  if(name==='setup'&&!setupScanned){
+    setupScanned=true;
+    scan(true);
+  }
+  if(name==='play'||name==='setup') fetchStatus();
 }
 function displayName(p){
   const base=String(p||'').split('/').pop()||'';
@@ -243,20 +297,103 @@ function applyLive(s){
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
   if(s.park) parkEl.value=s.park;
 }
-function applyMeta(s){
+function sdLine(sd){
+  if(!sd) return 'no SD';
+  if(!sd.ok) return 'SD not mounted';
+  if(sd.used_mb!=null) return 'SD '+sd.used_mb+'/'+sd.size_mb+' MB'+(sd.type?' · '+sd.type:'');
+  return 'SD '+(sd.size_mb!=null?sd.size_mb+' MB':'mounted')+(sd.type?' · '+sd.type:'');
+}
+function fmtUp(ms){
+  const s=Math.floor((ms||0)/1000);
+  const h=Math.floor(s/3600);
+  const m=Math.floor((s%3600)/60);
+  const sec=s%60;
+  return (h?h+':':'')+String(m).padStart(h?2:1,'0')+':'+String(sec).padStart(2,'0');
+}
+function showName(n){
+  if(!n) return;
+  lastName=n;
+  if(!nameDirty){
+    nameView.textContent=n;
+    nameEl.value=n;
+  }
+}
+function applyChrome(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
-  if(!nameDirty&&s.name) nameEl.value=s.name;
-  const sd=s.sd;
-  const sdLine=!sd?'no SD':!sd.ok?'SD not mounted':(sd.used_mb!=null?'SD '+sd.used_mb+'/'+sd.size_mb+' MB':'SD '+sd.size_mb+' MB');
-  const now=s.play&&s.play.now?displayName(s.play.now):'stopped';
+  showName(s.name);
+  const mode=s.mode||(s.live?'live':(s.play&&s.play.now?'play':'idle'));
+  modeEl.textContent=mode;
+  modeEl.className='mode '+mode;
   const live=!!s.live;
   ['prev','play','stop','next','rename'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});
   idBtn.disabled=live;
-  metaEl.textContent=[s.ip?('STA '+s.ip):null,s.ver?('fw '+s.ver):null,sdLine,live?'live':'idle','now '+now].filter(Boolean).join(' · ');
+  idBtn.title=live?'Unavailable while live':'';
   if(s.saved){savedRow.className='on';savedLab.textContent='saved '+s.saved+' (connects at boot)'+(s.ip?(' · STA '+s.ip):'');}
   else {savedRow.className='';savedLab.textContent='';}
   if(typeof s.bri==='number'&&!briDirty) showBri(s.bri);
   applyLive(s);
+}
+function applyPixels(s){
+  const m=s.map||{};
+  const clk=m.clk?(' clk '+m.clk):'';
+  pxMap.textContent=[
+    m.chip||'—',
+    m.order||'',
+    m.count!=null?(m.count+' px'):'',
+    m.data!=null?('GPIO '+m.data+clk):''
+  ].filter(Boolean).join(' · ');
+  pxUni.textContent=[
+    m.artnet!=null?('Art-Net '+m.artnet):'',
+    m.sacn!=null?('sACN '+m.sacn):'',
+    m.ch!=null?('ch '+m.ch):'',
+    m.split?'split universes':''
+  ].filter(Boolean).join(' · ')||'—';
+  pxBri.textContent=typeof s.bri==='number'?String(s.bri):'—';
+}
+function applyStats(s){
+  applyChrome(s);
+  applyPixels(s);
+  const radio=[
+    s.ssid||'no STA',
+    s.ip?('STA '+s.ip):null,
+    typeof s.rssi==='number'?(s.rssi+' dBm'):null,
+    s.ap_ip?('AP '+s.ap_ip):null
+  ].filter(Boolean).join(' · ');
+  liveRadio.textContent=radio+(s.saved?('\nsaved '+s.saved):'');
+  liveNode.textContent=[
+    s.ver?('fw '+s.ver):null,
+    s.board||null,
+    s.chip||null,
+    typeof s.bri==='number'?('bri '+s.bri):null
+  ].filter(Boolean).join(' · ');
+  liveSd.textContent=sdLine(s.sd);
+  const now=s.play&&s.play.now?displayName(s.play.now):'stopped';
+  liveXport.textContent=[
+    s.mode||(s.live?'live':'idle'),
+    s.proto||null,
+    s.src&&s.src!=='none'?('lock '+s.src):null,
+    typeof s.fps==='number'?(s.fps+' fps'):null,
+    typeof s.buf==='number'?('buf '+s.buf):null,
+    typeof s.age_ms==='number'?('age '+s.age_ms+' ms'):null,
+    typeof s.queued==='number'?('q '+s.queued):null,
+    typeof s.drops==='number'?('drops '+s.drops):null,
+    typeof s.pps==='number'?(s.pps+' pps'):null
+  ].filter(Boolean).join(' · ');
+  const p=s.play||{};
+  livePlay.textContent=[
+    'now '+now,
+    p.parked?'parked':null,
+    p.underrun?'underrun':null,
+    typeof p.frame==='number'?('frame '+p.frame):null
+  ].filter(Boolean).join(' · ');
+  liveHealth.textContent=[
+    typeof s.up_ms==='number'?('up '+fmtUp(s.up_ms)):null,
+    typeof s.heap==='number'?('heap '+s.heap):null,
+    typeof s.psram==='number'?('psram '+s.psram):null
+  ].filter(Boolean).join(' · ');
+}
+function applyMeta(s){
+  applyChrome(s);
   applyPlay(s);
 }
 async function jget(url){
@@ -308,7 +445,8 @@ async function scan(force){
   }catch(e){}
 }
 function showStatus(s){
-  applyMeta(s);
+  applyChrome(s);
+  if(s.play&&(s.play.files||s.play.dirs)) applyPlay(s);
   if(scanning) return s.state==='connecting';
   if(s.state==='connected'){
     setStatus('Connected to '+s.ssid+'  STA IP '+s.ip+(s.ap_ip?'  (AP '+s.ap_ip+')':''),'ok');
@@ -319,11 +457,20 @@ function showStatus(s){
   if(s.state==='scanning'){setStatus('Scanning…');return true;}
   return false;
 }
-async function poll(){
+async function fetchStatus(){
   try{
     const s=await jget('/status');
-    setNote('');
-    const fast=showStatus(s);
+    showStatus(s);
+  }catch(e){dropHint();}
+}
+async function poll(){
+  try{
+    const s=await jget('/api/stats');
+    if(noteEl.textContent.indexOf('Page dropped')===0) setNote('');
+    applyStats(s);
+    showStatus(s);
+    if(tab==='play'||tab==='setup') await fetchStatus();
+    const fast=s.state==='connecting'||s.state==='scanning';
     pollTimer=setTimeout(poll,fast?500:1000);
   }catch(e){dropHint();}
 }
@@ -401,12 +548,41 @@ function adjacent(step){
   const i=lastFiles.indexOf(cur);
   return lastFiles[(i+step+lastFiles.length)%lastFiles.length];
 }
+function startEdit(){
+  nameDirty=true;
+  nameEl.value=lastName;
+  document.body.classList.add('editing');
+  nameEl.focus();
+  nameEl.select();
+}
+function endEdit(save){
+  if(!document.body.classList.contains('editing')) return;
+  document.body.classList.remove('editing');
+  const long=nameEl.value.trim();
+  if(!save||!long){
+    nameEl.value=lastName;
+    nameView.textContent=lastName;
+    nameDirty=false;
+    if(save&&!long) setNote('Enter a device name','err');
+    return;
+  }
+  if(long===lastName){nameDirty=false;return;}
+  postForm('/name',{long}).then(async r=>{
+    if(!r.ok) throw new Error('http');
+    nameDirty=false;
+    setNote('');
+    const s=await r.json();
+    applyChrome(s);
+  }).catch(()=>{nameDirty=false;nameEl.value=lastName;nameView.textContent=lastName;dropHint();});
+}
 protoEl.onchange=scheduleLive;
 fpsEl.onchange=scheduleLive;
 bufEl.onchange=scheduleLive;
 parkEl.onchange=scheduleLive;
 folderrepEl.onchange=showPlayOpts;
+tabLive.onclick=()=>showTab('live');
 tabPlay.onclick=()=>showTab('play');
+tabPixels.onclick=()=>showTab('pixels');
 tabSetup.onclick=()=>showTab('setup');
 document.getElementById('scan').onclick=()=>scan(true);
 document.getElementById('go').onclick=connect;
@@ -415,17 +591,12 @@ document.getElementById('play').onclick=()=>postPlay();
 document.getElementById('stop').onclick=()=>postForm('/play',{src:'stop'}).then(async r=>{if(!r.ok) throw new Error('http');applyMeta(await r.json());}).catch(dropHint);
 document.getElementById('prev').onclick=()=>{const t=adjacent(-1);if(t){playDirty=true;playSrc='file';playPath=t;markPlaySel();showPlayOpts();postPlay('file',t);}};
 document.getElementById('next').onclick=()=>{const t=adjacent(1);if(t){playDirty=true;playSrc='file';playPath=t;markPlaySel();showPlayOpts();postPlay('file',t);}};
-nameEl.oninput=()=>{nameDirty=true;};
-document.getElementById('saveName').onclick=()=>{
-  const long=nameEl.value.trim();
-  if(!long){setNote('Enter a device name','err');return;}
-  postForm('/name',{long}).then(async r=>{
-    if(!r.ok) throw new Error('http');
-    nameDirty=false;
-    setNote('');
-    applyMeta(await r.json());
-  }).catch(dropHint);
+nameView.onclick=startEdit;
+nameEl.onkeydown=e=>{
+  if(e.key==='Enter'){e.preventDefault();nameEl.blur();}
+  if(e.key==='Escape'){e.preventDefault();endEdit(false);}
 };
+nameEl.onblur=()=>endEdit(true);
 idBtn.onclick=()=>{
   idBtn.textContent='Identifying…';
   postForm('/identify',{ms:'3000'}).then(async r=>{
@@ -458,11 +629,12 @@ document.getElementById('renok').onclick=()=>{
 };
 (async()=>{
   try{
-    const s=await jget('/status');
-    applyMeta(s);
-    const connecting=showStatus(s)&&s.state==='connecting';
+    const s=await jget('/api/stats');
+    applyStats(s);
+    showStatus(s);
+    if(s.ip) showTab('live');
+    else showTab('setup');
     poll();
-    if(!connecting) await scan(true);
   }catch(e){dropHint();}
 })();
 </script>
