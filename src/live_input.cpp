@@ -1,7 +1,7 @@
 #include "live_input.h"
 
 #include "artnet_rx.h"
-#include "live_cfg.h"
+#include "led_bus.h"
 #include "log.h"
 #include "pixel_map.h"
 #include "sacn_rx.h"
@@ -13,20 +13,27 @@
 
 namespace {
 
-static uint8_t s_uni[kMaxUniverses][kDmxUniverseSize];
-static uint8_t s_have = 0;
+struct UniSlot {
+  LiveSource src;
+  uint16_t universe;
+  uint8_t dmx[kDmxUniverseSize];
+  bool have;
+};
+
+static UniSlot s_slots[kLiveUniSlots];
 static uint8_t s_out[kLedCountMax * kMaxChannelsPerPixel];
 static uint16_t s_outLen = 0;
 static bool s_fresh = false;
 static uint8_t s_count = 0;
 static uint32_t s_lastMs = 0;
+static uint32_t s_lastArtMs = 0;
+static uint32_t s_lastSacnMs = 0;
 static uint32_t s_drops = 0;
 static uint32_t s_statMs = 0;
 static uint32_t s_rx = 0;
 static uint32_t s_rxMark = 0;
 static uint32_t s_ppsMs = 0;
 static uint16_t s_pps = 0;
-static LiveSource s_lock = LiveSource::None;
 static bool s_psOff = false;
 
 static const char *nameOf(LiveSource src) {
@@ -35,6 +42,8 @@ static const char *nameOf(LiveSource src) {
     return "artnet";
   case LiveSource::Sacn:
     return "sacn";
+  case LiveSource::Mixed:
+    return "mixed";
   case LiveSource::None:
   default:
     return "none";
@@ -42,59 +51,123 @@ static const char *nameOf(LiveSource src) {
 }
 
 static void resetRing() {
-  s_have = 0;
   s_fresh = false;
   s_count = 0;
-  memset(s_uni, 0, sizeof(s_uni));
-}
-
-static uint16_t startUniverse(LiveSource src) {
-  const PixelMapCfg &m = PixelMap::cfg();
-  if (src == LiveSource::Sacn) {
-    return m.startSacnUniverse;
+  for (uint8_t i = 0; i < kLiveUniSlots; ++i) {
+    s_slots[i].have = false;
+    s_slots[i].src = LiveSource::None;
+    s_slots[i].universe = 0;
+    memset(s_slots[i].dmx, 0, sizeof(s_slots[i].dmx));
   }
-  return m.startArtNetUniverse;
 }
 
-static bool assembleOut() {
-  const PixelMapCfg &m = PixelMap::cfg();
+static bool recent(uint32_t t) {
+  return t != 0 && (millis() - t) < kLiveTimeoutMs;
+}
+
+static UniSlot *findSlot(LiveSource src, uint16_t universe, bool alloc) {
+  int empty = -1;
+  for (uint8_t i = 0; i < kLiveUniSlots; ++i) {
+    if (s_slots[i].have && s_slots[i].src == src &&
+        s_slots[i].universe == universe) {
+      return &s_slots[i];
+    }
+    if (!s_slots[i].have && empty < 0) {
+      empty = static_cast<int>(i);
+    }
+  }
+  if (!alloc) {
+    return nullptr;
+  }
+  if (empty < 0) {
+    empty = 0;
+  }
+  UniSlot *s = &s_slots[empty];
+  s->src = src;
+  s->universe = universe;
+  s->have = false;
+  memset(s->dmx, 0, sizeof(s->dmx));
+  return s;
+}
+
+static uint8_t slotByte(LiveSource src, uint16_t universe, uint16_t off) {
+  const UniSlot *s = findSlot(src, universe, false);
+  if (s == nullptr || !s->have || off >= kDmxUniverseSize) {
+    return 0;
+  }
+  return s->dmx[off];
+}
+
+static bool hasSlot(LiveSource src, uint16_t universe) {
+  const UniSlot *s = findSlot(src, universe, false);
+  return s != nullptr && s->have;
+}
+
+static void packSeg(const PixelMapCfg &m, uint8_t seg, uint8_t *dst,
+                    uint16_t &o) {
   const uint8_t ch = m.channelsPerPixel;
-  const uint16_t n = m.pixelCount;
-  uint16_t o = 0;
-  for (uint16_t p = 0; p < n; ++p) {
+  for (uint16_t p = 0; p < m.pixelCount; ++p) {
     uint16_t uniOff = 0;
     uint16_t ch1 = 1;
-    if (!PixelMap::pixelOrigin(p, uniOff, ch1) || uniOff >= kMaxUniverses) {
-      memset(s_out + o, 0, ch);
+    if (!PixelMap::pixelOrigin(seg, p, uniOff, ch1)) {
+      memset(dst + o, 0, ch);
       o = static_cast<uint16_t>(o + ch);
       continue;
     }
-    uint32_t abs0 = static_cast<uint32_t>(uniOff) * kDmxUniverseSize +
-                    static_cast<uint32_t>(ch1 - 1);
-    for (uint8_t k = 0; k < ch; ++k) {
-      const uint32_t abs = abs0 + k;
-      const uint16_t slotUni = static_cast<uint16_t>(abs / kDmxUniverseSize);
-      const uint16_t slotOff = static_cast<uint16_t>(abs % kDmxUniverseSize);
-      if (slotUni >= kMaxUniverses ||
-          (s_have & static_cast<uint8_t>(1u << slotUni)) == 0) {
-        s_out[o++] = 0;
+    LiveSource src = LiveSource::ArtNet;
+    uint16_t uni = static_cast<uint16_t>(m.startArtNetUniverse + uniOff);
+    if (m.proto == SegProto::Sacn) {
+      src = LiveSource::Sacn;
+      uni = static_cast<uint16_t>(m.startSacnUniverse + uniOff);
+    } else if (m.proto == SegProto::Auto) {
+      const uint16_t au = static_cast<uint16_t>(m.startArtNetUniverse + uniOff);
+      const uint16_t su = static_cast<uint16_t>(m.startSacnUniverse + uniOff);
+      if (hasSlot(LiveSource::ArtNet, au)) {
+        src = LiveSource::ArtNet;
+        uni = au;
+      } else if (hasSlot(LiveSource::Sacn, su)) {
+        src = LiveSource::Sacn;
+        uni = su;
       } else {
-        s_out[o++] = s_uni[slotUni][slotOff];
+        src = LiveSource::ArtNet;
+        uni = au;
       }
     }
+    const uint32_t abs0 = static_cast<uint32_t>(ch1 - 1);
+    for (uint8_t k = 0; k < ch; ++k) {
+      const uint32_t abs = abs0 + k;
+      const uint16_t slotUni =
+          static_cast<uint16_t>(uni + abs / kDmxUniverseSize);
+      const uint16_t slotOff = static_cast<uint16_t>(abs % kDmxUniverseSize);
+      dst[o++] = slotByte(src, slotUni, slotOff);
+    }
   }
-  s_outLen = o;
-  return o > 0;
+}
+
+static uint16_t assembleOutput(uint8_t out, uint8_t *dst) {
+  uint16_t o = 0;
+  const uint8_t n = PixelMap::segmentCount();
+  for (uint8_t i = 0; i < n; ++i) {
+    if (PixelMap::outputOfSegment(i) != out) {
+      continue;
+    }
+    packSeg(PixelMap::segment(i), i, dst, o);
+  }
+  return o;
+}
+
+static bool assembleOut0() {
+  s_outLen = assembleOutput(0, s_out);
+  return s_outLen > 0;
 }
 
 static void startSockets() {
-  const LiveProto p = LiveCfg::proto();
-  if (p == LiveProto::ArtNet || p == LiveProto::Auto) {
+  if (PixelMap::anyArtNet()) {
     ArtNetRx::begin();
   } else {
     ArtNetRx::stop();
   }
-  if (p == LiveProto::Sacn || p == LiveProto::Auto) {
+  if (PixelMap::anySacn()) {
     SacnRx::begin();
   } else {
     SacnRx::stop();
@@ -113,48 +186,29 @@ static void setPs(bool staUp) {
   }
 }
 
-static bool accept(LiveSource src) {
-  const LiveProto p = LiveCfg::proto();
-  if (p == LiveProto::ArtNet) {
-    return src == LiveSource::ArtNet;
-  }
-  if (p == LiveProto::Sacn) {
-    return src == LiveSource::Sacn;
-  }
-  if (s_lock == LiveSource::None ||
-      (s_lastMs != 0 && (millis() - s_lastMs) >= kLiveTimeoutMs)) {
-    if (s_lock != src) {
-      resetRing();
-      LOG_V("live", "auto lock %s", nameOf(src));
-    }
-    s_lock = src;
-    return true;
-  }
-  return src == s_lock;
-}
-
 } // namespace
 
 void LiveInput::begin() {
   resetRing();
   s_lastMs = 0;
-  s_lock = LiveSource::None;
+  s_lastArtMs = 0;
+  s_lastSacnMs = 0;
   startSockets();
 }
 
 void LiveInput::applyCfg() {
   resetRing();
   s_lastMs = 0;
-  s_lock = LiveSource::None;
+  s_lastArtMs = 0;
+  s_lastSacnMs = 0;
   startSockets();
 }
 
 void LiveInput::onStaGotIp() {
-  const LiveProto p = LiveCfg::proto();
-  if (p == LiveProto::ArtNet || p == LiveProto::Auto) {
+  if (PixelMap::anyArtNet()) {
     ArtNetRx::onStaGotIp();
   }
-  if (p == LiveProto::Sacn || p == LiveProto::Auto) {
+  if (PixelMap::anySacn()) {
     SacnRx::onStaGotIp();
   }
 }
@@ -180,9 +234,22 @@ void LiveInput::service() {
   }
 }
 
-LiveSource LiveInput::source() { return s_lock; }
+LiveSource LiveInput::source() {
+  const bool a = recent(s_lastArtMs);
+  const bool s = recent(s_lastSacnMs);
+  if (a && s) {
+    return LiveSource::Mixed;
+  }
+  if (a) {
+    return LiveSource::ArtNet;
+  }
+  if (s) {
+    return LiveSource::Sacn;
+  }
+  return LiveSource::None;
+}
 
-const char *LiveInput::sourceName() { return nameOf(s_lock); }
+const char *LiveInput::sourceName() { return nameOf(source()); }
 
 uint32_t LiveInput::drops() { return s_drops; }
 
@@ -202,7 +269,6 @@ bool LiveInput::active() {
     return false;
   }
   if ((millis() - s_lastMs) >= kLiveTimeoutMs) {
-    s_lock = LiveSource::None;
     return false;
   }
   return true;
@@ -210,19 +276,17 @@ bool LiveInput::active() {
 
 bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
                      uint16_t universe) {
-  if (src == LiveSource::None || data == nullptr) {
+  if (src == LiveSource::None || src == LiveSource::Mixed || data == nullptr) {
     return false;
   }
-  if (!accept(src)) {
+  if (src == LiveSource::ArtNet && !PixelMap::wantsArtNet(universe)) {
     return false;
   }
-  const uint16_t start = startUniverse(src);
-  const uint16_t span = PixelMap::universeSpan();
-  if (universe < start || universe >= static_cast<uint16_t>(start + span)) {
+  if (src == LiveSource::Sacn && !PixelMap::wantsSacn(universe)) {
     return false;
   }
-  const uint16_t idx = static_cast<uint16_t>(universe - start);
-  if (idx >= kMaxUniverses) {
+  UniSlot *slot = findSlot(src, universe, true);
+  if (slot == nullptr) {
     return false;
   }
   if (len > kDmxUniverseSize) {
@@ -232,27 +296,48 @@ bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
   if (s_fresh) {
     ++s_drops;
   }
-  memcpy(s_uni[idx], data, len);
+  memcpy(slot->dmx, data, len);
   if (len < kDmxUniverseSize) {
-    memset(s_uni[idx] + len, 0, kDmxUniverseSize - len);
+    memset(slot->dmx + len, 0, kDmxUniverseSize - len);
   }
-  s_have = static_cast<uint8_t>(s_have | (1u << idx));
+  slot->have = true;
+  slot->src = src;
+  slot->universe = universe;
   s_fresh = true;
   s_count = 1;
   s_lastMs = millis();
+  if (src == LiveSource::ArtNet) {
+    s_lastArtMs = s_lastMs;
+  } else {
+    s_lastSacnMs = s_lastMs;
+  }
   return true;
 }
 
 bool LiveInput::pop(const uint8_t *&dmx, uint16_t &len) {
-  if (!s_fresh || s_have == 0) {
+  if (!s_fresh) {
     return false;
   }
-  if (!assembleOut()) {
+  if (!assembleOut0()) {
     return false;
   }
   s_fresh = false;
   s_count = 0;
   dmx = s_out;
   len = s_outLen;
+  return true;
+}
+
+bool LiveInput::renderLeds() {
+  if (!s_fresh) {
+    return false;
+  }
+  s_fresh = false;
+  s_count = 0;
+  const uint8_t n = PixelMap::outputCount();
+  for (uint8_t o = 0; o < n; ++o) {
+    const uint16_t len = assembleOutput(o, s_out);
+    LedBus::setOutputPacked(o, s_out, len);
+  }
   return true;
 }

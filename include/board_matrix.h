@@ -11,6 +11,9 @@ static constexpr uint8_t kMatrixHeight = 8;
 static constexpr uint16_t kLedCount = kMatrixWidth * kMatrixHeight;
 static constexpr uint8_t kBrightnessDefault = 10;
 static constexpr uint8_t kBrightnessWarn = 64;
+static constexpr uint8_t kPatchMaxOutputs = 8;
+static constexpr uint8_t kPatchMaxSegments = 24;
+static constexpr uint8_t kLiveUniSlots = 16;
 
 // SPI microSD (not SDMMC). 3.3 V module only.
 static constexpr uint8_t kSdCs = 7;

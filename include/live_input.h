@@ -4,7 +4,7 @@
 
 static constexpr uint32_t kLiveTimeoutMs = 2000;
 
-enum class LiveSource : uint8_t { None = 0, ArtNet = 1, Sacn = 2 };
+enum class LiveSource : uint8_t { None = 0, ArtNet = 1, Sacn = 2, Mixed = 3 };
 
 class LiveInput {
 public:
@@ -20,6 +20,7 @@ public:
   static uint32_t ageMs();
   static uint16_t pps();
   static bool pop(const uint8_t *&dmx, uint16_t &len);
+  static bool renderLeds();
   static bool push(LiveSource src, const uint8_t *data, uint16_t len,
                    uint16_t universe);
 };

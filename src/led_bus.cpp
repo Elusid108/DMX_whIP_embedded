@@ -1,5 +1,6 @@
 #include "led_bus.h"
 
+#include "identify.h"
 #include "log.h"
 #include "pixel_map.h"
 
@@ -22,10 +23,9 @@ namespace {
 
 static CRGB s_leds[kLedCountMax];
 static uint8_t s_px[kLedCountMax][kMaxChannelsPerPixel];
+static uint8_t s_ch[kLedCountMax];
 static bool s_begun = false;
 static bool s_applyPending = false;
-static int s_boundPin = -1;
-static LedWire s_boundWire = LedWire::Clockless;
 
 class RuntimeClockless : public CPixelLEDController<RGB> {
 public:
@@ -62,13 +62,15 @@ private:
   RmtController *s_rmt = nullptr;
 };
 
-static RuntimeClockless s_ctrl;
+static RuntimeClockless s_ctrl[kPatchMaxOutputs];
+static int s_boundPin[kPatchMaxOutputs];
+static LedWire s_boundWire[kPatchMaxOutputs];
 
-static void timings(int &t1, int &t2, int &t3) {
+static void timings(LedChipset chip, int &t1, int &t2, int &t3) {
   uint8_t a = 2;
   uint8_t b = 5;
   uint8_t c = 3;
-  PixelMap::clocklessUnits(a, b, c);
+  PixelMap::clocklessUnits(chip, a, b, c);
   const int fmul = LEDBUS_FMUL;
   t1 = a * fmul;
   t2 = b * fmul;
@@ -93,25 +95,43 @@ static uint8_t chanOf(char letter, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
   }
 }
 
+static uint8_t scaleSeg(uint8_t v, uint8_t bri) {
+  return static_cast<uint8_t>((static_cast<uint16_t>(v) * bri) / 255u);
+}
+
+static uint8_t onceBri(uint8_t segBri) {
+  if (Identify::active()) {
+    return FastLED.getBrightness();
+  }
+  return segBri;
+}
+
 static void packPixel(uint16_t i, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
                       uint8_t c) {
-  const PixelMapCfg &m = PixelMap::cfg();
+  uint8_t seg = 0;
+  uint16_t local = 0;
+  if (!PixelMap::locatePixel(i, seg, local)) {
+    return;
+  }
+  const PixelMapCfg &m = PixelMap::segment(seg);
   const uint8_t n = m.channelsPerPixel;
   const char *ord = m.colorOrder;
+  const uint8_t bri = onceBri(m.brightness);
+  r = scaleSeg(r, bri);
+  g = scaleSeg(g, bri);
+  b = scaleSeg(b, bri);
+  w = scaleSeg(w, bri);
+  c = scaleSeg(c, bri);
   for (uint8_t k = 0; k < kMaxChannelsPerPixel; ++k) {
     s_px[i][k] = 0;
   }
   for (uint8_t k = 0; k < n && ord[k] != '\0'; ++k) {
     s_px[i][k] = chanOf(ord[k], r, g, b, w, c);
   }
-  if (n == 3) {
+  s_ch[i] = n;
+  if (n >= 3) {
     s_leds[i] = CRGB(s_px[i][0], s_px[i][1], s_px[i][2]);
   }
-}
-
-static uint8_t scaled(uint8_t v) {
-  return static_cast<uint8_t>((static_cast<uint16_t>(v) * FastLED.getBrightness()) /
-                              255u);
 }
 
 static inline void clkPulse(uint8_t clk) {
@@ -130,12 +150,14 @@ static void writeByteMsb(uint8_t data, uint8_t clk, uint8_t v) {
   }
 }
 
-static void showClocked() {
-  const PixelMapCfg &m = PixelMap::cfg();
+static void showClocked(uint8_t out) {
+  const uint8_t parent = PixelMap::firstSegmentOfOutput(out);
+  const PixelMapCfg &m = PixelMap::segment(parent);
   const uint8_t data = m.dataGpio;
   const uint8_t clk = m.clockGpio;
-  const uint16_t n = m.pixelCount;
-  const LedWire wire = PixelMap::wireKind();
+  const uint16_t n = PixelMap::outputPixelCount(out);
+  const uint16_t off = PixelMap::outputPixelOffset(out);
+  const LedWire wire = PixelMap::wireKind(m.chipset);
   pinMode(data, OUTPUT);
   pinMode(clk, OUTPUT);
   digitalWrite(data, LOW);
@@ -147,9 +169,9 @@ static void showClocked() {
     }
     for (uint16_t p = 0; p < n; ++p) {
       writeByteMsb(data, clk, 0xE0 | 31);
-      writeByteMsb(data, clk, scaled(s_px[p][0]));
-      writeByteMsb(data, clk, scaled(s_px[p][1]));
-      writeByteMsb(data, clk, scaled(s_px[p][2]));
+      writeByteMsb(data, clk, s_px[off + p][0]);
+      writeByteMsb(data, clk, s_px[off + p][1]);
+      writeByteMsb(data, clk, s_px[off + p][2]);
     }
     const uint16_t latch = static_cast<uint16_t>((n / 2) + 1);
     for (uint16_t i = 0; i < latch; ++i) {
@@ -164,9 +186,9 @@ static void showClocked() {
     writeByteMsb(data, clk, 0);
     writeByteMsb(data, clk, 0);
     for (uint16_t p = 0; p < n; ++p) {
-      const uint8_t r = scaled(s_px[p][0]);
-      const uint8_t g = scaled(s_px[p][1]);
-      const uint8_t b = scaled(s_px[p][2]);
+      const uint8_t r = s_px[off + p][0];
+      const uint8_t g = s_px[off + p][1];
+      const uint8_t b = s_px[off + p][2];
       const uint8_t flag = static_cast<uint8_t>(
           0xC0 | ((~b) >> 2 & 0x30) | ((~g) >> 4 & 0x0C) | ((~r) >> 6 & 0x03));
       writeByteMsb(data, clk, flag);
@@ -186,9 +208,12 @@ static void showClocked() {
       writeBit(data, clk, false);
     }
     for (uint16_t p = 0; p < n; ++p) {
-      writeByteMsb(data, clk, static_cast<uint8_t>(0x80 | (scaled(s_px[p][1]) >> 1)));
-      writeByteMsb(data, clk, static_cast<uint8_t>(0x80 | (scaled(s_px[p][0]) >> 1)));
-      writeByteMsb(data, clk, static_cast<uint8_t>(0x80 | (scaled(s_px[p][2]) >> 1)));
+      writeByteMsb(data, clk,
+                   static_cast<uint8_t>(0x80 | (s_px[off + p][1] >> 1)));
+      writeByteMsb(data, clk,
+                   static_cast<uint8_t>(0x80 | (s_px[off + p][0] >> 1)));
+      writeByteMsb(data, clk,
+                   static_cast<uint8_t>(0x80 | (s_px[off + p][2] >> 1)));
     }
     for (uint8_t i = 0; i < 24; ++i) {
       writeBit(data, clk, false);
@@ -201,9 +226,9 @@ static void showClocked() {
       writeBit(data, clk, false);
     }
     for (uint16_t p = 0; p < n; ++p) {
-      const uint16_t r = scaled(s_px[p][0]) >> 3;
-      const uint16_t g = scaled(s_px[p][1]) >> 3;
-      const uint16_t b = scaled(s_px[p][2]) >> 3;
+      const uint16_t r = s_px[off + p][0] >> 3;
+      const uint16_t g = s_px[off + p][1] >> 3;
+      const uint16_t b = s_px[off + p][2] >> 3;
       const uint16_t v = static_cast<uint16_t>(0x8000 | (r << 10) | (g << 5) | b);
       writeByteMsb(data, clk, static_cast<uint8_t>(v >> 8));
       writeByteMsb(data, clk, static_cast<uint8_t>(v));
@@ -215,9 +240,9 @@ static void showClocked() {
   }
 
   for (uint16_t p = 0; p < n; ++p) {
-    const uint8_t ch = m.channelsPerPixel;
+    const uint8_t ch = s_ch[off + p] ? s_ch[off + p] : m.channelsPerPixel;
     for (uint8_t k = 0; k < ch; ++k) {
-      writeByteMsb(data, clk, scaled(s_px[p][k]));
+      writeByteMsb(data, clk, s_px[off + p][k]);
     }
   }
   for (uint8_t i = 0; i < 16; ++i) {
@@ -225,34 +250,76 @@ static void showClocked() {
   }
 }
 
-static void showClockless() {
-  const PixelMapCfg &m = PixelMap::cfg();
-  const uint16_t n = m.pixelCount;
-  const uint8_t ch = m.channelsPerPixel;
-  if (ch <= 3) {
-    s_ctrl.setLeds(s_leds, static_cast<int>(n));
-    FastLED.show();
-    return;
-  }
-  const uint32_t bytes = static_cast<uint32_t>(n) * ch;
-  const uint16_t fake =
-      static_cast<uint16_t>((bytes + 2u) / 3u);
-  uint8_t *raw = reinterpret_cast<uint8_t *>(s_leds);
-  const uint32_t cap = static_cast<uint32_t>(kLedCountMax) * 3u;
-  memset(raw, 0, cap);
-  uint32_t o = 0;
-  for (uint16_t p = 0; p < n && o + ch <= cap; ++p) {
-    memcpy(raw + o, s_px[p], ch);
-    o += ch;
-  }
-  s_ctrl.setLeds(s_leds, static_cast<int>(fake > kLedCountMax ? kLedCountMax : fake));
-  FastLED.show();
-  s_ctrl.setLeds(s_leds, static_cast<int>(n));
-  for (uint16_t p = 0; p < n; ++p) {
-    if (ch >= 3) {
-      s_leds[p] = CRGB(s_px[p][0], s_px[p][1], s_px[p][2]);
+static bool outputWide(uint8_t out) {
+  const uint8_t n = PixelMap::segmentCount();
+  for (uint8_t i = 0; i < n; ++i) {
+    if (PixelMap::outputOfSegment(i) == out &&
+        PixelMap::segment(i).channelsPerPixel > 3) {
+      return true;
     }
   }
+  return false;
+}
+
+static void showClockless(uint8_t out) {
+  const uint16_t n = PixelMap::outputPixelCount(out);
+  const uint16_t off = PixelMap::outputPixelOffset(out);
+  if (n == 0 || !s_ctrl[out].bound()) {
+    return;
+  }
+  if (!outputWide(out)) {
+    s_ctrl[out].setLeds(s_leds + off, static_cast<int>(n));
+    s_ctrl[out].showLeds(255);
+    return;
+  }
+  static uint8_t scratch[kLedCountMax * 3];
+  memset(scratch, 0, sizeof(scratch));
+  uint32_t o = 0;
+  const uint32_t cap = sizeof(scratch);
+  for (uint16_t p = 0; p < n && o < cap; ++p) {
+    const uint8_t ch = s_ch[off + p] ? s_ch[off + p] : 3;
+    const uint32_t take = ch;
+    if (o + take > cap) {
+      break;
+    }
+    memcpy(scratch + o, s_px[off + p], take);
+    o += take;
+  }
+  const uint16_t fake = static_cast<uint16_t>((o + 2u) / 3u);
+  memcpy(s_leds + off, scratch,
+         fake * 3u > (kLedCountMax - off) * 3u ? (kLedCountMax - off) * 3u
+                                               : fake * 3u);
+  s_ctrl[out].setLeds(s_leds + off, static_cast<int>(fake > n ? n : fake));
+  if (fake > n) {
+    s_ctrl[out].setLeds(s_leds + off, static_cast<int>(fake));
+  }
+  s_ctrl[out].showLeds(255);
+  for (uint16_t p = 0; p < n; ++p) {
+    s_leds[off + p] = CRGB(s_px[off + p][0], s_px[off + p][1], s_px[off + p][2]);
+  }
+  s_ctrl[out].setLeds(s_leds + off, static_cast<int>(n));
+}
+
+static bool pinsUnchanged() {
+  const uint8_t n = PixelMap::outputCount();
+  for (uint8_t o = 0; o < n; ++o) {
+    const uint8_t parent = PixelMap::firstSegmentOfOutput(o);
+    const PixelMapCfg &m = PixelMap::segment(parent);
+    const LedWire wire = PixelMap::wireKind(m.chipset);
+    if (s_boundPin[o] != static_cast<int>(m.dataGpio) ||
+        s_boundWire[o] != wire) {
+      return false;
+    }
+    if (wire == LedWire::Clockless && !s_ctrl[o].bound()) {
+      return false;
+    }
+  }
+  for (uint8_t o = n; o < kPatchMaxOutputs; ++o) {
+    if (s_boundPin[o] >= 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace
@@ -268,56 +335,56 @@ void LedBus::service() {
 }
 
 void LedBus::apply() {
-  const PixelMapCfg &m = PixelMap::cfg();
-  const LedWire wire = PixelMap::wireKind();
-  const int pin = static_cast<int>(m.dataGpio);
-  const bool clocked = wire != LedWire::Clockless;
-
-  if (clocked) {
-    if (s_boundWire == LedWire::Clockless && s_ctrl.bound()) {
-      s_ctrl.release();
-      s_boundPin = -1;
-      LOG_V("led", "rmt released (clocked)");
+  const uint8_t n = PixelMap::outputCount();
+  if (pinsUnchanged()) {
+    for (uint8_t o = 0; o < n; ++o) {
+      const uint16_t count = PixelMap::outputPixelCount(o);
+      const uint16_t off = PixelMap::outputPixelOffset(o);
+      if (s_boundWire[o] == LedWire::Clockless && s_ctrl[o].bound()) {
+        s_ctrl[o].setLeds(s_leds + off, static_cast<int>(count));
+      }
     }
-    s_boundWire = wire;
-    pinMode(m.dataGpio, OUTPUT);
-    pinMode(m.clockGpio, OUTPUT);
-    LOG_V("led", "bus clocked pin=%u clk=%u count=%u chip=%s order=%s ch=%u",
-          m.dataGpio, m.clockGpio, m.pixelCount, PixelMap::chipsetName(),
-          PixelMap::colorOrderName(), m.channelsPerPixel);
+    LOG_V("led", "bus %u out (pins unchanged)", n);
     return;
   }
 
-  int t1 = 0;
-  int t2 = 0;
-  int t3 = 0;
-  timings(t1, t2, t3);
-
-  if (s_ctrl.bound() && s_boundPin == pin && s_boundWire == LedWire::Clockless) {
-    s_ctrl.setLeds(s_leds, static_cast<int>(m.pixelCount));
-    for (uint16_t i = m.pixelCount; i < kLedCountMax; ++i) {
-      s_leds[i] = CRGB::Black;
+  for (uint8_t o = 0; o < kPatchMaxOutputs; ++o) {
+    if (s_ctrl[o].bound()) {
+      s_ctrl[o].release();
     }
-    LOG_V("led", "bus pin=%u count=%u chip=%s order=%s (timings deferred)",
-          m.dataGpio, m.pixelCount, PixelMap::chipsetName(),
-          PixelMap::colorOrderName());
-    return;
+    s_boundPin[o] = -1;
+    s_boundWire[o] = LedWire::Clockless;
   }
 
-  s_ctrl.rebind(pin, t1, t2, t3);
-  if (!s_ctrl.bound()) {
-    LOG_C("led", "rmt rebind failed pin=%u", m.dataGpio);
-    return;
+  for (uint8_t o = 0; o < n; ++o) {
+    const uint8_t parent = PixelMap::firstSegmentOfOutput(o);
+    const PixelMapCfg &m = PixelMap::segment(parent);
+    const LedWire wire = PixelMap::wireKind(m.chipset);
+    const uint16_t count = PixelMap::outputPixelCount(o);
+    const uint16_t off = PixelMap::outputPixelOffset(o);
+    s_boundWire[o] = wire;
+    s_boundPin[o] = static_cast<int>(m.dataGpio);
+    if (wire != LedWire::Clockless) {
+      pinMode(m.dataGpio, OUTPUT);
+      pinMode(m.clockGpio, OUTPUT);
+      LOG_V("led", "out%u clocked pin=%u clk=%u count=%u chip=%s", o,
+            m.dataGpio, m.clockGpio, count, PixelMap::chipsetName(m.chipset));
+      continue;
+    }
+    int t1 = 0;
+    int t2 = 0;
+    int t3 = 0;
+    timings(m.chipset, t1, t2, t3);
+    s_ctrl[o].rebind(static_cast<int>(m.dataGpio), t1, t2, t3);
+    if (!s_ctrl[o].bound()) {
+      LOG_C("led", "rmt rebind failed pin=%u", m.dataGpio);
+      s_boundPin[o] = -1;
+      continue;
+    }
+    s_ctrl[o].setLeds(s_leds + off, static_cast<int>(count));
+    LOG_V("led", "out%u rebind pin=%u count=%u chip=%s", o, m.dataGpio, count,
+          PixelMap::chipsetName(m.chipset));
   }
-  s_boundPin = pin;
-  s_boundWire = LedWire::Clockless;
-  s_ctrl.setLeds(s_leds, static_cast<int>(m.pixelCount));
-  for (uint16_t i = m.pixelCount; i < kLedCountMax; ++i) {
-    s_leds[i] = CRGB::Black;
-  }
-  LOG_V("led", "rebind pin=%u count=%u chip=%s order=%s ch=%u", m.dataGpio,
-        m.pixelCount, PixelMap::chipsetName(), PixelMap::colorOrderName(),
-        m.channelsPerPixel);
 }
 
 void LedBus::begin() {
@@ -326,25 +393,29 @@ void LedBus::begin() {
     return;
   }
   s_begun = true;
+  for (uint8_t o = 0; o < kPatchMaxOutputs; ++o) {
+    s_boundPin[o] = -1;
+    s_boundWire[o] = LedWire::Clockless;
+  }
+  memset(s_ch, 3, sizeof(s_ch));
   apply();
-  FastLED.addLeds(&s_ctrl, s_leds, static_cast<int>(PixelMap::cfg().pixelCount));
 }
 
 void LedBus::show() {
   service();
-  if (PixelMap::wireKind() != LedWire::Clockless) {
-    showClocked();
-    return;
+  const uint8_t n = PixelMap::outputCount();
+  for (uint8_t o = 0; o < n; ++o) {
+    if (s_boundWire[o] != LedWire::Clockless) {
+      showClocked(o);
+    } else {
+      showClockless(o);
+    }
   }
-  if (!s_ctrl.bound()) {
-    return;
-  }
-  showClockless();
 }
 
 CRGB *LedBus::leds() { return s_leds; }
 
-uint16_t LedBus::count() { return PixelMap::cfg().pixelCount; }
+uint16_t LedBus::count() { return PixelMap::totalPixels(); }
 
 void LedBus::setRgb(uint16_t i, uint8_t r, uint8_t g, uint8_t b) {
   if (i >= count()) {
@@ -357,7 +428,12 @@ void LedBus::setPacked(uint16_t i, const uint8_t *ch) {
   if (i >= count() || ch == nullptr) {
     return;
   }
-  const PixelMapCfg &m = PixelMap::cfg();
+  uint8_t seg = 0;
+  uint16_t local = 0;
+  if (!PixelMap::locatePixel(i, seg, local)) {
+    return;
+  }
+  const PixelMapCfg &m = PixelMap::segment(seg);
   uint8_t r = ch[0];
   uint8_t g = ch[1];
   uint8_t b = ch[2];
@@ -371,6 +447,31 @@ void LedBus::setPacked(uint16_t i, const uint8_t *ch) {
     c = ch[o];
   }
   packPixel(i, r, g, b, w, c);
+}
+
+void LedBus::setOutputPacked(uint8_t out, const uint8_t *ch, uint16_t len) {
+  if (ch == nullptr || out >= PixelMap::outputCount()) {
+    return;
+  }
+  uint16_t gi = PixelMap::outputPixelOffset(out);
+  uint16_t o = 0;
+  const uint8_t n = PixelMap::segmentCount();
+  for (uint8_t i = 0; i < n; ++i) {
+    if (PixelMap::outputOfSegment(i) != out) {
+      continue;
+    }
+    const PixelMapCfg &m = PixelMap::segment(i);
+    const uint8_t pxch = m.channelsPerPixel;
+    for (uint16_t p = 0; p < m.pixelCount; ++p) {
+      if (static_cast<uint16_t>(o + pxch) <= len) {
+        setPacked(gi, ch + o);
+      } else {
+        setRgb(gi, 0, 0, 0);
+      }
+      o = static_cast<uint16_t>(o + pxch);
+      ++gi;
+    }
+  }
 }
 
 void LedBus::fillRgb(uint8_t r, uint8_t g, uint8_t b) {

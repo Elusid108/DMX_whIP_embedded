@@ -2,6 +2,7 @@
 
 #include "live_input.h"
 #include "log.h"
+#include "pixel_map.h"
 
 #include <Preferences.h>
 
@@ -116,14 +117,18 @@ bool LiveCfg::set(LiveProto proto, uint8_t fps, uint8_t buf, bool park,
     return false;
   }
   loadNvs();
+  const bool protoChanged = proto != s_proto;
   const bool changed =
-      proto != s_proto || fps != s_fps || buf != s_buf || park != s_park;
+      protoChanged || fps != s_fps || buf != s_buf || park != s_park;
   s_proto = proto;
   s_fps = fps;
   s_buf = buf;
   s_park = park;
   if (save) {
     saveNvs();
+  }
+  if (protoChanged) {
+    PixelMap::setAllProtos(static_cast<SegProto>(proto), save);
   }
   if (changed) {
     LOG_V("live", "cfg proto=%s fps=%u buf=%u park=%s", protoName(), s_fps,

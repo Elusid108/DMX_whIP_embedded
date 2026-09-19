@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.17.1</title>
+<title>dmxwhip v0.20.1</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -17,7 +17,7 @@ body{display:flex;flex-direction:column;box-sizing:border-box;padding:10px 12px;
 #name{display:none;text-align:center;font-weight:700}
 body.editing #name{display:block}
 body.editing #nameView{display:none}
-#identify{width:auto;min-width:7rem;margin:8px auto 0;display:inline-block}
+#identify,#reboot{width:auto;min-width:7rem;margin:0}
 .livehead{display:flex;justify-content:center;margin:0 0 8px}
 .mode{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px solid var(--border);background:var(--chrome)}
 .mode i{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.4}
@@ -57,6 +57,11 @@ body.editing #nameView{display:none}
 .health p{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .health .hi{color:var(--text)}
 .readout{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.35;word-break:break-word}
+#liveLock{display:none;flex:0 0 auto;margin:0 0 8px;padding:14px 12px;background:#7f1d1d;color:#fecaca;font-weight:800;font-size:1.05rem;line-height:1.3;text-align:center;border-radius:8px}
+#liveLock.on{display:block}
+.patchbar{justify-content:space-between;align-items:center}
+.patchbar #mapAdd{margin-left:auto}
+.patchops button.icon{padding:4px 7px;font-size:1rem;line-height:1}
 .tabs{display:flex;gap:0;flex:0 0 auto;border-bottom:1px solid var(--border);margin:0 0 8px}
 .tabs button{flex:1;margin:0;padding:8px 4px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-weight:500;font-size:.8rem}
 .tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
@@ -77,11 +82,22 @@ input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:
 #brinum{width:4.6rem;flex:0 0 4.6rem;padding:8px 6px;text-align:right;font-family:ui-monospace,monospace}
 button{background:var(--chrome);border:1px solid var(--border);margin:6px 0 0;font-weight:600;color:var(--text)}
 button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
-#savedrow,#renrow,#fileopts,#folderopts,#foldernrow,#briwarn,#cntwarn,#note,#clkrow{display:none}
-#savedrow.on,#renrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#briwarn.on,#cntwarn.on,#note.on,#clkrow.on{display:block}
+#savedrow,#renrow,#fileopts,#folderopts,#foldernrow,#note{display:none}
+#savedrow.on,#renrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#note.on{display:block}
+.clkrow,.briwarn,.cntwarn{display:none}
+.clkrow.on,.briwarn.on,.cntwarn.on{display:block}
 .tog{display:flex;align-items:center;gap:8px;margin:8px 0 0}
 .tog input{width:auto;margin:0}
-#briwarn,#cntwarn{color:#f59e0b;font-size:.8rem;margin:4px 0 0}
+.briwarn,.cntwarn{color:#f59e0b;font-size:.8rem;margin:4px 0 0}
+#patchList{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.patch{border:1px solid var(--border);border-radius:8px;margin:0 0 8px;background:var(--chrome)}
+.patch.child{margin-left:14px;border-left:2px solid var(--accent)}
+.patchhead{display:flex;align-items:center;gap:6px;padding:8px 8px 8px 10px;cursor:pointer}
+.patchhead b{flex:1;min-width:0;font-size:.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.patchops{display:flex;gap:4px;flex:0 0 auto}
+.patchops button{width:auto;margin:0;padding:4px 8px;font-size:.75rem}
+.patchbody{display:none;padding:0 10px 10px}
+.patch.open .patchbody{display:block}
 #note{margin:6px 0 0;font-size:.85rem}
 #status,#ver{flex:0 0 auto;margin:6px 0 0;font-size:.85rem;color:var(--muted);min-height:1.2em}
 .ok{color:#86efac}
@@ -94,9 +110,13 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div class="strip">
 <h1 id="nameView">dmxwhip</h1>
 <input id="name" maxlength="63" autocomplete="off" aria-label="Device name">
+<div class="row" style="margin-top:8px;justify-content:center">
 <button class="pri" id="identify" type="button">Identify</button>
+<button id="reboot" type="button">Reboot</button>
+</div>
 <p id="note"></p>
 </div>
+<div id="liveLock">Live input — Playback and Patch are locked</div>
 <div class="tabs">
 <button class="on" id="tabLive" type="button">Live</button>
 <button id="tabPlay" type="button">Playback</button>
@@ -172,72 +192,12 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric"></div></div>
 </div>
 <div id="viewPixels">
-<p class="hint">Patch: IC, wire order, start universe/channel. Save writes the map. Brightness applies immediately.</p>
-<label class="lab" for="proto">Live protocol</label>
-<select id="proto"><option value="auto">Auto</option><option value="artnet">Art-Net</option><option value="sacn">sACN</option></select>
-<label class="lab" for="pxChip">IC type</label>
-<select id="pxChip">
-<optgroup label="Clockless">
-<option value="ws2812b">WS2812B</option>
-<option value="ws2812">WS2812</option>
-<option value="ws2813">WS2813</option>
-<option value="ws2815">WS2815</option>
-<option value="ws2816">WS2816</option>
-<option value="ws2818">WS2818</option>
-<option value="ws2811">WS2811</option>
-<option value="sk6812">SK6812</option>
-<option value="sk6822">SK6822</option>
-<option value="tm1803">TM1803</option>
-<option value="tm1804">TM1804</option>
-<option value="tm1809">TM1809</option>
-<option value="tm1829">TM1829</option>
-<option value="ucs1903">UCS1903</option>
-<option value="ucs1903b">UCS1903B</option>
-<option value="ucs1904">UCS1904</option>
-<option value="ucs2903">UCS2903</option>
-<option value="apa106">APA106</option>
-<option value="pl9823">PL9823</option>
-<option value="sm16703">SM16703</option>
-<option value="ge8822">GE8822</option>
-<option value="gw6205">GW6205</option>
-<option value="gs1903">GS1903</option>
-<option value="lpd1886">LPD1886</option>
-</optgroup>
-<optgroup label="Clocked">
-<option value="apa102">APA102</option>
-<option value="sk9822">SK9822</option>
-<option value="hd107s">HD107S</option>
-<option value="ws2801">WS2801</option>
-<option value="lpd8806">LPD8806</option>
-<option value="p9813">P9813</option>
-<option value="lpd6803">LPD6803</option>
-</optgroup>
-</select>
-<label class="lab" for="pxData">Data GPIO</label>
-<input id="pxData" type="number" min="0" max="48" value="14" inputmode="numeric">
-<div id="clkrow"><label class="lab" for="pxClk">Clock GPIO</label>
-<input id="pxClk" type="number" min="1" max="48" value="21" inputmode="numeric"></div>
-<label class="lab" for="pxCount">Pixel count</label>
-<input id="pxCount" type="number" min="1" max="1024" value="64" inputmode="numeric">
-<p id="cntwarn">This board’s panel is 64 pixels (8×8).</p>
-<label class="tog"><input id="pxWhite" type="checkbox"> White channel</label>
-<label class="tog"><input id="pxCct" type="checkbox"> CCT channel</label>
-<label class="lab" for="pxOrder">Color order</label>
-<select id="pxOrder"></select>
-<label class="lab" for="pxUniStart">Starting universe</label>
-<input id="pxUniStart" type="number" min="0" max="32767" value="0" inputmode="numeric">
-<p class="hint">Art-Net 0-based. sACN is this + 1.</p>
-<label class="lab" for="pxCh">Starting channel</label>
-<input id="pxCh" type="number" min="1" max="512" value="1" inputmode="numeric">
-<label class="lab" for="bri">Brightness</label>
-<div class="brirow">
-<input id="bri" type="range" min="0" max="255" value="10">
-<input id="brinum" type="number" min="0" max="255" value="10" inputmode="numeric">
-</div>
-<p id="briwarn">This 8×8 can overheat above 64.</p>
-<div class="lab">Universes</div>
-<p class="readout" id="pxUni"></p>
+<p class="hint">Each row is a fixture. Same data GPIO chains under the parent (top of the group is first on the wire). Save writes the map. Brightness applies immediately.</p>
+<div id="patchList"></div>
+<div class="row patchbar">
 <button class="pri" id="mapSave" type="button">Save</button>
+<button id="mapAdd" type="button">Add Output +</button>
+</div>
 </div>
 <div id="viewSetup">
 <p class="hint">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
@@ -264,7 +224,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.17.1</p>
+<p id="ver" class="readout">dmxwhip v0.20.1</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -272,6 +232,7 @@ const ssidEl=document.getElementById('ssid');
 const passEl=document.getElementById('pass');
 const statusEl=document.getElementById('status');
 const noteEl=document.getElementById('note');
+const liveLock=document.getElementById('liveLock');
 const savedRow=document.getElementById('savedrow');
 const savedLab=document.getElementById('savedlab');
 const verEl=document.getElementById('ver');
@@ -279,14 +240,12 @@ const nameView=document.getElementById('nameView');
 const nameEl=document.getElementById('name');
 const modeEl=document.getElementById('mode');
 const modeLab=document.getElementById('modeLab');
-const briEl=document.getElementById('bri');
-const brinum=document.getElementById('brinum');
-const briwarn=document.getElementById('briwarn');
 const playnowEl=document.getElementById('playnow');
-const protoEl=document.getElementById('proto');
 const fpsEl=document.getElementById('fps');
 const bufEl=document.getElementById('buf');
 const parkEl=document.getElementById('park');
+const patchList=document.getElementById('patchList');
+const mapAdd=document.getElementById('mapAdd');
 const fileloopEl=document.getElementById('fileloop');
 const folderrepEl=document.getElementById('folderrep');
 const foldernEl=document.getElementById('foldern');
@@ -304,20 +263,11 @@ const tabPlay=document.getElementById('tabPlay');
 const tabPixels=document.getElementById('tabPixels');
 const tabSetup=document.getElementById('tabSetup');
 const idBtn=document.getElementById('identify');
-const pxChip=document.getElementById('pxChip');
-const pxOrder=document.getElementById('pxOrder');
-const pxCount=document.getElementById('pxCount');
-const pxData=document.getElementById('pxData');
-const pxClk=document.getElementById('pxClk');
-const pxWhite=document.getElementById('pxWhite');
-const pxCct=document.getElementById('pxCct');
-const pxUniStart=document.getElementById('pxUniStart');
-const pxCh=document.getElementById('pxCh');
-const clkrow=document.getElementById('clkrow');
-const pxUni=document.getElementById('pxUni');
+const rebootBtn=document.getElementById('reboot');
 const mapSave=document.getElementById('mapSave');
-const cntwarn=document.getElementById('cntwarn');
 const CLOCKED={apa102:1,sk9822:1,hd107s:1,ws2801:1,lpd8806:1,p9813:1,lpd6803:1};
+const CHIP_CLK=[['ws2812b','WS2812B'],['ws2812','WS2812'],['ws2813','WS2813'],['ws2815','WS2815'],['ws2816','WS2816'],['ws2818','WS2818'],['ws2811','WS2811'],['sk6812','SK6812'],['sk6822','SK6822'],['tm1803','TM1803'],['tm1804','TM1804'],['tm1809','TM1809'],['tm1829','TM1829'],['ucs1903','UCS1903'],['ucs1903b','UCS1903B'],['ucs1904','UCS1904'],['ucs2903','UCS2903'],['apa106','APA106'],['pl9823','PL9823'],['sm16703','SM16703'],['ge8822','GE8822'],['gw6205','GW6205'],['gs1903','GS1903'],['lpd1886','LPD1886']];
+const CHIP_CKD=[['apa102','APA102'],['sk9822','SK9822'],['hd107s','HD107S'],['ws2801','WS2801'],['lpd8806','LPD8806'],['p9813','P9813'],['lpd6803','LPD6803']];
 const ORDERS={
   rgb:['grb','rgb','rbg','gbr','brg','bgr'],
   rgbw:['grbw','rgbw','grwb','wrgb','rbgw','gbrw','brgw','bgrw','wgrb','wrbg'],
@@ -325,19 +275,79 @@ const ORDERS={
   rgbwc:['grbwc','rgbwc','grbcw','rgbcw','wrgbc','wrgcb','bgrwc','bgrcw','crgbw','cgrbw']
 };
 function orderKey(w,c){return w&&c?'rgbwc':w?'rgbw':c?'rgbc':'rgb';}
-function fillOrders(keep){
-  const list=ORDERS[orderKey(pxWhite.checked,pxCct.checked)];
-  const cur=(keep||pxOrder.value||'').toLowerCase();
-  pxOrder.innerHTML='';
-  list.forEach(o=>{
-    const opt=document.createElement('option');
-    opt.value=o;
-    opt.textContent=o.toUpperCase();
-    pxOrder.appendChild(opt);
-  });
-  pxOrder.value=list.indexOf(cur)>=0?cur:list[0];
+function defaultSeg(){return {proto:'auto',chip:'ws2812b',data:14,clk:0,count:64,white:false,cct:false,order:'grb',uni:0,ch:1,bri:10};}
+let patch=[defaultSeg()];
+let patchCaps={max_out:8,max_seg:24,max_px:1024};
+let openSeg=0;
+let patchKey='';
+function chipOpts(sel){
+  let h='<optgroup label="Clockless">';
+  CHIP_CLK.forEach(c=>{h+='<option value="'+c[0]+'"'+(sel===c[0]?' selected':'')+'>'+c[1]+'</option>';});
+  h+='</optgroup><optgroup label="Clocked">';
+  CHIP_CKD.forEach(c=>{h+='<option value="'+c[0]+'"'+(sel===c[0]?' selected':'')+'>'+c[1]+'</option>';});
+  return h+'</optgroup>';
 }
-function showClk(){clkrow.className=CLOCKED[pxChip.value]?'on':'';}
+function orderOpts(w,c,keep){
+  const list=ORDERS[orderKey(!!w,!!c)];
+  const cur=String(keep||list[0]).toLowerCase();
+  return list.map(o=>'<option value="'+o+'"'+(o===cur?' selected':'')+'>'+o.toUpperCase()+'</option>').join('');
+}
+function parentOf(rows,i){
+  const pin=rows[i].data;
+  for(let j=0;j<i;j++) if(rows[j].data===pin) return j;
+  return i;
+}
+function isChild(rows,i){return parentOf(rows,i)!==i;}
+function groupBounds(rows,i){
+  const pin=rows[i].data;
+  let a=i,b=i;
+  while(a>0&&rows[a-1].data===pin) a--;
+  while(b+1<rows.length&&rows[b+1].data===pin) b++;
+  return [a,b];
+}
+function groupCounts(rows){
+  const m={};
+  rows.forEach(r=>{m[r.data]=(m[r.data]||0)+r.count;});
+  return m;
+}
+function unusedGpio(rows){
+  const used=new Set(rows.map(r=>r.data));
+  const tryPins=[14,21,1,2,3,8,9,10,11,12,13,15,16,17,18,35,36,37,38,39,40,41,42,47,48];
+  for(let i=0;i<tryPins.length;i++) if(!used.has(tryPins[i])) return tryPins[i];
+  return 14;
+}
+function segsFromStatus(s){
+  if(s.outputs&&s.outputs.length){
+    const rows=[];
+    s.outputs.forEach(o=>{
+      (o.segs||[]).forEach(seg=>{
+        const proto=seg.proto||'auto';
+        rows.push({
+          proto:proto,chip:o.chip||'ws2812b',data:o.data,clk:o.clk||0,
+          count:seg.count||64,white:!!seg.white,cct:!!seg.cct,order:seg.order||'grb',
+          uni:proto==='sacn'?(seg.sacn||1):(seg.artnet||0),ch:seg.ch||1,
+          bri:seg.bri!=null?seg.bri:10
+        });
+      });
+    });
+    if(rows.length) return rows;
+  }
+  const m=s.map||{};
+  return [{
+    proto:m.proto||'auto',chip:m.chip||'ws2812b',data:m.data!=null?m.data:14,clk:m.clk||0,
+    count:m.count||64,white:!!m.white,cct:!!m.cct,order:m.order||'grb',
+    uni:m.artnet!=null?m.artnet:0,ch:m.ch||1,bri:m.bri!=null?m.bri:10
+  }];
+}
+function uniHint(proto){
+  return proto==='sacn'?'sACN universe (1-based).':'Art-Net 0-based. Resolume “1.1” is often 0.1.';
+}
+function uniReadout(row){
+  const chPx=3+(row.white?1:0)+(row.cct?1:0);
+  const art=row.proto==='sacn'?Math.max(0,row.uni-1):row.uni;
+  const sacn=row.proto==='sacn'?row.uni:(row.uni+1);
+  return (row.proto==='sacn'?'sACN '+sacn:'Art-Net '+art)+' · ch '+row.ch+' · ch/px '+chPx;
+}
 function setTxt(id,v){const el=document.getElementById(id);if(el) el.textContent=v==null||v===''?'—':String(v);}
 let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0;
 let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,scanning=false;
@@ -366,11 +376,7 @@ function displayName(p){
   const base=String(p||'').split('/').pop()||'';
   return base.replace(/\.dmx$/i,'').replace(/^\d{2}_/,'')||p;
 }
-function showBri(v){
-  briEl.value=v;
-  brinum.value=v;
-  briwarn.className=v>64?'on':'';
-}
+function showBri(){}
 function showPlayOpts(){
   fileopts.className=playSrc==='file'?'on':'';
   folderopts.className=playSrc==='folder'?'on':'';
@@ -436,7 +442,6 @@ function applyPlay(s){
 }
 function applyLive(s){
   if(liveDirty) return;
-  if(s.proto) protoEl.value=s.proto;
   if(typeof s.fps==='number') fpsEl.value=String(s.fps);
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
   if(s.park) parkEl.value=s.park;
@@ -467,43 +472,33 @@ function applyChrome(s){
   modeEl.className='mode '+mode;
   if(modeLab) modeLab.textContent=mode;
   const live=!!s.live;
+  if(liveLock) liveLock.className=live?'on':'';
   ['prev','play','stop','next','rename'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});
   idBtn.disabled=live;
   idBtn.title=live?'Unavailable while live':'';
-  [pxChip,pxOrder,pxCount,pxData,pxClk,pxWhite,pxCct,pxUniStart,pxCh,mapSave].forEach(el=>{if(el) el.disabled=live;});
+  if(mapSave) mapSave.disabled=live;
+  if(mapAdd) mapAdd.disabled=live;
   if(s.saved){savedRow.className='on';savedLab.textContent='saved '+s.saved+' (connects at boot)'+(s.ip?(' · STA '+s.ip):'');}
   else {savedRow.className='';savedLab.textContent='';}
-  if(typeof s.bri==='number'&&!briDirty) showBri(s.bri);
   applyLive(s);
 }
 function applyPixels(s){
-  const m=s.map||{};
-  if(!mapDirty){
-    if(m.chip) pxChip.value=m.chip;
-    pxWhite.checked=!!m.white;
-    pxCct.checked=!!m.cct;
-    fillOrders(m.order||'');
-    if(typeof m.count==='number') pxCount.value=String(m.count);
-    if(typeof m.data==='number') pxData.value=String(m.data);
-    if(typeof m.clk==='number'&&m.clk) pxClk.value=String(m.clk);
-    if(typeof m.artnet==='number') pxUniStart.value=String(m.artnet);
-    if(typeof m.ch==='number') pxCh.value=String(m.ch);
-    showClk();
+  if(s.patch){
+    patchCaps={
+      max_out:s.patch.max_out||8,
+      max_seg:s.patch.max_seg||24,
+      max_px:s.patch.max_px||1024
+    };
   }
-  const n=parseInt(pxCount.value,10);
-  cntwarn.className=(Number.isFinite(n)&&n!==64)?'on':'';
-  const chPx=m.ch_px||(3+(m.white?1:0)+(m.cct?1:0));
-  const fit=m.fit!=null?m.fit:Math.floor((512-((m.ch||1)-1))/chPx);
-  const span=m.span!=null?m.span:1;
-  pxUni.textContent=[
-    m.artnet!=null?('Art-Net '+m.artnet):'',
-    m.sacn!=null?('sACN '+m.sacn):'',
-    m.ch!=null?('ch '+m.ch):'',
-    chPx?('ch/px '+chPx):'',
-    fit!=null?('first uni '+fit+' px'):'',
-    span>1?('span '+span):'',
-    m.split?'split universes':''
-  ].filter(Boolean).join(' · ')||'—';
+  if(!mapDirty){
+    const next=segsFromStatus(s);
+    const key=JSON.stringify(next);
+    if(key!==patchKey){
+      patch=next;
+      patchKey=key;
+      renderPatch();
+    }
+  }
 }
 function applyStats(s){
   applyChrome(s);
@@ -665,26 +660,20 @@ async function forget(){
     setStatus('Saved network forgotten. SoftAP is still up.');
   }catch(e){dropHint();}
 }
-function postBri(v){
-  postForm('/brightness',{v:String(v)}).then(()=>{briDirty=false;}).catch(dropHint);
+function postBri(v,i){
+  const fields={v:String(v)};
+  if(i!=null) fields.i=String(i);
+  postForm('/brightness',fields).then(()=>{briDirty=false;}).catch(dropHint);
 }
-function scheduleBri(v){
+function scheduleBri(v,i){
   v=Math.max(0,Math.min(255,v|0));
   briDirty=true;
-  showBri(v);
+  if(patch[i]) patch[i].bri=v;
   clearTimeout(briTimer);
-  briTimer=setTimeout(()=>postBri(v),300);
+  briTimer=setTimeout(()=>postBri(v,i),300);
 }
-function parseBriNum(){
-  const t=brinum.value.trim();
-  if(t===''||!/^\d+$/.test(t)) return null;
-  return parseInt(t,10);
-}
-briEl.oninput=()=>scheduleBri(+briEl.value);
-brinum.oninput=()=>{const n=parseBriNum();if(n!==null) scheduleBri(n);};
-brinum.onchange=()=>{const n=parseBriNum();if(n===null) showBri(+briEl.value); else scheduleBri(n);};
 function postLive(){
-  postForm('/live',{proto:protoEl.value,fps:fpsEl.value,buf:bufEl.value,park:parkEl.value})
+  postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value})
     .then(async r=>{if(!r.ok) throw new Error('http');liveDirty=false;applyMeta(await r.json());})
     .catch(dropHint);
 }
@@ -693,43 +682,227 @@ function scheduleLive(){
   clearTimeout(liveTimer);
   liveTimer=setTimeout(postLive,300);
 }
+function readPatchDom(){
+  const cards=patchList.querySelectorAll('.patch');
+  cards.forEach(card=>{
+    const i=+card.dataset.i;
+    if(!patch[i]) return;
+    const g=id=>card.querySelector('[data-f="'+id+'"]');
+    const proto=g('proto'); const chip=g('chip'); const data=g('data'); const clk=g('clk');
+    const count=g('count'); const white=g('white'); const cct=g('cct'); const order=g('order');
+    const uni=g('uni'); const ch=g('ch'); const bri=g('bri');
+    if(proto) patch[i].proto=proto.value;
+    if(chip) patch[i].chip=chip.value;
+    if(data) patch[i].data=Math.max(0,Math.min(48,parseInt(data.value,10)||0));
+    if(clk) patch[i].clk=Math.max(0,Math.min(48,parseInt(clk.value,10)||0));
+    if(count) patch[i].count=Math.max(1,Math.min(patchCaps.max_px,parseInt(count.value,10)||1));
+    if(white) patch[i].white=white.checked;
+    if(cct) patch[i].cct=cct.checked;
+    if(order) patch[i].order=order.value;
+    if(uni) patch[i].uni=Math.max(0,Math.min(32767,parseInt(uni.value,10)||0));
+    if(ch) patch[i].ch=Math.max(1,Math.min(512,parseInt(ch.value,10)||1));
+    if(bri) patch[i].bri=Math.max(0,Math.min(255,parseInt(bri.value,10)||0));
+  });
+  patch.forEach((row,i)=>{
+    const p=parentOf(patch,i);
+    if(p!==i){row.chip=patch[p].chip;row.clk=patch[p].clk;row.data=patch[p].data;}
+  });
+}
 function postMap(){
-  const count=Math.max(1,Math.min(1024,parseInt(pxCount.value,10)||64));
-  const data=Math.max(0,Math.min(48,parseInt(pxData.value,10)||0));
-  const clk=Math.max(0,Math.min(48,parseInt(pxClk.value,10)||0));
-  const uni=Math.max(0,Math.min(32767,parseInt(pxUniStart.value,10)||0));
-  const ch=Math.max(1,Math.min(512,parseInt(pxCh.value,10)||1));
-  pxCount.value=String(count);
-  pxData.value=String(data);
-  pxClk.value=String(clk||21);
-  pxUniStart.value=String(uni);
-  pxCh.value=String(ch);
-  cntwarn.className=count!==64?'on':'';
-  fillOrders(pxOrder.value);
-  return postForm('/map',{
-    chip:pxChip.value,order:pxOrder.value,data:String(data),clk:String(clk),
-    count:String(count),white:pxWhite.checked?'1':'0',cct:pxCct.checked?'1':'0',
-    uni:String(uni),ch:String(ch)
-  }).then(async r=>{
+  readPatchDom();
+  const fields={n:String(patch.length)};
+  patch.forEach((row,i)=>{
+    fields['proto'+i]=row.proto;
+    fields['chip'+i]=row.chip;
+    fields['data'+i]=String(row.data);
+    fields['clk'+i]=String(row.clk||0);
+    fields['count'+i]=String(row.count);
+    fields['white'+i]=row.white?'1':'0';
+    fields['cct'+i]=row.cct?'1':'0';
+    fields['order'+i]=row.order;
+    fields['uni'+i]=String(row.uni);
+    fields['ch'+i]=String(row.ch);
+    fields['bri'+i]=String(row.bri);
+  });
+  return postForm('/map',fields).then(async r=>{
       const s=await r.json().catch(()=>({}));
-      if(!r.ok){setNote(s.error||'Map save failed','err');return;}
+      if(!r.ok){setNote(s.error||'Map save failed','err');return false;}
       mapDirty=false;
-      setNote('');
+      setNote('Saved. Rebooting…');
       applyMeta(s);
+      return true;
     });
 }
 function markPatch(){mapDirty=true;}
+function addOutput(){
+  readPatchDom();
+  if(patch.length>=patchCaps.max_seg){setNote('Segment cap '+patchCaps.max_seg,'err');return;}
+  const pins=new Set(patch.map(r=>r.data));
+  if(pins.size>=patchCaps.max_out){setNote('Output cap '+patchCaps.max_out,'err');return;}
+  const row=defaultSeg();
+  row.data=unusedGpio(patch);
+  patch.push(row);
+  openSeg=patch.length-1;
+  markPatch();
+  renderPatch();
+}
+function addOnPin(parent){
+  readPatchDom();
+  if(patch.length>=patchCaps.max_seg){setNote('Segment cap '+patchCaps.max_seg,'err');return;}
+  const src=patch[parent];
+  const row=Object.assign({},src);
+  patch.splice(parent+1,0,row);
+  openSeg=parent+1;
+  markPatch();
+  renderPatch();
+}
+function moveSeg(i,dir){
+  readPatchDom();
+  const j=i+dir;
+  if(j<0||j>=patch.length) return;
+  if(patch[i].data!==patch[j].data) return;
+  const t=patch[i]; patch[i]=patch[j]; patch[j]=t;
+  openSeg=j;
+  markPatch();
+  renderPatch();
+}
+function removeSeg(i){
+  readPatchDom();
+  if(patch.length<=1) return;
+  patch.splice(i,1);
+  openSeg=Math.min(openSeg,patch.length-1);
+  markPatch();
+  renderPatch();
+}
+function renderPatch(){
+  if(!patchList) return;
+  const totals=groupCounts(patch);
+  const live=!!(idBtn&&idBtn.disabled);
+  patchList.innerHTML='';
+  patch.forEach((row,i)=>{
+    const child=isChild(patch,i);
+    const [g0,g1]=groupBounds(patch,i);
+    const card=document.createElement('div');
+    card.className='patch'+(child?' child':'')+(openSeg===i?' open':'');
+    card.dataset.i=String(i);
+    const title='GPIO '+row.data+' · '+(row.chip||'').toUpperCase()+' · '+(child?row.count:totals[row.data])+' px';
+    const locked=child?' disabled':'';
+    let ops='';
+    if(child){
+      const firstChild=g0+1;
+      const many=g1>firstChild;
+      if(many&&i>firstChild) ops+='<button class="icon" type="button" data-a="up" aria-label="Move up">▲</button>';
+      if(many&&i<g1) ops+='<button class="icon" type="button" data-a="down" aria-label="Move down">▼</button>';
+      ops+='<button class="icon" type="button" data-a="del" aria-label="Delete">🗑</button>';
+    }else{
+      ops+='<button type="button" data-a="seg">+</button>';
+      if(patch.length>1) ops+='<button class="icon" type="button" data-a="del" aria-label="Delete">🗑</button>';
+    }
+    card.innerHTML=
+      '<div class="patchhead"><b>'+escapeHtml(title)+'</b><div class="patchops">'+ops+
+      '</div></div><div class="patchbody">'+
+      '<label class="lab">Live protocol</label><select data-f="proto">'+
+      '<option value="auto"'+(row.proto==='auto'?' selected':'')+'>Auto</option>'+
+      '<option value="artnet"'+(row.proto==='artnet'?' selected':'')+'>Art-Net</option>'+
+      '<option value="sacn"'+(row.proto==='sacn'?' selected':'')+'>sACN</option></select>'+
+      '<label class="lab">IC type</label><select data-f="chip"'+locked+'>'+chipOpts(row.chip)+'</select>'+
+      '<label class="lab">Data GPIO</label><input data-f="data" type="number" min="0" max="48" value="'+row.data+'" inputmode="numeric"'+locked+'>'+
+      '<div class="clkrow'+(CLOCKED[row.chip]?' on':'')+'"><label class="lab">Clock GPIO</label>'+
+      '<input data-f="clk" type="number" min="1" max="48" value="'+(row.clk||21)+'" inputmode="numeric"'+locked+'></div>'+
+      '<label class="lab">Pixel count</label><input data-f="count" type="number" min="1" max="'+patchCaps.max_px+'" value="'+row.count+'" inputmode="numeric">'+
+      '<p class="cntwarn'+(row.count!==64?' on':'')+'">This board’s panel is 64 pixels (8×8).</p>'+
+      '<label class="tog"><input data-f="white" type="checkbox"'+(row.white?' checked':'')+'> White channel</label>'+
+      '<label class="tog"><input data-f="cct" type="checkbox"'+(row.cct?' checked':'')+'> CCT channel</label>'+
+      '<label class="lab">Color order</label><select data-f="order">'+orderOpts(row.white,row.cct,row.order)+'</select>'+
+      '<label class="lab">Starting universe</label><input data-f="uni" type="number" min="0" max="32767" value="'+row.uni+'" inputmode="numeric">'+
+      '<p class="hint">'+uniHint(row.proto)+'</p>'+
+      '<label class="lab">Starting channel</label><input data-f="ch" type="number" min="1" max="512" value="'+row.ch+'" inputmode="numeric">'+
+      '<label class="lab">Brightness</label><div class="brirow">'+
+      '<input data-f="bri" type="range" min="0" max="255" value="'+row.bri+'">'+
+      '<input data-f="brinum" type="number" min="0" max="255" value="'+row.bri+'" inputmode="numeric"></div>'+
+      '<p class="briwarn'+(row.bri>64?' on':'')+'">This 8×8 can overheat above 64.</p>'+
+      '<p class="readout">'+escapeHtml(uniReadout(row))+'</p></div>';
+    const head=card.querySelector('.patchhead');
+    head.onclick=e=>{
+      if(e.target.closest('.patchops')) return;
+      openSeg=openSeg===i?-1:i;
+      renderPatch();
+    };
+    card.querySelectorAll('.patchops button').forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        const a=btn.dataset.a;
+        if(a==='seg') addOnPin(i);
+        else if(a==='up') moveSeg(i,-1);
+        else if(a==='down') moveSeg(i,1);
+        else if(a==='del') removeSeg(i);
+      };
+      btn.disabled=live;
+    });
+    card.querySelectorAll('input,select').forEach(el=>{
+      el.disabled=live||el.disabled;
+      const f=el.getAttribute('data-f');
+      if(f==='bri'||f==='brinum'){
+        el.oninput=()=>{
+          const v=Math.max(0,Math.min(255,parseInt(el.value,10)||0));
+          const range=card.querySelector('[data-f="bri"]');
+          const num=card.querySelector('[data-f="brinum"]');
+          if(range) range.value=String(v);
+          if(num) num.value=String(v);
+          const warn=card.querySelector('.briwarn');
+          if(warn) warn.className='briwarn'+(v>64?' on':'');
+          scheduleBri(v,i);
+        };
+        return;
+      }
+      el.oninput=el.onchange=()=>{
+        markPatch();
+        if(f==='white'||f==='cct'){
+          const w=card.querySelector('[data-f="white"]');
+          const c=card.querySelector('[data-f="cct"]');
+          const ord=card.querySelector('[data-f="order"]');
+          if(ord) ord.innerHTML=orderOpts(w&&w.checked,c&&c.checked,ord.value);
+        }
+        if(f==='chip'){
+          const clk=card.querySelector('.clkrow');
+          if(clk) clk.className='clkrow'+(CLOCKED[el.value]?' on':'');
+        }
+        if(f==='data'&&!child){
+          readPatchDom();
+          renderPatch();
+          return;
+        }
+        if(f==='proto'){
+          const hint=card.querySelector('.hint');
+          if(hint) hint.textContent=uniHint(el.value);
+        }
+        const warn=card.querySelector('.cntwarn');
+        const cnt=card.querySelector('[data-f="count"]');
+        if(warn&&cnt) warn.className='cntwarn'+(parseInt(cnt.value,10)!==64?' on':'');
+      };
+    });
+    patchList.appendChild(card);
+  });
+  if(mapAdd) mapAdd.disabled=live||patch.length>=patchCaps.max_seg;
+}
 function savePatch(){
   mapSave.textContent='Saving…';
   mapSave.disabled=true;
   const jobs=[];
   if(mapDirty) jobs.push(postMap());
   if(liveDirty) jobs.push(postLive());
-  Promise.all(jobs).then(()=>{
+  Promise.all(jobs).then(results=>{
+    if(results.some(v=>v===true)){
+      mapSave.textContent='Rebooting…';
+      return;
+    }
     if(!mapDirty&&!liveDirty) setNote('');
-  }).catch(dropHint).finally(()=>{
     mapSave.textContent='Save';
     mapSave.disabled=!!(idBtn&&idBtn.disabled);
+  }).catch(e=>{
+    mapSave.textContent='Save';
+    mapSave.disabled=!!(idBtn&&idBtn.disabled);
+    dropHint();
   });
 }
 function parsePlayN(){
@@ -783,20 +956,11 @@ function endEdit(save){
     applyChrome(s);
   }).catch(()=>{nameDirty=false;nameEl.value=lastName;nameView.textContent=lastName;dropHint();});
 }
-protoEl.onchange=()=>{liveDirty=true;};
 fpsEl.onchange=scheduleLive;
 bufEl.onchange=scheduleLive;
 parkEl.onchange=scheduleLive;
-pxChip.onchange=()=>{showClk();markPatch();};
-pxOrder.onchange=markPatch;
-pxCount.oninput=markPatch;
-pxData.oninput=markPatch;
-pxClk.oninput=markPatch;
-pxUniStart.oninput=markPatch;
-pxCh.oninput=markPatch;
-pxWhite.onchange=()=>{fillOrders();markPatch();};
-pxCct.onchange=()=>{fillOrders();markPatch();};
 mapSave.onclick=savePatch;
+if(mapAdd) mapAdd.onclick=addOutput;
 folderrepEl.onchange=showPlayOpts;
 tabLive.onclick=()=>showTab('live');
 tabPlay.onclick=()=>showTab('play');
@@ -823,6 +987,14 @@ idBtn.onclick=()=>{
     setNote('');
   }).catch(()=>{idBtn.textContent='Identify';dropHint();});
 };
+rebootBtn.onclick=()=>{
+  if(!window.confirm('Reboot this node?')) return;
+  rebootBtn.disabled=true;
+  postForm('/reboot',{}).then(async r=>{
+    if(!r.ok){rebootBtn.disabled=false;const s=await r.json().catch(()=>({}));setNote(s.error||'Reboot failed','err');return;}
+    setNote('Rebooting…');
+  }).catch(()=>{rebootBtn.disabled=false;dropHint();});
+};
 document.getElementById('rename').onclick=()=>{
   if(playSrc!=='file'||!playPath) return;
   rendraft.value=displayName(playPath);
@@ -845,8 +1017,7 @@ document.getElementById('renok').onclick=()=>{
     applyMeta(s);
   }).catch(dropHint);
 };
-fillOrders();
-showClk();
+renderPatch();
 (async()=>{
   try{
     const s=await jget('/api/stats');

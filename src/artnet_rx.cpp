@@ -33,7 +33,9 @@ static uint32_t s_polls = 0;
 static uint32_t s_replies = 0;
 static uint32_t s_wrongUni = 0;
 static uint32_t s_syncs = 0;
+static bool s_want = false;
 static bool s_up = false;
+static uint32_t s_bindMs = 0;
 static bool s_loggedFirstDmx = false;
 static bool s_loggedFirstPoll = false;
 
@@ -58,11 +60,15 @@ static IPAddress nodeIp(const IPAddress &from) {
   const IPAddress staMask = WiFi.subnetMask();
   const IPAddress ap = WiFi.softAPIP();
   const IPAddress apMask(255, 255, 255, 0);
+  const bool onAp = !ipIsZero(ap) && sameSubnet(from, ap, apMask);
 
+  if (!ipIsZero(sta) && !onAp) {
+    return sta;
+  }
   if (!ipIsZero(sta) && !ipIsZero(staMask) && sameSubnet(from, sta, staMask)) {
     return sta;
   }
-  if (!ipIsZero(ap) && sameSubnet(from, ap, apMask)) {
+  if (onAp) {
     return ap;
   }
   if (!ipIsZero(sta)) {
@@ -127,7 +133,7 @@ static void buildPollReply(const IPAddress &ip) {
   s_reply[16] = verH;
   s_reply[17] = verL;
 
-  const uint16_t pa = PixelMap::cfg().startArtNetUniverse & 0x7FFF;
+  const uint16_t pa = PixelMap::firstArtNetUniverse() & 0x7FFF;
   s_reply[18] = static_cast<uint8_t>((pa >> 8) & 0x7F);
   s_reply[19] = static_cast<uint8_t>((pa >> 4) & 0x0F);
   s_reply[20] = 0x00;
@@ -224,7 +230,7 @@ static void sendPollReply(const IPAddress &from) {
     s_loggedFirstPoll = true;
     LOG_V("artnet", "poll from=%s reply ip=%s uni=%u dests=%u unicast=%u",
           from.toString().c_str(), ip.toString().c_str(),
-          PixelMap::cfg().startArtNetUniverse, n, uniOk ? 1u : 0u);
+          PixelMap::firstArtNetUniverse(), n, uniOk ? 1u : 0u);
   } else {
     LOG_V("artnet", "poll from=%s reply ip=%s", from.toString().c_str(),
           ip.toString().c_str());
@@ -258,9 +264,7 @@ static void parsePacket(int n, const IPAddress &from) {
   }
   const uint16_t uni =
       static_cast<uint16_t>(s_pkt[14] | (s_pkt[15] << 8)) & 0x7FFF;
-  const uint16_t start = PixelMap::cfg().startArtNetUniverse;
-  const uint16_t span = PixelMap::universeSpan();
-  if (uni < start || uni >= static_cast<uint16_t>(start + span)) {
+  if (!PixelMap::wantsArtNet(uni)) {
     ++s_wrongUni;
     return;
   }
@@ -286,6 +290,7 @@ static void parsePacket(int n, const IPAddress &from) {
 } // namespace
 
 void ArtNetRx::begin() {
+  s_want = true;
   if (s_up) {
     return;
   }
@@ -295,10 +300,11 @@ void ArtNetRx::begin() {
   }
   s_up = true;
   LOG_V("artnet", "listen :%u uni=%u", kArtNetPort,
-        PixelMap::cfg().startArtNetUniverse);
+        PixelMap::firstArtNetUniverse());
 }
 
 void ArtNetRx::stop() {
+  s_want = false;
   if (!s_up) {
     return;
   }
@@ -308,6 +314,9 @@ void ArtNetRx::stop() {
 }
 
 void ArtNetRx::onStaGotIp() {
+  if (!s_want) {
+    return;
+  }
   if (s_up) {
     s_udp.stop();
     s_up = false;
@@ -316,6 +325,13 @@ void ArtNetRx::onStaGotIp() {
 }
 
 void ArtNetRx::service() {
+  if (s_want && !s_up) {
+    const uint32_t now = millis();
+    if (now - s_bindMs >= 500) {
+      s_bindMs = now;
+      begin();
+    }
+  }
   if (!s_up) {
     return;
   }
@@ -342,7 +358,7 @@ void ArtNetRx::service() {
             static_cast<unsigned>(s_pkts), static_cast<unsigned>(s_dmxOk),
             static_cast<unsigned>(s_syncs), static_cast<unsigned>(s_polls),
             static_cast<unsigned>(s_replies),
-            PixelMap::cfg().startArtNetUniverse, s_seq,
+            PixelMap::firstArtNetUniverse(), s_seq,
             static_cast<unsigned>(s_wrongUni));
     }
   }

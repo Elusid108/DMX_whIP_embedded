@@ -25,14 +25,16 @@ static bool s_livePreemptedPlay = false;
 static uint8_t s_frame[kPlayMaxPayload];
 
 static void renderPacked(const uint8_t *d, uint16_t len) {
-  const uint16_t n = LedBus::count();
+  LedBus::clear();
+  const uint16_t n = PixelMap::outputPixelCount(0);
   const uint8_t ch = PixelMap::cfg().channelsPerPixel;
+  const uint16_t off = PixelMap::outputPixelOffset(0);
   for (uint16_t p = 0; p < n; ++p) {
     const uint16_t i = static_cast<uint16_t>(p * ch);
     if (ch >= 3 && static_cast<uint16_t>(i + ch) <= len) {
-      LedBus::setPacked(p, d + i);
+      LedBus::setPacked(static_cast<uint16_t>(off + p), d + i);
     } else {
-      LedBus::setRgb(p, 0, 0, 0);
+      LedBus::setRgb(static_cast<uint16_t>(off + p), 0, 0, 0);
     }
   }
 }
@@ -57,8 +59,9 @@ void setup() {
   LedCtrl::begin();
   LedBus::clear();
   LedBus::show();
-  LOG_V("led", "init pin=%u count=%u brightness=%u",
-        PixelMap::cfg().dataGpio, PixelMap::cfg().pixelCount, LedCtrl::get());
+  LOG_V("led", "init outs=%u segs=%u pin=%u count=%u brightness=%u",
+        PixelMap::outputCount(), PixelMap::segmentCount(),
+        PixelMap::cfg().dataGpio, PixelMap::totalPixels(), LedCtrl::get());
 }
 
 void loop() {
@@ -133,24 +136,10 @@ void loop() {
   if (live) {
     if (syncLive) {
       if (liveFence) {
-        const uint8_t *d = nullptr;
-        uint16_t len = 0;
-        const uint8_t *latest = nullptr;
-        uint16_t latestLen = 0;
-        while (LiveInput::pop(d, len)) {
-          latest = d;
-          latestLen = len;
-        }
-        if (latest) {
-          renderPacked(latest, latestLen);
-        }
+        LiveInput::renderLeds();
       }
     } else {
-      const uint8_t *d = nullptr;
-      uint16_t len = 0;
-      if (LiveInput::pop(d, len)) {
-        renderPacked(d, len);
-      }
+      LiveInput::renderLeds();
     }
   } else if (Identify::active()) {
     Identify::render(now);

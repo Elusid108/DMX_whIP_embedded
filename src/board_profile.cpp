@@ -73,7 +73,7 @@ const char *BoardProfile::flashClass() { return kBoardFlashClass; }
 
 uint8_t BoardProfile::ledPin() { return PixelMap::cfg().dataGpio; }
 
-uint16_t BoardProfile::ledCount() { return PixelMap::cfg().pixelCount; }
+uint16_t BoardProfile::ledCount() { return PixelMap::outputPixelCount(0); }
 
 uint8_t BoardProfile::sdCs() {
   loadNvs();

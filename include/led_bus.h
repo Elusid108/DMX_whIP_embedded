@@ -15,6 +15,7 @@ public:
   static uint16_t count();
   static void setRgb(uint16_t i, uint8_t r, uint8_t g, uint8_t b);
   static void setPacked(uint16_t i, const uint8_t *ch);
+  static void setOutputPacked(uint8_t out, const uint8_t *ch, uint16_t len);
   static void fillRgb(uint8_t r, uint8_t g, uint8_t b);
   static void clear();
 };

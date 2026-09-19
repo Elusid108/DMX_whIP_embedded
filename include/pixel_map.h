@@ -13,6 +13,7 @@
 //   DMX channel: 1-based lighting. Channel 1 is the first byte of a universe
 //     payload (offset 0).
 //   Logical DMX per pixel: R,G,B[,W][,C]. colorOrder is the IC wire order.
+// Same data GPIO = one physical chain; list order is wire order.
 // No serpentine remap — Resolume owns the fixture patch.
 
 enum class LedChipset : uint8_t {
@@ -58,6 +59,8 @@ enum class LedWire : uint8_t {
   Lpd6803 = 5
 };
 
+enum class SegProto : uint8_t { Auto = 0, ArtNet = 1, Sacn = 2 };
+
 static constexpr uint16_t kDmxUniverseSize = 512;
 static constexpr uint8_t kClockGpioNone = 0;
 static constexpr uint8_t kRgbChannels = 3;
@@ -81,6 +84,7 @@ struct PixelRgbAddr {
 };
 
 struct PixelMapCfg {
+  SegProto proto;
   LedChipset chipset;
   char colorOrder[6];
   uint8_t dataGpio;
@@ -94,10 +98,11 @@ struct PixelMapCfg {
   bool white;
   bool cct;
   bool splitAcrossUniverses;
-  uint8_t brightnessDefault;
+  uint8_t brightness;
 };
 
 struct PixelMapSet {
+  SegProto proto;
   LedChipset chipset;
   char colorOrder[6];
   uint8_t dataGpio;
@@ -107,9 +112,11 @@ struct PixelMapSet {
   uint16_t startChannel;
   bool white;
   bool cct;
+  uint8_t brightness;
 };
 
 static constexpr PixelMapCfg kMatrixPixelMap = {
+    SegProto::Auto,
     LedChipset::WS2812B,
     {'g', 'r', 'b', 0, 0, 0},
     kLedPin,
@@ -130,22 +137,56 @@ class PixelMap {
 public:
   static void begin();
   static const PixelMapCfg &cfg();
+  static const PixelMapCfg &segment(uint8_t i);
+  static uint8_t segmentCount();
+  static uint8_t outputCount();
+  static uint8_t firstSegmentOfOutput(uint8_t out);
+  static uint8_t segmentCountOfOutput(uint8_t out);
+  static uint8_t outputOfSegment(uint8_t seg);
+  static uint16_t outputPixelCount(uint8_t out);
+  static uint16_t outputPixelOffset(uint8_t out);
+  static uint16_t totalPixels();
   static uint16_t channelCount();
+  static uint16_t channelCount(uint8_t seg);
   static uint16_t universeSpan();
+  static uint16_t universeSpan(uint8_t seg);
   static uint16_t firstUniversePixels();
+  static uint16_t firstUniversePixels(uint8_t seg);
   static const char *chipsetName();
+  static const char *chipsetName(LedChipset chip);
   static const char *colorOrderName();
+  static const char *colorOrderName(uint8_t seg);
+  static const char *protoName(SegProto proto);
+  static const char *protoSummary();
   static LedWire wireKind();
+  static LedWire wireKind(LedChipset chip);
   static bool needsClock();
   static bool needsClock(LedChipset chip);
   static bool clocklessUnits(uint8_t &t1, uint8_t &t2, uint8_t &t3);
+  static bool clocklessUnits(LedChipset chip, uint8_t &t1, uint8_t &t2,
+                             uint8_t &t3);
   static bool parseChipset(const char *s, LedChipset &out);
+  static bool parseProto(const char *s, SegProto &out);
   static bool parseOrder(const char *s, char out[6], bool white, bool cct);
   static bool validOrder(const char *s, bool white, bool cct);
   static bool validDataGpio(uint8_t pin);
   static bool validClockGpio(uint8_t pin, uint8_t dataGpio, bool required);
   static bool validCount(uint16_t n);
+  static bool wantsArtNet(uint16_t uni);
+  static bool wantsSacn(uint16_t uni);
+  static bool anyArtNet();
+  static bool anySacn();
+  static bool allSacnOnly();
+  static uint16_t firstArtNetUniverse();
+  static uint16_t firstSacnUniverse();
+  static uint8_t collectSacnUniverses(uint16_t *out, uint8_t max);
   static bool set(const PixelMapSet &in, bool save);
+  static bool setAll(const PixelMapCfg *segs, uint8_t n, bool save);
+  static bool setAllProtos(SegProto proto, bool save);
+  static bool setSegmentBrightness(uint8_t i, uint8_t bri, bool save);
   static bool pixelOrigin(uint16_t pixelIndex, uint16_t &uniOff, uint16_t &ch1);
+  static bool pixelOrigin(uint8_t seg, uint16_t pixelIndex, uint16_t &uniOff,
+                          uint16_t &ch1);
   static bool lookupRgb(uint16_t pixelIndex, PixelRgbAddr &out);
+  static bool locatePixel(uint16_t globalIndex, uint8_t &seg, uint16_t &local);
 };

@@ -1,6 +1,7 @@
 #include "pixel_map.h"
 
 #include "board_profile.h"
+#include "live_cfg.h"
 #include "log.h"
 
 #include <Preferences.h>
@@ -10,6 +11,7 @@
 namespace {
 
 static constexpr char kPrefsNs[] = "pmap";
+static constexpr uint8_t kBlobVer = 1;
 
 struct ChipRow {
   LedChipset id;
@@ -54,7 +56,30 @@ static const ChipRow kChips[] = {
     {LedChipset::LPD6803, "lpd6803", LedWire::Lpd6803, 0, 0, 0},
 };
 
-static PixelMapCfg s_cfg = kMatrixPixelMap;
+#pragma pack(push, 1)
+struct SegBlob {
+  uint8_t proto;
+  uint8_t chip;
+  uint8_t data;
+  uint8_t clk;
+  uint8_t white;
+  uint8_t cct;
+  uint8_t bri;
+  char order[6];
+  uint16_t count;
+  uint16_t uni;
+  uint16_t ch;
+};
+#pragma pack(pop)
+
+static PixelMapCfg s_seg[kPatchMaxSegments];
+static uint8_t s_n = 1;
+static uint8_t s_outOf[kPatchMaxSegments];
+static uint8_t s_outFirst[kPatchMaxOutputs];
+static uint8_t s_outCount[kPatchMaxOutputs];
+static uint16_t s_outPxOff[kPatchMaxOutputs];
+static uint16_t s_outPxN[kPatchMaxOutputs];
+static uint8_t s_nOut = 1;
 static bool s_loaded = false;
 
 static const ChipRow *findChip(LedChipset id) {
@@ -156,23 +181,35 @@ static const char *legacyOrderName(uint8_t v) {
   }
 }
 
-static void applyDerived() {
-  s_cfg.channelsPerPixel = chPer(s_cfg.white, s_cfg.cct);
-  s_cfg.chipsPerPixel = s_cfg.channelsPerPixel;
-  s_cfg.startSacnUniverse =
-      static_cast<uint16_t>(s_cfg.startArtNetUniverse + 1);
-  const uint32_t spanCh = static_cast<uint32_t>(s_cfg.startChannel - 1) +
-                          static_cast<uint32_t>(s_cfg.pixelCount) *
-                              s_cfg.channelsPerPixel;
-  s_cfg.splitAcrossUniverses = spanCh > kDmxUniverseSize;
+static void applyDerived(PixelMapCfg &m) {
+  m.channelsPerPixel = chPer(m.white, m.cct);
+  m.chipsPerPixel = m.channelsPerPixel;
+  m.startSacnUniverse = static_cast<uint16_t>(m.startArtNetUniverse + 1);
+  if (m.proto == SegProto::Sacn && m.startSacnUniverse == 0) {
+    m.startSacnUniverse = 1;
+    m.startArtNetUniverse = 0;
+  }
+  const uint32_t spanCh = static_cast<uint32_t>(m.startChannel - 1) +
+                          static_cast<uint32_t>(m.pixelCount) *
+                              m.channelsPerPixel;
+  m.splitAcrossUniverses = spanCh > kDmxUniverseSize;
 }
 
-static PixelChan makeChan(const PixelMapCfg &m, uint16_t uniOff, uint16_t ch) {
-  PixelChan c;
-  c.artNetUniverse = static_cast<uint16_t>(m.startArtNetUniverse + uniOff);
-  c.sacnUniverse = static_cast<uint16_t>(m.startSacnUniverse + uniOff);
-  c.channel = ch;
-  return c;
+static uint16_t spanOf(const PixelMapCfg &m) {
+  if (m.pixelCount == 0 || m.channelsPerPixel == 0 || m.startChannel == 0) {
+    return 1;
+  }
+  const uint32_t last = static_cast<uint32_t>(m.startChannel - 1) +
+                        static_cast<uint32_t>(m.pixelCount) * m.channelsPerPixel -
+                        1u;
+  uint16_t span = static_cast<uint16_t>(last / kDmxUniverseSize + 1);
+  if (span == 0) {
+    span = 1;
+  }
+  if (span > kMaxUniverses) {
+    span = kMaxUniverses;
+  }
+  return span;
 }
 
 static bool mapPacked(const PixelMapCfg &m, uint16_t pixelIndex,
@@ -206,35 +243,268 @@ static bool mapWholePixels(const PixelMapCfg &m, uint16_t pixelIndex,
   return uniOff < kMaxUniverses;
 }
 
+static PixelChan makeChan(const PixelMapCfg &m, uint16_t uniOff, uint16_t ch) {
+  PixelChan c;
+  c.artNetUniverse = static_cast<uint16_t>(m.startArtNetUniverse + uniOff);
+  c.sacnUniverse = static_cast<uint16_t>(m.startSacnUniverse + uniOff);
+  c.channel = ch;
+  return c;
+}
+
+static void rebuildGroups() {
+  s_nOut = 0;
+  memset(s_outOf, 0, sizeof(s_outOf));
+  memset(s_outFirst, 0, sizeof(s_outFirst));
+  memset(s_outCount, 0, sizeof(s_outCount));
+  memset(s_outPxOff, 0, sizeof(s_outPxOff));
+  memset(s_outPxN, 0, sizeof(s_outPxN));
+  if (s_n == 0) {
+    s_n = 1;
+    s_seg[0] = kMatrixPixelMap;
+    applyDerived(s_seg[0]);
+  }
+  for (uint8_t i = 0; i < s_n; ++i) {
+    int found = -1;
+    for (uint8_t o = 0; o < s_nOut; ++o) {
+      if (s_seg[s_outFirst[o]].dataGpio == s_seg[i].dataGpio) {
+        found = static_cast<int>(o);
+        break;
+      }
+    }
+    if (found < 0) {
+      if (s_nOut >= kPatchMaxOutputs) {
+        found = 0;
+      } else {
+        found = static_cast<int>(s_nOut);
+        s_outFirst[s_nOut] = i;
+        s_outCount[s_nOut] = 0;
+        ++s_nOut;
+      }
+    }
+    const uint8_t o = static_cast<uint8_t>(found);
+    s_outOf[i] = o;
+    ++s_outCount[o];
+    const uint8_t parent = s_outFirst[o];
+    s_seg[i].chipset = s_seg[parent].chipset;
+    s_seg[i].clockGpio = s_seg[parent].clockGpio;
+  }
+  uint16_t acc = 0;
+  for (uint8_t o = 0; o < s_nOut; ++o) {
+    s_outPxOff[o] = acc;
+    uint16_t n = 0;
+    for (uint8_t i = 0; i < s_n; ++i) {
+      if (s_outOf[i] == o) {
+        n = static_cast<uint16_t>(n + s_seg[i].pixelCount);
+      }
+    }
+    s_outPxN[o] = n;
+    acc = static_cast<uint16_t>(acc + n);
+  }
+}
+
+static bool segOk(const PixelMapCfg &m) {
+  if (!validChip(m.chipset) || !PixelMap::validCount(m.pixelCount) ||
+      !PixelMap::validDataGpio(m.dataGpio) ||
+      !PixelMap::validClockGpio(m.clockGpio, m.dataGpio,
+                                PixelMap::needsClock(m.chipset)) ||
+      m.startChannel < 1 || m.startChannel > kDmxUniverseSize ||
+      m.startArtNetUniverse > 32767 ||
+      !validOrderStr(m.colorOrder, m.white, m.cct)) {
+    return false;
+  }
+  if (static_cast<uint8_t>(m.proto) > static_cast<uint8_t>(SegProto::Sacn)) {
+    return false;
+  }
+  return spanOf(m) <= kMaxUniverses;
+}
+
+static uint8_t countSlots(const PixelMapCfg *segs, uint8_t n) {
+  uint16_t art[kLiveUniSlots];
+  uint16_t sac[kLiveUniSlots];
+  uint8_t na = 0;
+  uint8_t ns = 0;
+  auto add = [](uint16_t *arr, uint8_t &c, uint16_t v) {
+    for (uint8_t i = 0; i < c; ++i) {
+      if (arr[i] == v) {
+        return;
+      }
+    }
+    if (c < kLiveUniSlots) {
+      arr[c++] = v;
+    }
+  };
+  for (uint8_t i = 0; i < n; ++i) {
+    const uint16_t span = spanOf(segs[i]);
+    if (segs[i].proto != SegProto::Sacn) {
+      for (uint16_t u = 0; u < span; ++u) {
+        add(art, na, static_cast<uint16_t>(segs[i].startArtNetUniverse + u));
+      }
+    }
+    if (segs[i].proto != SegProto::ArtNet) {
+      for (uint16_t u = 0; u < span; ++u) {
+        add(sac, ns, static_cast<uint16_t>(segs[i].startSacnUniverse + u));
+      }
+    }
+  }
+  return static_cast<uint8_t>(na + ns);
+}
+
+static bool normalize(PixelMapCfg *segs, uint8_t n) {
+  if (n < 1 || n > kPatchMaxSegments) {
+    return false;
+  }
+  uint32_t pixels = 0;
+  uint8_t outs = 0;
+  uint8_t pins[kPatchMaxOutputs];
+  for (uint8_t i = 0; i < n; ++i) {
+    applyDerived(segs[i]);
+    if (!segOk(segs[i])) {
+      return false;
+    }
+    bool seen = false;
+    for (uint8_t o = 0; o < outs; ++o) {
+      if (pins[o] == segs[i].dataGpio) {
+        seen = true;
+        for (uint8_t j = 0; j < i; ++j) {
+          if (segs[j].dataGpio == segs[i].dataGpio) {
+            segs[i].chipset = segs[j].chipset;
+            segs[i].clockGpio = segs[j].clockGpio;
+            applyDerived(segs[i]);
+            break;
+          }
+        }
+        break;
+      }
+    }
+    if (!seen) {
+      if (outs >= kPatchMaxOutputs) {
+        return false;
+      }
+      pins[outs++] = segs[i].dataGpio;
+    }
+    pixels += segs[i].pixelCount;
+  }
+  if (pixels < 1 || pixels > kLedCountMax) {
+    return false;
+  }
+  for (uint8_t i = 0; i < n; ++i) {
+    for (uint8_t j = 0; j < n; ++j) {
+      if (i == j) {
+        continue;
+      }
+      if (PixelMap::needsClock(segs[i].chipset) &&
+          segs[i].clockGpio == segs[j].dataGpio) {
+        return false;
+      }
+    }
+  }
+  if (countSlots(segs, n) > kLiveUniSlots) {
+    return false;
+  }
+  return true;
+}
+
+static void copySeg0Mirror() {
+  // no-op helper marker for save
+}
+
 static void saveNvs() {
   Preferences prefs;
   if (!prefs.begin(kPrefsNs, false)) {
     LOG_C("pmap", "nvs open failed");
     return;
   }
-  prefs.putUChar("chip", static_cast<uint8_t>(s_cfg.chipset));
-  prefs.putString("ords", s_cfg.colorOrder);
-  prefs.putUChar("data", s_cfg.dataGpio);
-  prefs.putUChar("clk", s_cfg.clockGpio);
-  prefs.putUShort("count", s_cfg.pixelCount);
-  prefs.putUShort("uni", s_cfg.startArtNetUniverse);
-  prefs.putUShort("ch", s_cfg.startChannel);
-  prefs.putUChar("white", s_cfg.white ? 1 : 0);
-  prefs.putUChar("cct", s_cfg.cct ? 1 : 0);
+  const PixelMapCfg &a = s_seg[0];
+  prefs.putUChar("chip", static_cast<uint8_t>(a.chipset));
+  prefs.putString("ords", a.colorOrder);
+  prefs.putUChar("data", a.dataGpio);
+  prefs.putUChar("clk", a.clockGpio);
+  prefs.putUShort("count", a.pixelCount);
+  prefs.putUShort("uni", a.startArtNetUniverse);
+  prefs.putUShort("ch", a.startChannel);
+  prefs.putUChar("white", a.white ? 1 : 0);
+  prefs.putUChar("cct", a.cct ? 1 : 0);
+  prefs.putUChar("proto", static_cast<uint8_t>(a.proto));
+  prefs.putUChar("bri", a.brightness);
+  prefs.putUChar("n", s_n);
+  uint8_t raw[2 + sizeof(SegBlob) * kPatchMaxSegments];
+  raw[0] = kBlobVer;
+  raw[1] = s_n;
+  for (uint8_t i = 0; i < s_n; ++i) {
+    SegBlob b;
+    memset(&b, 0, sizeof(b));
+    b.proto = static_cast<uint8_t>(s_seg[i].proto);
+    b.chip = static_cast<uint8_t>(s_seg[i].chipset);
+    b.data = s_seg[i].dataGpio;
+    b.clk = s_seg[i].clockGpio;
+    b.white = s_seg[i].white ? 1 : 0;
+    b.cct = s_seg[i].cct ? 1 : 0;
+    b.bri = s_seg[i].brightness;
+    memcpy(b.order, s_seg[i].colorOrder, sizeof(b.order));
+    b.count = s_seg[i].pixelCount;
+    b.uni = s_seg[i].startArtNetUniverse;
+    b.ch = s_seg[i].startChannel;
+    memcpy(raw + 2 + i * sizeof(SegBlob), &b, sizeof(b));
+  }
+  prefs.putBytes("blob", raw, 2 + s_n * sizeof(SegBlob));
   prefs.end();
+  (void)copySeg0Mirror;
 }
 
-static void loadNvs() {
-  if (s_loaded) {
-    return;
+static bool loadBlob(Preferences &prefs) {
+  const size_t need = 2 + sizeof(SegBlob);
+  const size_t got = prefs.getBytesLength("blob");
+  if (got < need) {
+    return false;
   }
-  s_loaded = true;
-  s_cfg = kMatrixPixelMap;
-  Preferences prefs;
-  if (!prefs.begin(kPrefsNs, true)) {
-    applyDerived();
-    return;
+  uint8_t raw[2 + sizeof(SegBlob) * kPatchMaxSegments];
+  const size_t nread = prefs.getBytes("blob", raw, sizeof(raw));
+  if (nread < need || raw[0] != kBlobVer || raw[1] < 1 ||
+      raw[1] > kPatchMaxSegments) {
+    return false;
   }
+  const uint8_t n = raw[1];
+  if (nread < 2 + n * sizeof(SegBlob)) {
+    return false;
+  }
+  PixelMapCfg tmp[kPatchMaxSegments];
+  for (uint8_t i = 0; i < n; ++i) {
+    SegBlob b;
+    memcpy(&b, raw + 2 + i * sizeof(SegBlob), sizeof(b));
+    tmp[i] = kMatrixPixelMap;
+    if (b.proto <= static_cast<uint8_t>(SegProto::Sacn)) {
+      tmp[i].proto = static_cast<SegProto>(b.proto);
+    }
+    if (validChip(static_cast<LedChipset>(b.chip))) {
+      tmp[i].chipset = static_cast<LedChipset>(b.chip);
+    }
+    tmp[i].dataGpio = b.data;
+    tmp[i].clockGpio = b.clk;
+    tmp[i].white = b.white != 0;
+    tmp[i].cct = b.cct != 0;
+    tmp[i].brightness = b.bri;
+    tmp[i].pixelCount = b.count;
+    tmp[i].startArtNetUniverse = b.uni;
+    tmp[i].startChannel = b.ch;
+    if (validOrderStr(b.order, tmp[i].white, tmp[i].cct)) {
+      memcpy(tmp[i].colorOrder, b.order, sizeof(tmp[i].colorOrder));
+    } else {
+      defaultOrder(tmp[i].colorOrder, tmp[i].white, tmp[i].cct);
+    }
+    applyDerived(tmp[i]);
+  }
+  if (!normalize(tmp, n)) {
+    return false;
+  }
+  memcpy(s_seg, tmp, sizeof(PixelMapCfg) * n);
+  s_n = n;
+  rebuildGroups();
+  return true;
+}
+
+static void loadLegacy(Preferences &prefs) {
+  s_seg[0] = kMatrixPixelMap;
+  s_n = 1;
   const uint8_t chip = prefs.getUChar("chip", 0xFF);
   const String ords = prefs.getString("ords", "");
   const uint8_t legacyOrder = prefs.getUChar("order", 0xFF);
@@ -245,59 +515,92 @@ static void loadNvs() {
   const uint16_t ch = prefs.getUShort("ch", 0);
   const uint8_t white = prefs.getUChar("white", 0xFF);
   const uint8_t cct = prefs.getUChar("cct", 0xFF);
-  prefs.end();
+  const uint8_t proto = prefs.getUChar("proto", 0xFF);
+  const uint8_t bri = prefs.getUChar("bri", 0xFF);
 
   if (chip != 0xFF && validChip(static_cast<LedChipset>(chip))) {
-    s_cfg.chipset = static_cast<LedChipset>(chip);
+    s_seg[0].chipset = static_cast<LedChipset>(chip);
   }
   if (white != 0xFF) {
-    s_cfg.white = white != 0;
+    s_seg[0].white = white != 0;
   }
   if (cct != 0xFF) {
-    s_cfg.cct = cct != 0;
+    s_seg[0].cct = cct != 0;
   }
   if (ords.length()) {
     char tmp[6];
     lowerCopy(tmp, sizeof(tmp), ords.c_str());
-    if (validOrderStr(tmp, s_cfg.white, s_cfg.cct)) {
-      memcpy(s_cfg.colorOrder, tmp, sizeof(s_cfg.colorOrder));
+    if (validOrderStr(tmp, s_seg[0].white, s_seg[0].cct)) {
+      memcpy(s_seg[0].colorOrder, tmp, sizeof(s_seg[0].colorOrder));
     } else {
-      defaultOrder(s_cfg.colorOrder, s_cfg.white, s_cfg.cct);
+      defaultOrder(s_seg[0].colorOrder, s_seg[0].white, s_seg[0].cct);
     }
   } else if (legacyOrder != 0xFF) {
-    lowerCopy(s_cfg.colorOrder, sizeof(s_cfg.colorOrder),
+    lowerCopy(s_seg[0].colorOrder, sizeof(s_seg[0].colorOrder),
               legacyOrderName(legacyOrder));
-    if (!validOrderStr(s_cfg.colorOrder, s_cfg.white, s_cfg.cct)) {
-      defaultOrder(s_cfg.colorOrder, s_cfg.white, s_cfg.cct);
+    if (!validOrderStr(s_seg[0].colorOrder, s_seg[0].white, s_seg[0].cct)) {
+      defaultOrder(s_seg[0].colorOrder, s_seg[0].white, s_seg[0].cct);
     }
   }
   if (data != 0xFF && PixelMap::validDataGpio(data)) {
-    s_cfg.dataGpio = data;
+    s_seg[0].dataGpio = data;
   }
   if (clk != 0xFF) {
-    s_cfg.clockGpio = clk;
+    s_seg[0].clockGpio = clk;
   }
   if (PixelMap::validCount(count)) {
-    s_cfg.pixelCount = count;
+    s_seg[0].pixelCount = count;
   }
   if (uni != 0xFFFF && uni <= 32767) {
-    s_cfg.startArtNetUniverse = uni;
+    s_seg[0].startArtNetUniverse = uni;
   }
   if (ch >= 1 && ch <= kDmxUniverseSize) {
-    s_cfg.startChannel = ch;
+    s_seg[0].startChannel = ch;
   }
-  applyDerived();
+  if (proto != 0xFF && proto <= static_cast<uint8_t>(SegProto::Sacn)) {
+    s_seg[0].proto = static_cast<SegProto>(proto);
+  } else {
+    s_seg[0].proto = static_cast<SegProto>(LiveCfg::proto());
+  }
+  if (bri != 0xFF) {
+    s_seg[0].brightness = bri;
+  }
+  applyDerived(s_seg[0]);
+  rebuildGroups();
+}
+
+static void loadNvs() {
+  if (s_loaded) {
+    return;
+  }
+  s_loaded = true;
+  s_seg[0] = kMatrixPixelMap;
+  s_n = 1;
+  applyDerived(s_seg[0]);
+  rebuildGroups();
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNs, true)) {
+    return;
+  }
+  if (!loadBlob(prefs)) {
+    loadLegacy(prefs);
+  }
+  prefs.end();
 }
 
 static void logCfg() {
-  const PixelMapCfg &m = s_cfg;
-  LOG_V("pmap",
-        "chip=%s order=%s data=%u clk=%u count=%u artnet=%u sacn=%u "
-        "start_ch=%u ch_px=%u white=%u cct=%u split=%u",
-        PixelMap::chipsetName(), PixelMap::colorOrderName(), m.dataGpio,
-        m.clockGpio, m.pixelCount, m.startArtNetUniverse, m.startSacnUniverse,
-        m.startChannel, m.channelsPerPixel, m.white ? 1u : 0u, m.cct ? 1u : 0u,
-        static_cast<unsigned>(m.splitAcrossUniverses));
+  LOG_V("pmap", "segs=%u outs=%u px=%u proto=%s", s_n, s_nOut,
+        PixelMap::totalPixels(), PixelMap::protoSummary());
+  for (uint8_t i = 0; i < s_n; ++i) {
+    const PixelMapCfg &m = s_seg[i];
+    LOG_V("pmap",
+          "seg%u out=%u proto=%s chip=%s order=%s data=%u clk=%u count=%u "
+          "artnet=%u sacn=%u ch=%u ch_px=%u bri=%u",
+          i, s_outOf[i], PixelMap::protoName(m.proto),
+          PixelMap::chipsetName(m.chipset), m.colorOrder, m.dataGpio,
+          m.clockGpio, m.pixelCount, m.startArtNetUniverse, m.startSacnUniverse,
+          m.startChannel, m.channelsPerPixel, m.brightness);
+  }
 }
 
 } // namespace
@@ -309,36 +612,94 @@ void PixelMap::begin() {
 
 const PixelMapCfg &PixelMap::cfg() {
   loadNvs();
-  return s_cfg;
+  return s_seg[0];
 }
 
-uint16_t PixelMap::channelCount() {
-  const PixelMapCfg &m = cfg();
+const PixelMapCfg &PixelMap::segment(uint8_t i) {
+  loadNvs();
+  if (i >= s_n) {
+    return s_seg[0];
+  }
+  return s_seg[i];
+}
+
+uint8_t PixelMap::segmentCount() {
+  loadNvs();
+  return s_n;
+}
+
+uint8_t PixelMap::outputCount() {
+  loadNvs();
+  return s_nOut;
+}
+
+uint8_t PixelMap::firstSegmentOfOutput(uint8_t out) {
+  loadNvs();
+  if (out >= s_nOut) {
+    return 0;
+  }
+  return s_outFirst[out];
+}
+
+uint8_t PixelMap::segmentCountOfOutput(uint8_t out) {
+  loadNvs();
+  if (out >= s_nOut) {
+    return 0;
+  }
+  return s_outCount[out];
+}
+
+uint8_t PixelMap::outputOfSegment(uint8_t seg) {
+  loadNvs();
+  if (seg >= s_n) {
+    return 0;
+  }
+  return s_outOf[seg];
+}
+
+uint16_t PixelMap::outputPixelCount(uint8_t out) {
+  loadNvs();
+  if (out >= s_nOut) {
+    return 0;
+  }
+  return s_outPxN[out];
+}
+
+uint16_t PixelMap::outputPixelOffset(uint8_t out) {
+  loadNvs();
+  if (out >= s_nOut) {
+    return 0;
+  }
+  return s_outPxOff[out];
+}
+
+uint16_t PixelMap::totalPixels() {
+  loadNvs();
+  uint16_t n = 0;
+  for (uint8_t i = 0; i < s_n; ++i) {
+    n = static_cast<uint16_t>(n + s_seg[i].pixelCount);
+  }
+  return n;
+}
+
+uint16_t PixelMap::channelCount() { return channelCount(0); }
+
+uint16_t PixelMap::channelCount(uint8_t seg) {
+  const PixelMapCfg &m = segment(seg);
   return static_cast<uint16_t>(m.pixelCount * m.channelsPerPixel);
 }
 
-uint16_t PixelMap::universeSpan() {
-  const PixelMapCfg &m = cfg();
-  if (m.pixelCount == 0) {
-    return 1;
-  }
-  uint16_t uniOff = 0;
-  uint16_t ch1 = 1;
-  if (!pixelOrigin(static_cast<uint16_t>(m.pixelCount - 1), uniOff, ch1)) {
-    return 1;
-  }
-  uint16_t span = static_cast<uint16_t>(uniOff + 1);
-  if (span > kMaxUniverses) {
-    span = kMaxUniverses;
-  }
-  if (span == 0) {
-    span = 1;
-  }
-  return span;
+uint16_t PixelMap::universeSpan() { return universeSpan(0); }
+
+uint16_t PixelMap::universeSpan(uint8_t seg) {
+  loadNvs();
+  return spanOf(segment(seg));
 }
 
-uint16_t PixelMap::firstUniversePixels() {
-  const PixelMapCfg &m = cfg();
+uint16_t PixelMap::firstUniversePixels() { return firstUniversePixels(0); }
+
+uint16_t PixelMap::firstUniversePixels(uint8_t seg) {
+  const PixelMapCfg &m = segment(seg);
   const uint8_t n = m.channelsPerPixel;
   if (n == 0 || m.startChannel == 0 || m.startChannel > kDmxUniverseSize) {
     return 0;
@@ -348,18 +709,64 @@ uint16_t PixelMap::firstUniversePixels() {
   return static_cast<uint16_t>(slots / n);
 }
 
-const char *PixelMap::chipsetName() {
-  const ChipRow *row = findChip(cfg().chipset);
+const char *PixelMap::chipsetName() { return chipsetName(cfg().chipset); }
+
+const char *PixelMap::chipsetName(LedChipset chip) {
+  const ChipRow *row = findChip(chip);
   return row != nullptr ? row->name : "ws2812b";
 }
 
-const char *PixelMap::colorOrderName() {
+const char *PixelMap::colorOrderName() { return colorOrderName(0); }
+
+const char *PixelMap::colorOrderName(uint8_t seg) {
   loadNvs();
-  return s_cfg.colorOrder;
+  return segment(seg).colorOrder;
 }
 
-LedWire PixelMap::wireKind() {
-  const ChipRow *row = findChip(cfg().chipset);
+const char *PixelMap::protoName(SegProto proto) {
+  switch (proto) {
+  case SegProto::ArtNet:
+    return "artnet";
+  case SegProto::Sacn:
+    return "sacn";
+  case SegProto::Auto:
+  default:
+    return "auto";
+  }
+}
+
+const char *PixelMap::protoSummary() {
+  loadNvs();
+  bool art = false;
+  bool sac = false;
+  bool aut = false;
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto == SegProto::ArtNet) {
+      art = true;
+    } else if (s_seg[i].proto == SegProto::Sacn) {
+      sac = true;
+    } else {
+      aut = true;
+    }
+  }
+  const uint8_t kinds =
+      static_cast<uint8_t>((art ? 1 : 0) + (sac ? 1 : 0) + (aut ? 1 : 0));
+  if (kinds > 1) {
+    return "mixed";
+  }
+  if (art) {
+    return "artnet";
+  }
+  if (sac) {
+    return "sacn";
+  }
+  return "auto";
+}
+
+LedWire PixelMap::wireKind() { return wireKind(cfg().chipset); }
+
+LedWire PixelMap::wireKind(LedChipset chip) {
+  const ChipRow *row = findChip(chip);
   return row != nullptr ? row->wire : LedWire::Clockless;
 }
 
@@ -371,7 +778,12 @@ bool PixelMap::needsClock(LedChipset chip) {
 bool PixelMap::needsClock() { return needsClock(cfg().chipset); }
 
 bool PixelMap::clocklessUnits(uint8_t &t1, uint8_t &t2, uint8_t &t3) {
-  const ChipRow *row = findChip(cfg().chipset);
+  return clocklessUnits(cfg().chipset, t1, t2, t3);
+}
+
+bool PixelMap::clocklessUnits(LedChipset chip, uint8_t &t1, uint8_t &t2,
+                              uint8_t &t3) {
+  const ChipRow *row = findChip(chip);
   if (row == nullptr || row->wire != LedWire::Clockless) {
     return false;
   }
@@ -390,6 +802,25 @@ bool PixelMap::parseChipset(const char *s, LedChipset &out) {
       out = kChips[i].id;
       return true;
     }
+  }
+  return false;
+}
+
+bool PixelMap::parseProto(const char *s, SegProto &out) {
+  if (s == nullptr) {
+    return false;
+  }
+  if (strcasecmp(s, "auto") == 0) {
+    out = SegProto::Auto;
+    return true;
+  }
+  if (strcasecmp(s, "artnet") == 0) {
+    out = SegProto::ArtNet;
+    return true;
+  }
+  if (strcasecmp(s, "sacn") == 0) {
+    out = SegProto::Sacn;
+    return true;
   }
   return false;
 }
@@ -427,52 +858,213 @@ bool PixelMap::validDataGpio(uint8_t pin) {
 
 bool PixelMap::validClockGpio(uint8_t pin, uint8_t dataGpio, bool required) {
   if (!required) {
-    return pin == kClockGpioNone ||
-           (pin != dataGpio && validDataGpio(pin));
+    return pin == kClockGpioNone || (pin != dataGpio && validDataGpio(pin));
   }
   return pin != kClockGpioNone && pin != dataGpio && validDataGpio(pin);
 }
 
-bool PixelMap::set(const PixelMapSet &in, bool save) {
-  if (!validChip(in.chipset) || !validCount(in.pixelCount) ||
-      !validDataGpio(in.dataGpio) ||
-      !validClockGpio(in.clockGpio, in.dataGpio, needsClock(in.chipset)) ||
-      in.startChannel < 1 || in.startChannel > kDmxUniverseSize ||
-      in.startArtNetUniverse > 32767 ||
-      !validOrderStr(in.colorOrder, in.white, in.cct)) {
+bool PixelMap::wantsArtNet(uint16_t uni) {
+  loadNvs();
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto == SegProto::Sacn) {
+      continue;
+    }
+    const uint16_t start = s_seg[i].startArtNetUniverse;
+    const uint16_t span = spanOf(s_seg[i]);
+    if (uni >= start && uni < static_cast<uint16_t>(start + span)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PixelMap::wantsSacn(uint16_t uni) {
+  loadNvs();
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto == SegProto::ArtNet) {
+      continue;
+    }
+    const uint16_t start = s_seg[i].startSacnUniverse;
+    const uint16_t span = spanOf(s_seg[i]);
+    if (uni >= start && uni < static_cast<uint16_t>(start + span)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PixelMap::anyArtNet() {
+  loadNvs();
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto != SegProto::Sacn) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PixelMap::anySacn() {
+  loadNvs();
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto != SegProto::ArtNet) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool PixelMap::allSacnOnly() {
+  loadNvs();
+  if (s_n == 0) {
     return false;
   }
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto != SegProto::Sacn) {
+      return false;
+    }
+  }
+  return true;
+}
+
+uint16_t PixelMap::firstArtNetUniverse() {
   loadNvs();
-  const bool changed =
-      in.chipset != s_cfg.chipset ||
-      strcmp(in.colorOrder, s_cfg.colorOrder) != 0 ||
-      in.dataGpio != s_cfg.dataGpio || in.clockGpio != s_cfg.clockGpio ||
-      in.pixelCount != s_cfg.pixelCount ||
-      in.startArtNetUniverse != s_cfg.startArtNetUniverse ||
-      in.startChannel != s_cfg.startChannel || in.white != s_cfg.white ||
-      in.cct != s_cfg.cct;
-  s_cfg.chipset = in.chipset;
-  memcpy(s_cfg.colorOrder, in.colorOrder, sizeof(s_cfg.colorOrder));
-  s_cfg.dataGpio = in.dataGpio;
-  s_cfg.clockGpio = needsClock(in.chipset) ? in.clockGpio : kClockGpioNone;
-  s_cfg.pixelCount = in.pixelCount;
-  s_cfg.startArtNetUniverse = in.startArtNetUniverse;
-  s_cfg.startChannel = in.startChannel;
-  s_cfg.white = in.white;
-  s_cfg.cct = in.cct;
-  applyDerived();
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto != SegProto::Sacn) {
+      return s_seg[i].startArtNetUniverse;
+    }
+  }
+  return s_seg[0].startArtNetUniverse;
+}
+
+uint16_t PixelMap::firstSacnUniverse() {
+  loadNvs();
+  for (uint8_t i = 0; i < s_n; ++i) {
+    if (s_seg[i].proto != SegProto::ArtNet) {
+      return s_seg[i].startSacnUniverse;
+    }
+  }
+  return s_seg[0].startSacnUniverse;
+}
+
+uint8_t PixelMap::collectSacnUniverses(uint16_t *out, uint8_t max) {
+  loadNvs();
+  uint8_t n = 0;
+  if (out == nullptr || max == 0) {
+    return 0;
+  }
+  for (uint8_t i = 0; i < s_n && n < max; ++i) {
+    if (s_seg[i].proto == SegProto::ArtNet) {
+      continue;
+    }
+    const uint16_t start = s_seg[i].startSacnUniverse;
+    const uint16_t span = spanOf(s_seg[i]);
+    for (uint16_t u = 0; u < span && n < max; ++u) {
+      const uint16_t uni = static_cast<uint16_t>(start + u);
+      bool seen = false;
+      for (uint8_t j = 0; j < n; ++j) {
+        if (out[j] == uni) {
+          seen = true;
+          break;
+        }
+      }
+      if (!seen) {
+        out[n++] = uni;
+      }
+    }
+  }
+  return n;
+}
+
+bool PixelMap::set(const PixelMapSet &in, bool save) {
+  PixelMapCfg m = cfg();
+  m.proto = in.proto;
+  m.chipset = in.chipset;
+  memcpy(m.colorOrder, in.colorOrder, sizeof(m.colorOrder));
+  m.dataGpio = in.dataGpio;
+  m.clockGpio = needsClock(in.chipset) ? in.clockGpio : kClockGpioNone;
+  m.pixelCount = in.pixelCount;
+  m.startArtNetUniverse = in.startArtNetUniverse;
+  m.startChannel = in.startChannel;
+  m.white = in.white;
+  m.cct = in.cct;
+  m.brightness = in.brightness;
+  applyDerived(m);
+  PixelMapCfg tmp[kPatchMaxSegments];
+  loadNvs();
+  memcpy(tmp, s_seg, sizeof(PixelMapCfg) * s_n);
+  tmp[0] = m;
+  if (!normalize(tmp, s_n)) {
+    return false;
+  }
+  memcpy(s_seg, tmp, sizeof(PixelMapCfg) * s_n);
+  rebuildGroups();
   if (save) {
     saveNvs();
   }
-  if (changed) {
-    logCfg();
+  logCfg();
+  return true;
+}
+
+bool PixelMap::setAll(const PixelMapCfg *segs, uint8_t n, bool save) {
+  if (segs == nullptr) {
+    return false;
+  }
+  PixelMapCfg tmp[kPatchMaxSegments];
+  memcpy(tmp, segs, sizeof(PixelMapCfg) * n);
+  if (!normalize(tmp, n)) {
+    return false;
+  }
+  loadNvs();
+  memcpy(s_seg, tmp, sizeof(PixelMapCfg) * n);
+  s_n = n;
+  rebuildGroups();
+  if (save) {
+    saveNvs();
+  }
+  logCfg();
+  return true;
+}
+
+bool PixelMap::setAllProtos(SegProto proto, bool save) {
+  loadNvs();
+  PixelMapCfg tmp[kPatchMaxSegments];
+  memcpy(tmp, s_seg, sizeof(PixelMapCfg) * s_n);
+  for (uint8_t i = 0; i < s_n; ++i) {
+    tmp[i].proto = proto;
+    applyDerived(tmp[i]);
+  }
+  if (!normalize(tmp, s_n)) {
+    return false;
+  }
+  memcpy(s_seg, tmp, sizeof(PixelMapCfg) * s_n);
+  rebuildGroups();
+  if (save) {
+    saveNvs();
+  }
+  logCfg();
+  return true;
+}
+
+bool PixelMap::setSegmentBrightness(uint8_t i, uint8_t bri, bool save) {
+  loadNvs();
+  if (i >= s_n) {
+    return false;
+  }
+  s_seg[i].brightness = bri;
+  if (save) {
+    saveNvs();
   }
   return true;
 }
 
 bool PixelMap::pixelOrigin(uint16_t pixelIndex, uint16_t &uniOff,
                            uint16_t &ch1) {
-  const PixelMapCfg &m = cfg();
+  return pixelOrigin(0, pixelIndex, uniOff, ch1);
+}
+
+bool PixelMap::pixelOrigin(uint8_t seg, uint16_t pixelIndex, uint16_t &uniOff,
+                           uint16_t &ch1) {
+  const PixelMapCfg &m = segment(seg);
   if (pixelIndex >= m.pixelCount || m.channelsPerPixel < kRgbChannels ||
       m.startChannel == 0 || m.startChannel > kDmxUniverseSize) {
     return false;
@@ -494,4 +1086,24 @@ bool PixelMap::lookupRgb(uint16_t pixelIndex, PixelRgbAddr &out) {
   out.g = makeChan(m, uniOff, static_cast<uint16_t>(ch1 + 1));
   out.b = makeChan(m, uniOff, static_cast<uint16_t>(ch1 + 2));
   return true;
+}
+
+bool PixelMap::locatePixel(uint16_t globalIndex, uint8_t &seg, uint16_t &local) {
+  loadNvs();
+  uint16_t acc = 0;
+  for (uint8_t o = 0; o < s_nOut; ++o) {
+    for (uint8_t i = 0; i < s_n; ++i) {
+      if (s_outOf[i] != o) {
+        continue;
+      }
+      const uint16_t n = s_seg[i].pixelCount;
+      if (globalIndex < static_cast<uint16_t>(acc + n)) {
+        seg = i;
+        local = static_cast<uint16_t>(globalIndex - acc);
+        return true;
+      }
+      acc = static_cast<uint16_t>(acc + n);
+    }
+  }
+  return false;
 }

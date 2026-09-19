@@ -40,6 +40,7 @@ static constexpr uint16_t kDnsPort = 53;
 static constexpr uint32_t kConnectTimeoutMs = 20000;
 static constexpr uint32_t kScanDwellMs = 75;
 static constexpr uint32_t kDisconnectGraceMs = 800;
+static constexpr uint32_t kRebootDelayMs = 300;
 static constexpr int kMaxNets = 24;
 static constexpr char kPrefsNs[] = "wifi";
 
@@ -57,7 +58,9 @@ static bool s_apUp = false;
 static volatile bool s_gotIp = false;
 static volatile bool s_discPending = false;
 static volatile bool s_lostPending = false;
+static bool s_staIpPending = false;
 static volatile uint8_t s_discReason = 0;
+static uint32_t s_rebootAt = 0;
 
 static File s_uploadFile;
 static char s_uploadPath[kSdPathLen];
@@ -259,6 +262,37 @@ static void appendSd(String &out) {
   out += '}';
 }
 
+static void appendSeg(String &out, uint8_t i) {
+  const PixelMapCfg &m = PixelMap::segment(i);
+  out += "{\"proto\":";
+  jsonEscape(out, String(PixelMap::protoName(m.proto)));
+  out += ",\"order\":";
+  jsonEscape(out, String(m.colorOrder));
+  out += ",\"count\":";
+  out += static_cast<unsigned>(m.pixelCount);
+  out += ",\"white\":";
+  out += m.white ? "true" : "false";
+  out += ",\"cct\":";
+  out += m.cct ? "true" : "false";
+  out += ",\"artnet\":";
+  out += static_cast<unsigned>(m.startArtNetUniverse);
+  out += ",\"sacn\":";
+  out += static_cast<unsigned>(m.startSacnUniverse);
+  out += ",\"ch\":";
+  out += static_cast<unsigned>(m.startChannel);
+  out += ",\"ch_px\":";
+  out += static_cast<unsigned>(m.channelsPerPixel);
+  out += ",\"span\":";
+  out += static_cast<unsigned>(PixelMap::universeSpan(i));
+  out += ",\"fit\":";
+  out += static_cast<unsigned>(PixelMap::firstUniversePixels(i));
+  out += ",\"split\":";
+  out += m.splitAcrossUniverses ? "true" : "false";
+  out += ",\"bri\":";
+  out += static_cast<unsigned>(m.brightness);
+  out += '}';
+}
+
 static void appendMap(String &out) {
   const PixelMapCfg &m = PixelMap::cfg();
   out += "\"map\":{\"chip\":";
@@ -289,12 +323,59 @@ static void appendMap(String &out) {
   out += static_cast<unsigned>(PixelMap::universeSpan());
   out += ",\"fit\":";
   out += static_cast<unsigned>(PixelMap::firstUniversePixels());
+  out += ",\"proto\":";
+  jsonEscape(out, String(PixelMap::protoName(m.proto)));
+  out += ",\"bri\":";
+  out += static_cast<unsigned>(m.brightness);
+  out += '}';
+}
+
+static void appendOutputs(String &out) {
+  out += "\"outputs\":[";
+  const uint8_t nOut = PixelMap::outputCount();
+  const uint8_t nSeg = PixelMap::segmentCount();
+  for (uint8_t o = 0; o < nOut; ++o) {
+    if (o) {
+      out += ',';
+    }
+    const uint8_t parent = PixelMap::firstSegmentOfOutput(o);
+    const PixelMapCfg &m = PixelMap::segment(parent);
+    out += "{\"data\":";
+    out += static_cast<unsigned>(m.dataGpio);
+    out += ",\"clk\":";
+    out += static_cast<unsigned>(m.clockGpio);
+    out += ",\"chip\":";
+    jsonEscape(out, String(PixelMap::chipsetName(m.chipset)));
+    out += ",\"count\":";
+    out += static_cast<unsigned>(PixelMap::outputPixelCount(o));
+    out += ",\"segs\":[";
+    bool first = true;
+    for (uint8_t i = 0; i < nSeg; ++i) {
+      if (PixelMap::outputOfSegment(i) != o) {
+        continue;
+      }
+      if (!first) {
+        out += ',';
+      }
+      first = false;
+      appendSeg(out, i);
+    }
+    out += "]}";
+  }
+  out += "],\"patch\":{\"max_out\":";
+  out += static_cast<unsigned>(kPatchMaxOutputs);
+  out += ",\"max_seg\":";
+  out += static_cast<unsigned>(kPatchMaxSegments);
+  out += ",\"max_px\":";
+  out += static_cast<unsigned>(kLedCountMax);
+  out += ",\"slots\":";
+  out += static_cast<unsigned>(kLiveUniSlots);
   out += '}';
 }
 
 static void sendStatus(int code) {
   String out;
-  out.reserve(4096);
+  out.reserve(8192);
   out += "{\"state\":\"";
   out += stateName();
   out += "\",\"ver\":";
@@ -340,6 +421,8 @@ static void sendStatus(int code) {
   appendSd(out);
   out += ',';
   appendMap(out);
+  out += ',';
+  appendOutputs(out);
   out += ",\"pins\":{\"led\":";
   out += static_cast<unsigned>(PixelMap::cfg().dataGpio);
   out += ",\"sd\":{\"cs\":";
@@ -352,7 +435,7 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(BoardProfile::sdMiso());
   out += "}}";
   out += ",\"proto\":";
-  jsonEscape(out, String(LiveCfg::protoName()));
+  jsonEscape(out, String(PixelMap::protoSummary()));
   out += ",\"fps\":";
   out += static_cast<unsigned>(LiveCfg::fps());
   out += ",\"buf\":";
@@ -443,7 +526,7 @@ static void handleScan() {
 static void sendStats() {
   const bool live = LiveInput::active();
   String out;
-  out.reserve(1536);
+  out.reserve(4096);
   out += "{\"state\":\"";
   out += stateName();
   out += "\",\"ver\":";
@@ -486,7 +569,7 @@ static void sendStats() {
   out += ',';
   appendSd(out);
   out += ",\"proto\":";
-  jsonEscape(out, String(LiveCfg::protoName()));
+  jsonEscape(out, String(PixelMap::protoSummary()));
   out += ",\"fps\":";
   out += static_cast<unsigned>(LiveCfg::fps());
   out += ",\"buf\":";
@@ -523,6 +606,8 @@ static void sendStats() {
   out += static_cast<unsigned>(Playback::frameIndex());
   out += "},";
   appendMap(out);
+  out += ',';
+  appendOutputs(out);
   out += '}';
   sendJson(200, out);
 }
@@ -554,6 +639,17 @@ static void handleIdentify() {
   sendJson(200, out);
 }
 
+static void armReboot() {
+  s_rebootAt = millis() + kRebootDelayMs;
+  LOG_V("wifi", "reboot armed");
+}
+
+// Live-ok: a wedged show stream is when a remote restart is most useful.
+static void handleReboot() {
+  sendJson(200, "{\"ok\":true}");
+  armReboot();
+}
+
 static void handleBrightness() {
   if (!s_server.hasArg("v")) {
     sendJson(400, "{\"error\":\"bad v\"}");
@@ -564,6 +660,22 @@ static void handleBrightness() {
   const long v = strtol(arg.c_str(), &end, 10);
   if (end == arg.c_str() || *end != '\0' || v < 0 || v > 255) {
     sendJson(400, "{\"error\":\"bad v\"}");
+    return;
+  }
+  if (s_server.hasArg("i")) {
+    const String iarg = s_server.arg("i");
+    const long i = strtol(iarg.c_str(), &end, 10);
+    if (end == iarg.c_str() || *end != '\0' || i < 0 ||
+        i >= PixelMap::segmentCount()) {
+      sendJson(400, "{\"error\":\"bad i\"}");
+      return;
+    }
+    if (!PixelMap::setSegmentBrightness(static_cast<uint8_t>(i),
+                                        static_cast<uint8_t>(v), true)) {
+      sendJson(400, "{\"error\":\"bad i\"}");
+      return;
+    }
+    sendStatus(200);
     return;
   }
   LedCtrl::set(static_cast<uint8_t>(v), true);
@@ -620,13 +732,144 @@ static bool parseBool01(const String &arg, bool &out) {
   return false;
 }
 
+static String argName(const char *base, uint8_t i) {
+  String s(base);
+  s += static_cast<unsigned>(i);
+  return s;
+}
+
+static bool parseLongArg(const String &arg, long minV, long maxV, long &out) {
+  char *end = nullptr;
+  const long v = strtol(arg.c_str(), &end, 10);
+  if (end == arg.c_str() || *end != '\0' || v < minV || v > maxV) {
+    return false;
+  }
+  out = v;
+  return true;
+}
+
+static bool handleMapAll() {
+  const String narg = s_server.arg("n");
+  long n = 0;
+  if (!parseLongArg(narg, 1, kPatchMaxSegments, n)) {
+    return false;
+  }
+  PixelMapCfg segs[kPatchMaxSegments];
+  for (uint8_t i = 0; i < static_cast<uint8_t>(n); ++i) {
+    segs[i] = (i < PixelMap::segmentCount()) ? PixelMap::segment(i)
+                                            : kMatrixPixelMap;
+    const String protoK = argName("proto", i);
+    const String chipK = argName("chip", i);
+    const String dataK = argName("data", i);
+    const String clkK = argName("clk", i);
+    const String countK = argName("count", i);
+    const String whiteK = argName("white", i);
+    const String cctK = argName("cct", i);
+    const String orderK = argName("order", i);
+    const String uniK = argName("uni", i);
+    const String chK = argName("ch", i);
+    const String briK = argName("bri", i);
+    if (s_server.hasArg(protoK) &&
+        !PixelMap::parseProto(s_server.arg(protoK).c_str(), segs[i].proto)) {
+      return false;
+    }
+    if (s_server.hasArg(chipK) &&
+        !PixelMap::parseChipset(s_server.arg(chipK).c_str(), segs[i].chipset)) {
+      return false;
+    }
+    if (s_server.hasArg(whiteK) &&
+        !parseBool01(s_server.arg(whiteK), segs[i].white)) {
+      return false;
+    }
+    if (s_server.hasArg(cctK) && !parseBool01(s_server.arg(cctK), segs[i].cct)) {
+      return false;
+    }
+    if (s_server.hasArg(orderK)) {
+      if (!PixelMap::parseOrder(s_server.arg(orderK).c_str(), segs[i].colorOrder,
+                                segs[i].white, segs[i].cct)) {
+        if (segs[i].white && segs[i].cct) {
+          memcpy(segs[i].colorOrder, "grbwc", 6);
+        } else if (segs[i].white) {
+          memcpy(segs[i].colorOrder, "grbw", 5);
+          segs[i].colorOrder[4] = '\0';
+        } else if (segs[i].cct) {
+          memcpy(segs[i].colorOrder, "grbc", 5);
+          segs[i].colorOrder[4] = '\0';
+        } else {
+          memcpy(segs[i].colorOrder, "grb", 4);
+          segs[i].colorOrder[3] = '\0';
+        }
+      }
+    }
+    long v = 0;
+    if (s_server.hasArg(dataK)) {
+      if (!parseLongArg(s_server.arg(dataK), 0, kS3GpioMax, v)) {
+        return false;
+      }
+      segs[i].dataGpio = static_cast<uint8_t>(v);
+    }
+    if (s_server.hasArg(clkK)) {
+      if (!parseLongArg(s_server.arg(clkK), 0, kS3GpioMax, v)) {
+        return false;
+      }
+      segs[i].clockGpio = static_cast<uint8_t>(v);
+    }
+    if (s_server.hasArg(countK)) {
+      if (!parseLongArg(s_server.arg(countK), 1, kLedCountMax, v)) {
+        return false;
+      }
+      segs[i].pixelCount = static_cast<uint16_t>(v);
+    }
+    if (s_server.hasArg(chK)) {
+      if (!parseLongArg(s_server.arg(chK), 1, kDmxUniverseSize, v)) {
+        return false;
+      }
+      segs[i].startChannel = static_cast<uint16_t>(v);
+    }
+    if (s_server.hasArg(briK)) {
+      if (!parseLongArg(s_server.arg(briK), 0, 255, v)) {
+        return false;
+      }
+      segs[i].brightness = static_cast<uint8_t>(v);
+    }
+    if (s_server.hasArg(uniK)) {
+      if (!parseLongArg(s_server.arg(uniK), 0, 32767, v)) {
+        return false;
+      }
+      if (segs[i].proto == SegProto::Sacn) {
+        const uint16_t sacn = v < 1 ? 1 : static_cast<uint16_t>(v);
+        segs[i].startSacnUniverse = sacn;
+        segs[i].startArtNetUniverse =
+            static_cast<uint16_t>(sacn > 0 ? sacn - 1 : 0);
+      } else {
+        segs[i].startArtNetUniverse = static_cast<uint16_t>(v);
+        segs[i].startSacnUniverse = static_cast<uint16_t>(v + 1);
+      }
+    }
+    if (!PixelMap::needsClock(segs[i].chipset)) {
+      segs[i].clockGpio = kClockGpioNone;
+    }
+  }
+  return PixelMap::setAll(segs, static_cast<uint8_t>(n), true);
+}
+
 static void handleMap() {
   if (LiveInput::active()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
+  if (s_server.hasArg("n")) {
+    if (!handleMapAll()) {
+      sendJson(400, "{\"error\":\"bad map\"}");
+      return;
+    }
+    sendStatus(200);
+    armReboot();
+    return;
+  }
   const PixelMapCfg &cur = PixelMap::cfg();
   PixelMapSet in;
+  in.proto = cur.proto;
   in.chipset = cur.chipset;
   memcpy(in.colorOrder, cur.colorOrder, sizeof(in.colorOrder));
   in.dataGpio = cur.dataGpio;
@@ -636,7 +879,13 @@ static void handleMap() {
   in.startChannel = cur.startChannel;
   in.white = cur.white;
   in.cct = cur.cct;
+  in.brightness = cur.brightness;
 
+  if (s_server.hasArg("proto") &&
+      !PixelMap::parseProto(s_server.arg("proto").c_str(), in.proto)) {
+    sendJson(400, "{\"error\":\"bad proto\"}");
+    return;
+  }
   if (s_server.hasArg("chip") &&
       !PixelMap::parseChipset(s_server.arg("chip").c_str(), in.chipset)) {
     sendJson(400, "{\"error\":\"bad chip\"}");
@@ -707,6 +956,21 @@ static void handleMap() {
     }
     in.startChannel = static_cast<uint16_t>(v);
   }
+  if (s_server.hasArg("bri")) {
+    const String arg = s_server.arg("bri");
+    char *end = nullptr;
+    const long v = strtol(arg.c_str(), &end, 10);
+    if (end == arg.c_str() || *end != '\0' || v < 0 || v > 255) {
+      sendJson(400, "{\"error\":\"bad bri\"}");
+      return;
+    }
+    in.brightness = static_cast<uint8_t>(v);
+  }
+  if (s_server.hasArg("uni") && in.proto == SegProto::Sacn) {
+    const uint16_t sacn =
+        in.startArtNetUniverse < 1 ? 1 : in.startArtNetUniverse;
+    in.startArtNetUniverse = static_cast<uint16_t>(sacn - 1);
+  }
   if (!PixelMap::validOrder(in.colorOrder, in.white, in.cct)) {
     if (in.white && in.cct) {
       memcpy(in.colorOrder, "grbwc", 6);
@@ -730,8 +994,7 @@ static void handleMap() {
     return;
   }
   sendStatus(200);
-  LedBus::requestApply();
-  LiveInput::applyCfg();
+  armReboot();
 }
 
 static void handleLive() {
@@ -1319,7 +1582,7 @@ static void pollConnect() {
     s_error[0] = '\0';
     LOG_V("wifi", "connected ssid=%s ip=%s", WiFi.SSID().c_str(),
           WiFi.localIP().toString().c_str());
-    LiveInput::onStaGotIp();
+    s_staIpPending = true;
   }
 
   if (s_discPending) {
@@ -1383,6 +1646,7 @@ void WifiSetup::begin() {
   s_server.on("/pins", HTTP_POST, handlePins);
   s_server.on("/map", HTTP_POST, handleMap);
   s_server.on("/identify", HTTP_POST, handleIdentify);
+  s_server.on("/reboot", HTTP_POST, handleReboot);
   s_server.on("/live", HTTP_POST, handleLive);
   s_server.on("/play", HTTP_POST, handlePlay);
   s_server.on("/upload", HTTP_POST, handleUploadDone, handleUploadFile);
@@ -1435,9 +1699,19 @@ void WifiSetup::service() {
   } else {
     startAp();
   }
+  if (s_staIpPending) {
+    s_staIpPending = false;
+    if (WiFi.status() == WL_CONNECTED) {
+      LiveInput::onStaGotIp();
+    }
+  }
   if (s_apUp) {
     s_dns.processNextRequest();
   }
   s_server.handleClient();
   LedBus::service();
+  if (s_rebootAt != 0 && static_cast<int32_t>(millis() - s_rebootAt) >= 0) {
+    s_rebootAt = 0;
+    ESP.restart();
+  }
 }
