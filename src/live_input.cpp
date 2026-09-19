@@ -3,6 +3,7 @@
 #include "artnet_rx.h"
 #include "live_cfg.h"
 #include "log.h"
+#include "pixel_map.h"
 #include "sacn_rx.h"
 
 #include <Arduino.h>
@@ -12,18 +13,11 @@
 
 namespace {
 
-static constexpr uint8_t kSlots = 4;
-
-struct Slot {
-  uint8_t dmx[512];
-  uint16_t len;
-};
-
-static Slot s_ring[kSlots];
-static uint8_t s_out[512];
+static uint8_t s_uni[kMaxUniverses][kDmxUniverseSize];
+static uint8_t s_have = 0;
+static uint8_t s_out[kLedCountMax * kMaxChannelsPerPixel];
 static uint16_t s_outLen = 0;
-static uint8_t s_head = 0;
-static uint8_t s_tail = 0;
+static bool s_fresh = false;
 static uint8_t s_count = 0;
 static uint32_t s_lastMs = 0;
 static uint32_t s_drops = 0;
@@ -48,9 +42,49 @@ static const char *nameOf(LiveSource src) {
 }
 
 static void resetRing() {
-  s_head = 0;
-  s_tail = 0;
+  s_have = 0;
+  s_fresh = false;
   s_count = 0;
+  memset(s_uni, 0, sizeof(s_uni));
+}
+
+static uint16_t startUniverse(LiveSource src) {
+  const PixelMapCfg &m = PixelMap::cfg();
+  if (src == LiveSource::Sacn) {
+    return m.startSacnUniverse;
+  }
+  return m.startArtNetUniverse;
+}
+
+static bool assembleOut() {
+  const PixelMapCfg &m = PixelMap::cfg();
+  const uint8_t ch = m.channelsPerPixel;
+  const uint16_t n = m.pixelCount;
+  uint16_t o = 0;
+  for (uint16_t p = 0; p < n; ++p) {
+    uint16_t uniOff = 0;
+    uint16_t ch1 = 1;
+    if (!PixelMap::pixelOrigin(p, uniOff, ch1) || uniOff >= kMaxUniverses) {
+      memset(s_out + o, 0, ch);
+      o = static_cast<uint16_t>(o + ch);
+      continue;
+    }
+    uint32_t abs0 = static_cast<uint32_t>(uniOff) * kDmxUniverseSize +
+                    static_cast<uint32_t>(ch1 - 1);
+    for (uint8_t k = 0; k < ch; ++k) {
+      const uint32_t abs = abs0 + k;
+      const uint16_t slotUni = static_cast<uint16_t>(abs / kDmxUniverseSize);
+      const uint16_t slotOff = static_cast<uint16_t>(abs % kDmxUniverseSize);
+      if (slotUni >= kMaxUniverses ||
+          (s_have & static_cast<uint8_t>(1u << slotUni)) == 0) {
+        s_out[o++] = 0;
+      } else {
+        s_out[o++] = s_uni[slotUni][slotOff];
+      }
+    }
+  }
+  s_outLen = o;
+  return o > 0;
 }
 
 static void startSockets() {
@@ -174,67 +208,50 @@ bool LiveInput::active() {
   return true;
 }
 
-bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len) {
+bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
+                     uint16_t universe) {
   if (src == LiveSource::None || data == nullptr) {
     return false;
   }
   if (!accept(src)) {
     return false;
   }
-  if (len > 512) {
-    len = 512;
+  const uint16_t start = startUniverse(src);
+  const uint16_t span = PixelMap::universeSpan();
+  if (universe < start || universe >= static_cast<uint16_t>(start + span)) {
+    return false;
+  }
+  const uint16_t idx = static_cast<uint16_t>(universe - start);
+  if (idx >= kMaxUniverses) {
+    return false;
+  }
+  if (len > kDmxUniverseSize) {
+    len = kDmxUniverseSize;
   }
   ++s_rx;
-
-  const uint8_t depth = LiveCfg::buf();
-  if (depth == 0) {
-    if (s_count == 1) {
-      ++s_drops;
-    }
-    memcpy(s_ring[0].dmx, data, len);
-    if (len < 512) {
-      memset(s_ring[0].dmx + len, 0, 512 - len);
-    }
-    s_ring[0].len = len;
-    s_count = 1;
-    s_head = 0;
-    s_tail = 0;
-    s_lastMs = millis();
-    return true;
-  }
-
-  const uint8_t cap = depth;
-  if (s_count == cap) {
-    s_head = static_cast<uint8_t>((s_head + 1) % cap);
-    --s_count;
+  if (s_fresh) {
     ++s_drops;
   }
-  memcpy(s_ring[s_tail].dmx, data, len);
-  if (len < 512) {
-    memset(s_ring[s_tail].dmx + len, 0, 512 - len);
+  memcpy(s_uni[idx], data, len);
+  if (len < kDmxUniverseSize) {
+    memset(s_uni[idx] + len, 0, kDmxUniverseSize - len);
   }
-  s_ring[s_tail].len = len;
-  s_tail = static_cast<uint8_t>((s_tail + 1) % cap);
-  ++s_count;
+  s_have = static_cast<uint8_t>(s_have | (1u << idx));
+  s_fresh = true;
+  s_count = 1;
   s_lastMs = millis();
   return true;
 }
 
 bool LiveInput::pop(const uint8_t *&dmx, uint16_t &len) {
-  const uint8_t depth = LiveCfg::buf();
-  if (s_count == 0) {
+  if (!s_fresh || s_have == 0) {
     return false;
   }
-  if (depth == 0) {
-    memcpy(s_out, s_ring[0].dmx, 512);
-    s_outLen = s_ring[0].len;
-    s_count = 0;
-  } else {
-    memcpy(s_out, s_ring[s_head].dmx, 512);
-    s_outLen = s_ring[s_head].len;
-    s_head = static_cast<uint8_t>((s_head + 1) % depth);
-    --s_count;
+  if (!assembleOut()) {
+    return false;
   }
+  s_fresh = false;
+  s_count = 0;
   dmx = s_out;
   len = s_outLen;
   return true;

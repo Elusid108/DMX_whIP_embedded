@@ -2,12 +2,16 @@
 
 #include "live_input.h"
 #include "log.h"
+#include "pixel_map.h"
 #include "sync.h"
 
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <cstring>
+
+#include "lwip/igmp.h"
+#include "lwip/ip4_addr.h"
 
 namespace {
 
@@ -24,8 +28,6 @@ static constexpr int kMinPkt = 126;
 static constexpr int kDmpValuesOff = 125;
 static constexpr int kDmxOff = 126;
 static constexpr uint16_t kMaxDmx = 512;
-static constexpr uint16_t kDestRgb = 192;  // 64 pixels
-
 static WiFiUDP s_udp;
 static uint8_t s_pkt[kMaxPkt];
 static uint8_t s_seq = 0;
@@ -56,7 +58,9 @@ static bool joinMcast() {
   if (!s_up || WiFi.status() != WL_CONNECTED) {
     return false;
   }
-  const IPAddress group = multicastGroup(kSacnUniverse);
+  const uint16_t start = PixelMap::cfg().startSacnUniverse;
+  const uint16_t span = PixelMap::universeSpan();
+  const IPAddress group = multicastGroup(start);
   s_udp.stop();
   if (!s_udp.beginMulticast(group, kSacnPort)) {
     LOG_C("sacn", "mcast join failed");
@@ -68,8 +72,14 @@ static bool joinMcast() {
     return false;
   }
   s_mcast = true;
-  LOG_V("sacn", "mcast %s:%u uni=%u", group.toString().c_str(), kSacnPort,
-        kSacnUniverse);
+  for (uint16_t i = 1; i < span && i < kMaxUniverses; ++i) {
+    const IPAddress extra = multicastGroup(static_cast<uint16_t>(start + i));
+    ip4_addr_t addr;
+    IP4_ADDR(&addr, extra[0], extra[1], extra[2], extra[3]);
+    igmp_joingroup(IP4_ADDR_ANY4, &addr);
+  }
+  LOG_V("sacn", "mcast %s:%u uni=%u span=%u", group.toString().c_str(),
+        kSacnPort, start, span);
   return true;
 }
 
@@ -111,7 +121,9 @@ static void parsePacket(int n, const IPAddress &from) {
     return;
   }
   const uint16_t uni = rd16(s_pkt + 113);
-  if (uni != kSacnUniverse) {
+  const uint16_t start = PixelMap::cfg().startSacnUniverse;
+  const uint16_t span = PixelMap::universeSpan();
+  if (uni < start || uni >= static_cast<uint16_t>(start + span)) {
     ++s_wrongUni;
     return;
   }
@@ -138,12 +150,9 @@ static void parsePacket(int n, const IPAddress &from) {
   if (len > kMaxDmx) {
     len = kMaxDmx;
   }
-  if (len > kDestRgb) {
-    len = kDestRgb;
-  }
 
   s_seq = s_pkt[111];
-  if (!LiveInput::push(LiveSource::Sacn, s_pkt + kDmxOff, len)) {
+  if (!LiveInput::push(LiveSource::Sacn, s_pkt + kDmxOff, len, uni)) {
     return;
   }
   ++s_dmxOk;
@@ -166,7 +175,8 @@ void SacnRx::begin() {
   }
   s_up = true;
   s_mcast = false;
-  LOG_V("sacn", "listen :%u uni=%u", kSacnPort, kSacnUniverse);
+  LOG_V("sacn", "listen :%u uni=%u", kSacnPort,
+        PixelMap::cfg().startSacnUniverse);
   joinMcast();
 }
 
@@ -210,7 +220,8 @@ void SacnRx::service() {
     if (s_pkts > 0 || s_dmxOk > 0 || s_syncOk > 0) {
       LOG_V("sacn", "rx pkts=%u dmx=%u sync=%u uni=%u seq=%u skip_uni=%u",
             static_cast<unsigned>(s_pkts), static_cast<unsigned>(s_dmxOk),
-            static_cast<unsigned>(s_syncOk), kSacnUniverse, s_seq,
+            static_cast<unsigned>(s_syncOk),
+            PixelMap::cfg().startSacnUniverse, s_seq,
             static_cast<unsigned>(s_wrongUni));
     }
   }

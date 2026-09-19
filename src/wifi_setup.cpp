@@ -2,6 +2,7 @@
 
 #include "board_profile.h"
 #include "identify.h"
+#include "led_bus.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
 #include "live_input.h"
@@ -278,6 +279,16 @@ static void appendMap(String &out) {
   out += static_cast<unsigned>(m.startChannel);
   out += ",\"split\":";
   out += m.splitAcrossUniverses ? "true" : "false";
+  out += ",\"white\":";
+  out += m.white ? "true" : "false";
+  out += ",\"cct\":";
+  out += m.cct ? "true" : "false";
+  out += ",\"ch_px\":";
+  out += static_cast<unsigned>(m.channelsPerPixel);
+  out += ",\"span\":";
+  out += static_cast<unsigned>(PixelMap::universeSpan());
+  out += ",\"fit\":";
+  out += static_cast<unsigned>(PixelMap::firstUniversePixels());
   out += '}';
 }
 
@@ -327,8 +338,10 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(LedCtrl::get());
   out += ',';
   appendSd(out);
+  out += ',';
+  appendMap(out);
   out += ",\"pins\":{\"led\":";
-  out += static_cast<unsigned>(BoardProfile::ledPin());
+  out += static_cast<unsigned>(PixelMap::cfg().dataGpio);
   out += ",\"sd\":{\"cs\":";
   out += static_cast<unsigned>(BoardProfile::sdCs());
   out += ",\"mosi\":";
@@ -593,6 +606,132 @@ static void handlePins() {
   delay(80);
   SdInfo::remount();
   sendStatus(200);
+}
+
+static bool parseBool01(const String &arg, bool &out) {
+  if (arg == "1" || arg == "true" || arg == "yes") {
+    out = true;
+    return true;
+  }
+  if (arg == "0" || arg == "false" || arg == "no") {
+    out = false;
+    return true;
+  }
+  return false;
+}
+
+static void handleMap() {
+  if (LiveInput::active()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  const PixelMapCfg &cur = PixelMap::cfg();
+  PixelMapSet in;
+  in.chipset = cur.chipset;
+  memcpy(in.colorOrder, cur.colorOrder, sizeof(in.colorOrder));
+  in.dataGpio = cur.dataGpio;
+  in.clockGpio = cur.clockGpio;
+  in.pixelCount = cur.pixelCount;
+  in.startArtNetUniverse = cur.startArtNetUniverse;
+  in.startChannel = cur.startChannel;
+  in.white = cur.white;
+  in.cct = cur.cct;
+
+  if (s_server.hasArg("chip") &&
+      !PixelMap::parseChipset(s_server.arg("chip").c_str(), in.chipset)) {
+    sendJson(400, "{\"error\":\"bad chip\"}");
+    return;
+  }
+  if (s_server.hasArg("white") &&
+      !parseBool01(s_server.arg("white"), in.white)) {
+    sendJson(400, "{\"error\":\"bad white\"}");
+    return;
+  }
+  if (s_server.hasArg("cct") && !parseBool01(s_server.arg("cct"), in.cct)) {
+    sendJson(400, "{\"error\":\"bad cct\"}");
+    return;
+  }
+  if (s_server.hasArg("order") &&
+      !PixelMap::parseOrder(s_server.arg("order").c_str(), in.colorOrder,
+                            in.white, in.cct)) {
+    sendJson(400, "{\"error\":\"bad order\"}");
+    return;
+  }
+  if (s_server.hasArg("data")) {
+    const String arg = s_server.arg("data");
+    char *end = nullptr;
+    const long v = strtol(arg.c_str(), &end, 10);
+    if (end == arg.c_str() || *end != '\0' || v < 0 || v > kS3GpioMax) {
+      sendJson(400, "{\"error\":\"bad data\"}");
+      return;
+    }
+    in.dataGpio = static_cast<uint8_t>(v);
+  }
+  if (s_server.hasArg("clk")) {
+    const String arg = s_server.arg("clk");
+    char *end = nullptr;
+    const long v = strtol(arg.c_str(), &end, 10);
+    if (end == arg.c_str() || *end != '\0' || v < 0 || v > kS3GpioMax) {
+      sendJson(400, "{\"error\":\"bad clk\"}");
+      return;
+    }
+    in.clockGpio = static_cast<uint8_t>(v);
+  }
+  if (s_server.hasArg("count")) {
+    const String arg = s_server.arg("count");
+    char *end = nullptr;
+    const long v = strtol(arg.c_str(), &end, 10);
+    if (end == arg.c_str() || *end != '\0' || v < 1 || v > kLedCountMax) {
+      sendJson(400, "{\"error\":\"bad count\"}");
+      return;
+    }
+    in.pixelCount = static_cast<uint16_t>(v);
+  }
+  if (s_server.hasArg("uni")) {
+    const String arg = s_server.arg("uni");
+    char *end = nullptr;
+    const long v = strtol(arg.c_str(), &end, 10);
+    if (end == arg.c_str() || *end != '\0' || v < 0 || v > 32767) {
+      sendJson(400, "{\"error\":\"bad uni\"}");
+      return;
+    }
+    in.startArtNetUniverse = static_cast<uint16_t>(v);
+  }
+  if (s_server.hasArg("ch")) {
+    const String arg = s_server.arg("ch");
+    char *end = nullptr;
+    const long v = strtol(arg.c_str(), &end, 10);
+    if (end == arg.c_str() || *end != '\0' || v < 1 || v > kDmxUniverseSize) {
+      sendJson(400, "{\"error\":\"bad ch\"}");
+      return;
+    }
+    in.startChannel = static_cast<uint16_t>(v);
+  }
+  if (!PixelMap::validOrder(in.colorOrder, in.white, in.cct)) {
+    if (in.white && in.cct) {
+      memcpy(in.colorOrder, "grbwc", 6);
+    } else if (in.white) {
+      memcpy(in.colorOrder, "grbw", 5);
+      in.colorOrder[4] = '\0';
+      in.colorOrder[5] = '\0';
+    } else if (in.cct) {
+      memcpy(in.colorOrder, "grbc", 5);
+      in.colorOrder[4] = '\0';
+      in.colorOrder[5] = '\0';
+    } else {
+      memcpy(in.colorOrder, "grb", 4);
+      in.colorOrder[3] = '\0';
+      in.colorOrder[4] = '\0';
+      in.colorOrder[5] = '\0';
+    }
+  }
+  if (!PixelMap::set(in, true)) {
+    sendJson(400, "{\"error\":\"bad map\"}");
+    return;
+  }
+  sendStatus(200);
+  LedBus::requestApply();
+  LiveInput::applyCfg();
 }
 
 static void handleLive() {
@@ -1242,6 +1381,7 @@ void WifiSetup::begin() {
   s_server.on("/forget", HTTP_POST, handleForget);
   s_server.on("/brightness", HTTP_POST, handleBrightness);
   s_server.on("/pins", HTTP_POST, handlePins);
+  s_server.on("/map", HTTP_POST, handleMap);
   s_server.on("/identify", HTTP_POST, handleIdentify);
   s_server.on("/live", HTTP_POST, handleLive);
   s_server.on("/play", HTTP_POST, handlePlay);
@@ -1299,4 +1439,5 @@ void WifiSetup::service() {
     s_dns.processNextRequest();
   }
   s_server.handleClient();
+  LedBus::service();
 }

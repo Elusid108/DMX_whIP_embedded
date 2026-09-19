@@ -16,8 +16,8 @@
 // FastLED.show() only in main. Peek/copyFrame consume the reader ring.
 
 static constexpr uint8_t kPlayRingSlots = 4;
-static constexpr uint16_t kPlayMaxPixels = kMatrixPixelMap.pixelCount;
-static constexpr uint8_t kPlayMaxChips = kMatrixPixelMap.channelsPerPixel;
+static constexpr uint16_t kPlayMaxPixels = kLedCountMax;
+static constexpr uint8_t kPlayMaxChips = kMaxChannelsPerPixel;
 static constexpr uint16_t kPlayMaxPayload =
     static_cast<uint16_t>(kPlayMaxPixels * kPlayMaxChips);
 

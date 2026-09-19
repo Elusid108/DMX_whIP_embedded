@@ -3,6 +3,7 @@
 #include "live_input.h"
 #include "log.h"
 #include "node_id.h"
+#include "pixel_map.h"
 #include "sync.h"
 #include "version.h"
 
@@ -126,7 +127,7 @@ static void buildPollReply(const IPAddress &ip) {
   s_reply[16] = verH;
   s_reply[17] = verL;
 
-  const uint16_t pa = kArtNetUniverse & 0x7FFF;
+  const uint16_t pa = PixelMap::cfg().startArtNetUniverse & 0x7FFF;
   s_reply[18] = static_cast<uint8_t>((pa >> 8) & 0x7F);
   s_reply[19] = static_cast<uint8_t>((pa >> 4) & 0x0F);
   s_reply[20] = 0x00;
@@ -222,8 +223,8 @@ static void sendPollReply(const IPAddress &from) {
   if (!s_loggedFirstPoll) {
     s_loggedFirstPoll = true;
     LOG_V("artnet", "poll from=%s reply ip=%s uni=%u dests=%u unicast=%u",
-          from.toString().c_str(), ip.toString().c_str(), kArtNetUniverse, n,
-          uniOk ? 1u : 0u);
+          from.toString().c_str(), ip.toString().c_str(),
+          PixelMap::cfg().startArtNetUniverse, n, uniOk ? 1u : 0u);
   } else {
     LOG_V("artnet", "poll from=%s reply ip=%s", from.toString().c_str(),
           ip.toString().c_str());
@@ -257,7 +258,9 @@ static void parsePacket(int n, const IPAddress &from) {
   }
   const uint16_t uni =
       static_cast<uint16_t>(s_pkt[14] | (s_pkt[15] << 8)) & 0x7FFF;
-  if (uni != kArtNetUniverse) {
+  const uint16_t start = PixelMap::cfg().startArtNetUniverse;
+  const uint16_t span = PixelMap::universeSpan();
+  if (uni < start || uni >= static_cast<uint16_t>(start + span)) {
     ++s_wrongUni;
     return;
   }
@@ -269,7 +272,7 @@ static void parsePacket(int n, const IPAddress &from) {
     len = static_cast<uint16_t>(n - kHdr);
   }
   s_seq = s_pkt[12];
-  if (!LiveInput::push(LiveSource::ArtNet, s_pkt + kHdr, len)) {
+  if (!LiveInput::push(LiveSource::ArtNet, s_pkt + kHdr, len, uni)) {
     return;
   }
   ++s_dmxOk;
@@ -291,7 +294,8 @@ void ArtNetRx::begin() {
     return;
   }
   s_up = true;
-  LOG_V("artnet", "listen :%u uni=%u", kArtNetPort, kArtNetUniverse);
+  LOG_V("artnet", "listen :%u uni=%u", kArtNetPort,
+        PixelMap::cfg().startArtNetUniverse);
 }
 
 void ArtNetRx::stop() {
@@ -337,7 +341,8 @@ void ArtNetRx::service() {
             "skip_uni=%u",
             static_cast<unsigned>(s_pkts), static_cast<unsigned>(s_dmxOk),
             static_cast<unsigned>(s_syncs), static_cast<unsigned>(s_polls),
-            static_cast<unsigned>(s_replies), kArtNetUniverse, s_seq,
+            static_cast<unsigned>(s_replies),
+            PixelMap::cfg().startArtNetUniverse, s_seq,
             static_cast<unsigned>(s_wrongUni));
     }
   }

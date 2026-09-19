@@ -20,5 +20,6 @@ public:
   static uint32_t ageMs();
   static uint16_t pps();
   static bool pop(const uint8_t *&dmx, uint16_t &len);
-  static bool push(LiveSource src, const uint8_t *data, uint16_t len);
+  static bool push(LiveSource src, const uint8_t *data, uint16_t len,
+                   uint16_t universe);
 };

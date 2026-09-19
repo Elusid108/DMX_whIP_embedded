@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.14.0</title>
+<title>dmxwhip v0.17.1</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -18,16 +18,52 @@ body{display:flex;flex-direction:column;box-sizing:border-box;padding:10px 12px;
 body.editing #name{display:block}
 body.editing #nameView{display:none}
 #identify{width:auto;min-width:7rem;margin:8px auto 0;display:inline-block}
-.mode{display:inline-block;margin:8px auto 0;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);border:1px solid var(--border)}
+.livehead{display:flex;justify-content:center;margin:0 0 8px}
+.mode{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px solid var(--border);background:var(--chrome)}
+.mode i{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.4}
 .mode.live{color:var(--accent);border-color:#22d3ee66}
 .mode.play{color:#86efac;border-color:#86efac66}
+.mode.live i,.mode.play i{opacity:1}
+.dash{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:8px}
+.tile{min-height:0;display:flex;flex-direction:column;background:var(--chrome);border:1px solid var(--border);border-radius:12px;padding:8px 10px;overflow:hidden}
+.clab{font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 4px}
+.tval{font-weight:700;font-size:.95rem;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tmono{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);margin:2px 0 0}
+.sig{display:flex;align-items:flex-end;gap:8px;margin:auto 0 6px}
+.bars{display:flex;align-items:flex-end;gap:2px;height:14px}
+.bars i{width:3px;border-radius:1px;background:var(--border)}
+.bars i:nth-child(1){height:28%}
+.bars i:nth-child(2){height:50%}
+.bars i:nth-child(3){height:72%}
+.bars i:nth-child(4){height:100%}
+.bars[data-n="1"] i:nth-child(-n+1),.bars[data-n="2"] i:nth-child(-n+2),.bars[data-n="3"] i:nth-child(-n+3),.bars[data-n="4"] i:nth-child(-n+4){background:var(--fill,var(--accent))}
+.bars.mid{--fill:#f59e0b}
+.bars.lo{--fill:#f87171}
+.trio{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin:auto 0 4px;text-align:center}
+.trio b{display:block;font:600 1.25rem/1.1 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+.trio em{display:block;font-style:normal;font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.cap{margin:0;font-size:10px;color:var(--muted);line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cap.stale{color:#f59e0b}
+.sbar{height:6px;border-radius:99px;background:#27272a;overflow:hidden;margin:auto 0 8px}
+.sbar i{display:block;height:100%;width:0;background:var(--accent);border-radius:99px}
+.pips{display:flex;gap:10px;margin-top:auto}
+.pip{display:inline-flex;align-items:center;gap:4px;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.pip i{width:6px;height:6px;border-radius:50%;background:var(--border)}
+.pip.on{color:#86efac}
+.pip.on i{background:#86efac}
+.pip.warn{color:#f59e0b}
+.pip.warn i{background:#f59e0b}
+.health{flex:0 0 auto;margin:8px 0 0;text-align:center;font:11px/1.35 ui-monospace,monospace;color:var(--muted)}
+.health p{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.health .hi{color:var(--text)}
 .readout{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.35;word-break:break-word}
 .tabs{display:flex;gap:0;flex:0 0 auto;border-bottom:1px solid var(--border);margin:0 0 8px}
 .tabs button{flex:1;margin:0;padding:8px 4px;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:var(--muted);font-weight:500;font-size:.8rem}
 .tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
 #viewLive,#viewPlay,#viewPixels,#viewSetup{flex:1 1 auto;min-height:0;display:none;flex-direction:column}
 #viewLive.on,#viewPlay.on,#viewPixels.on,#viewSetup.on{display:flex}
-#viewLive,#viewPixels{overflow-y:auto;-webkit-overflow-scrolling:touch}
+#viewPixels{overflow-y:auto;-webkit-overflow-scrolling:touch}
+#viewLive{overflow:hidden}
 .lab{display:block;margin:8px 0 2px;font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .mod{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
 #list,#plist{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:6px;margin:6px 0;padding:3px;background:var(--bg)}
@@ -41,9 +77,11 @@ input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:
 #brinum{width:4.6rem;flex:0 0 4.6rem;padding:8px 6px;text-align:right;font-family:ui-monospace,monospace}
 button{background:var(--chrome);border:1px solid var(--border);margin:6px 0 0;font-weight:600;color:var(--text)}
 button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
-#savedrow,#renrow,#fileopts,#folderopts,#foldernrow,#briwarn,#note{display:none}
-#savedrow.on,#renrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#briwarn.on,#note.on{display:block}
-#briwarn{color:#f59e0b;font-size:.8rem;margin:4px 0 0}
+#savedrow,#renrow,#fileopts,#folderopts,#foldernrow,#briwarn,#cntwarn,#note,#clkrow{display:none}
+#savedrow.on,#renrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#briwarn.on,#cntwarn.on,#note.on,#clkrow.on{display:block}
+.tog{display:flex;align-items:center;gap:8px;margin:8px 0 0}
+.tog input{width:auto;margin:0}
+#briwarn,#cntwarn{color:#f59e0b;font-size:.8rem;margin:4px 0 0}
 #note{margin:6px 0 0;font-size:.85rem}
 #status,#ver{flex:0 0 auto;margin:6px 0 0;font-size:.85rem;color:var(--muted);min-height:1.2em}
 .ok{color:#86efac}
@@ -57,28 +95,56 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <h1 id="nameView">dmxwhip</h1>
 <input id="name" maxlength="63" autocomplete="off" aria-label="Device name">
 <button class="pri" id="identify" type="button">Identify</button>
-<div class="mode" id="mode">idle</div>
 <p id="note"></p>
 </div>
 <div class="tabs">
 <button class="on" id="tabLive" type="button">Live</button>
 <button id="tabPlay" type="button">Playback</button>
-<button id="tabPixels" type="button">Pixels</button>
+<button id="tabPixels" type="button">Patch</button>
 <button id="tabSetup" type="button">Setup</button>
 </div>
 <div id="viewLive" class="on">
-<div class="lab">Radio</div>
-<p class="readout" id="liveRadio"></p>
-<div class="lab">Node</div>
-<p class="readout" id="liveNode"></p>
-<div class="lab">Storage</div>
-<p class="readout" id="liveSd"></p>
-<div class="lab">Transport</div>
-<p class="readout" id="liveXport"></p>
-<div class="lab">Playback</div>
-<p class="readout" id="livePlay"></p>
-<div class="lab">Health</div>
-<p class="readout" id="liveHealth"></p>
+<div class="livehead"><div class="mode" id="mode"><i></i><span id="modeLab">idle</span></div></div>
+<div class="dash">
+<div class="tile">
+<div class="clab">Radio</div>
+<div class="tval" id="lrSsid">—</div>
+<p class="tmono" id="lrSta">—</p>
+<div class="sig">
+<div class="bars" id="lrBars" data-n="0"><i></i><i></i><i></i><i></i></div>
+<span class="tmono" id="lrRssi">—</span>
+</div>
+<p class="cap"><span id="lrAp">—</span> · saved <span id="lrSaved">—</span></p>
+</div>
+<div class="tile">
+<div class="clab"><span id="lxProto">—</span> · <span id="lxSrc">—</span></div>
+<div class="trio">
+<div><b id="lxFps">—</b><em>fps</em></div>
+<div><b id="lxPps">—</b><em>pps</em></div>
+<div><b id="lxDrops">—</b><em>drop</em></div>
+</div>
+<p class="cap" id="lxCap"><span id="lxAge">—</span> · q <span id="lxQ">—</span> · buf <span id="lxBuf">—</span></p>
+</div>
+<div class="tile">
+<div class="clab">Storage</div>
+<div class="sbar"><i id="lsBar"></i></div>
+<p class="cap"><span id="lsOk">—</span> · <span id="lsType">—</span> · <span id="lsSize">—</span></p>
+<span id="lsUse" hidden></span>
+</div>
+<div class="tile">
+<div class="clab">Show</div>
+<div class="tval" id="lpNow">—</div>
+<p class="tmono">frame <span id="lpFrame">—</span></p>
+<div class="pips">
+<span class="pip" id="lpPark"><i></i>parked</span>
+<span class="pip" id="lpUr"><i></i>underrun</span>
+</div>
+</div>
+</div>
+<div class="health">
+<p><span class="hi" id="lnBoard">—</span> · <span class="hi" id="lnChip">—</span> · bri <span class="hi" id="lnBri">—</span></p>
+<p><span id="lhUp">—</span> · <span id="lhHeap">—</span> · <span id="lhPsram">—</span></p>
+</div>
 </div>
 <div id="viewPlay">
 <p class="hint">Idle plays SD. Live Art-Net/sACN preempts.</p>
@@ -106,13 +172,72 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric"></div></div>
 </div>
 <div id="viewPixels">
-<p class="hint">This board’s pixel identity. Editing comes later.</p>
-<div class="lab">Output</div>
-<p class="readout" id="pxMap"></p>
+<p class="hint">Patch: IC, wire order, start universe/channel. Save writes the map. Brightness applies immediately.</p>
+<label class="lab" for="proto">Live protocol</label>
+<select id="proto"><option value="auto">Auto</option><option value="artnet">Art-Net</option><option value="sacn">sACN</option></select>
+<label class="lab" for="pxChip">IC type</label>
+<select id="pxChip">
+<optgroup label="Clockless">
+<option value="ws2812b">WS2812B</option>
+<option value="ws2812">WS2812</option>
+<option value="ws2813">WS2813</option>
+<option value="ws2815">WS2815</option>
+<option value="ws2816">WS2816</option>
+<option value="ws2818">WS2818</option>
+<option value="ws2811">WS2811</option>
+<option value="sk6812">SK6812</option>
+<option value="sk6822">SK6822</option>
+<option value="tm1803">TM1803</option>
+<option value="tm1804">TM1804</option>
+<option value="tm1809">TM1809</option>
+<option value="tm1829">TM1829</option>
+<option value="ucs1903">UCS1903</option>
+<option value="ucs1903b">UCS1903B</option>
+<option value="ucs1904">UCS1904</option>
+<option value="ucs2903">UCS2903</option>
+<option value="apa106">APA106</option>
+<option value="pl9823">PL9823</option>
+<option value="sm16703">SM16703</option>
+<option value="ge8822">GE8822</option>
+<option value="gw6205">GW6205</option>
+<option value="gs1903">GS1903</option>
+<option value="lpd1886">LPD1886</option>
+</optgroup>
+<optgroup label="Clocked">
+<option value="apa102">APA102</option>
+<option value="sk9822">SK9822</option>
+<option value="hd107s">HD107S</option>
+<option value="ws2801">WS2801</option>
+<option value="lpd8806">LPD8806</option>
+<option value="p9813">P9813</option>
+<option value="lpd6803">LPD6803</option>
+</optgroup>
+</select>
+<label class="lab" for="pxData">Data GPIO</label>
+<input id="pxData" type="number" min="0" max="48" value="14" inputmode="numeric">
+<div id="clkrow"><label class="lab" for="pxClk">Clock GPIO</label>
+<input id="pxClk" type="number" min="1" max="48" value="21" inputmode="numeric"></div>
+<label class="lab" for="pxCount">Pixel count</label>
+<input id="pxCount" type="number" min="1" max="1024" value="64" inputmode="numeric">
+<p id="cntwarn">This board’s panel is 64 pixels (8×8).</p>
+<label class="tog"><input id="pxWhite" type="checkbox"> White channel</label>
+<label class="tog"><input id="pxCct" type="checkbox"> CCT channel</label>
+<label class="lab" for="pxOrder">Color order</label>
+<select id="pxOrder"></select>
+<label class="lab" for="pxUniStart">Starting universe</label>
+<input id="pxUniStart" type="number" min="0" max="32767" value="0" inputmode="numeric">
+<p class="hint">Art-Net 0-based. sACN is this + 1.</p>
+<label class="lab" for="pxCh">Starting channel</label>
+<input id="pxCh" type="number" min="1" max="512" value="1" inputmode="numeric">
+<label class="lab" for="bri">Brightness</label>
+<div class="brirow">
+<input id="bri" type="range" min="0" max="255" value="10">
+<input id="brinum" type="number" min="0" max="255" value="10" inputmode="numeric">
+</div>
+<p id="briwarn">This 8×8 can overheat above 64.</p>
 <div class="lab">Universes</div>
 <p class="readout" id="pxUni"></p>
-<div class="lab">Brightness</div>
-<p class="readout" id="pxBri"></p>
+<button class="pri" id="mapSave" type="button">Save</button>
 </div>
 <div id="viewSetup">
 <p class="hint">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
@@ -129,16 +254,8 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <input id="pass" type="password" maxlength="63" placeholder="Leave empty if open" autocomplete="off">
 <div id="savedrow"><p class="readout" id="savedlab"></p></div>
 <p id="status"></p>
-<div class="mod lab">Output</div>
-<label class="lab" for="bri">Brightness</label>
-<div class="brirow">
-<input id="bri" type="range" min="0" max="255" value="10">
-<input id="brinum" type="number" min="0" max="255" value="10" inputmode="numeric">
-</div>
-<p id="briwarn">This 8×8 can overheat above 64.</p>
+<div class="mod lab">Live input</div>
 <div class="grid3">
-<div><label class="lab" for="proto">Protocol</label>
-<select id="proto"><option value="auto">Auto</option><option value="artnet">Art-Net</option><option value="sacn">sACN</option></select></div>
 <div><label class="lab" for="fps">FPS</label>
 <select id="fps"><option value="20">20</option><option value="30">30</option><option value="40" selected>40</option><option value="60">60</option></select></div>
 <div><label class="lab" for="buf">Buffer</label>
@@ -147,7 +264,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.14.0</p>
+<p id="ver" class="readout">dmxwhip v0.17.1</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -161,6 +278,7 @@ const verEl=document.getElementById('ver');
 const nameView=document.getElementById('nameView');
 const nameEl=document.getElementById('name');
 const modeEl=document.getElementById('mode');
+const modeLab=document.getElementById('modeLab');
 const briEl=document.getElementById('bri');
 const brinum=document.getElementById('brinum');
 const briwarn=document.getElementById('briwarn');
@@ -186,17 +304,43 @@ const tabPlay=document.getElementById('tabPlay');
 const tabPixels=document.getElementById('tabPixels');
 const tabSetup=document.getElementById('tabSetup');
 const idBtn=document.getElementById('identify');
-const liveRadio=document.getElementById('liveRadio');
-const liveNode=document.getElementById('liveNode');
-const liveSd=document.getElementById('liveSd');
-const liveXport=document.getElementById('liveXport');
-const livePlay=document.getElementById('livePlay');
-const liveHealth=document.getElementById('liveHealth');
-const pxMap=document.getElementById('pxMap');
+const pxChip=document.getElementById('pxChip');
+const pxOrder=document.getElementById('pxOrder');
+const pxCount=document.getElementById('pxCount');
+const pxData=document.getElementById('pxData');
+const pxClk=document.getElementById('pxClk');
+const pxWhite=document.getElementById('pxWhite');
+const pxCct=document.getElementById('pxCct');
+const pxUniStart=document.getElementById('pxUniStart');
+const pxCh=document.getElementById('pxCh');
+const clkrow=document.getElementById('clkrow');
 const pxUni=document.getElementById('pxUni');
-const pxBri=document.getElementById('pxBri');
-let pollTimer=0,briTimer=0,liveTimer=0;
-let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,scanning=false;
+const mapSave=document.getElementById('mapSave');
+const cntwarn=document.getElementById('cntwarn');
+const CLOCKED={apa102:1,sk9822:1,hd107s:1,ws2801:1,lpd8806:1,p9813:1,lpd6803:1};
+const ORDERS={
+  rgb:['grb','rgb','rbg','gbr','brg','bgr'],
+  rgbw:['grbw','rgbw','grwb','wrgb','rbgw','gbrw','brgw','bgrw','wgrb','wrbg'],
+  rgbc:['grbc','rgbc','grcb','crgb','rbgc','gbrc','brgc','bgrc','cgrb','crbg'],
+  rgbwc:['grbwc','rgbwc','grbcw','rgbcw','wrgbc','wrgcb','bgrwc','bgrcw','crgbw','cgrbw']
+};
+function orderKey(w,c){return w&&c?'rgbwc':w?'rgbw':c?'rgbc':'rgb';}
+function fillOrders(keep){
+  const list=ORDERS[orderKey(pxWhite.checked,pxCct.checked)];
+  const cur=(keep||pxOrder.value||'').toLowerCase();
+  pxOrder.innerHTML='';
+  list.forEach(o=>{
+    const opt=document.createElement('option');
+    opt.value=o;
+    opt.textContent=o.toUpperCase();
+    pxOrder.appendChild(opt);
+  });
+  pxOrder.value=list.indexOf(cur)>=0?cur:list[0];
+}
+function showClk(){clkrow.className=CLOCKED[pxChip.value]?'on':'';}
+function setTxt(id,v){const el=document.getElementById(id);if(el) el.textContent=v==null||v===''?'—':String(v);}
+let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0;
+let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,scanning=false;
 let playSrc='root',playPath='/',playListKey='',lastFiles=[];
 let tab='live',setupScanned=false,lastName='dmxwhip';
 function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t||'';}
@@ -297,18 +441,16 @@ function applyLive(s){
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
   if(s.park) parkEl.value=s.park;
 }
-function sdLine(sd){
-  if(!sd) return 'no SD';
-  if(!sd.ok) return 'SD not mounted';
-  if(sd.used_mb!=null) return 'SD '+sd.used_mb+'/'+sd.size_mb+' MB'+(sd.type?' · '+sd.type:'');
-  return 'SD '+(sd.size_mb!=null?sd.size_mb+' MB':'mounted')+(sd.type?' · '+sd.type:'');
-}
 function fmtUp(ms){
   const s=Math.floor((ms||0)/1000);
   const h=Math.floor(s/3600);
   const m=Math.floor((s%3600)/60);
   const sec=s%60;
   return (h?h+':':'')+String(m).padStart(h?2:1,'0')+':'+String(sec).padStart(2,'0');
+}
+function fmtKb(n){
+  if(typeof n!=='number') return '—';
+  return Math.round(n/1024)+'K';
 }
 function showName(n){
   if(!n) return;
@@ -322,12 +464,13 @@ function applyChrome(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
   showName(s.name);
   const mode=s.mode||(s.live?'live':(s.play&&s.play.now?'play':'idle'));
-  modeEl.textContent=mode;
   modeEl.className='mode '+mode;
+  if(modeLab) modeLab.textContent=mode;
   const live=!!s.live;
   ['prev','play','stop','next','rename'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});
   idBtn.disabled=live;
   idBtn.title=live?'Unavailable while live':'';
+  [pxChip,pxOrder,pxCount,pxData,pxClk,pxWhite,pxCct,pxUniStart,pxCh,mapSave].forEach(el=>{if(el) el.disabled=live;});
   if(s.saved){savedRow.className='on';savedLab.textContent='saved '+s.saved+' (connects at boot)'+(s.ip?(' · STA '+s.ip):'');}
   else {savedRow.className='';savedLab.textContent='';}
   if(typeof s.bri==='number'&&!briDirty) showBri(s.bri);
@@ -335,65 +478,91 @@ function applyChrome(s){
 }
 function applyPixels(s){
   const m=s.map||{};
-  const clk=m.clk?(' clk '+m.clk):'';
-  pxMap.textContent=[
-    m.chip||'—',
-    m.order||'',
-    m.count!=null?(m.count+' px'):'',
-    m.data!=null?('GPIO '+m.data+clk):''
-  ].filter(Boolean).join(' · ');
+  if(!mapDirty){
+    if(m.chip) pxChip.value=m.chip;
+    pxWhite.checked=!!m.white;
+    pxCct.checked=!!m.cct;
+    fillOrders(m.order||'');
+    if(typeof m.count==='number') pxCount.value=String(m.count);
+    if(typeof m.data==='number') pxData.value=String(m.data);
+    if(typeof m.clk==='number'&&m.clk) pxClk.value=String(m.clk);
+    if(typeof m.artnet==='number') pxUniStart.value=String(m.artnet);
+    if(typeof m.ch==='number') pxCh.value=String(m.ch);
+    showClk();
+  }
+  const n=parseInt(pxCount.value,10);
+  cntwarn.className=(Number.isFinite(n)&&n!==64)?'on':'';
+  const chPx=m.ch_px||(3+(m.white?1:0)+(m.cct?1:0));
+  const fit=m.fit!=null?m.fit:Math.floor((512-((m.ch||1)-1))/chPx);
+  const span=m.span!=null?m.span:1;
   pxUni.textContent=[
     m.artnet!=null?('Art-Net '+m.artnet):'',
     m.sacn!=null?('sACN '+m.sacn):'',
     m.ch!=null?('ch '+m.ch):'',
+    chPx?('ch/px '+chPx):'',
+    fit!=null?('first uni '+fit+' px'):'',
+    span>1?('span '+span):'',
     m.split?'split universes':''
   ].filter(Boolean).join(' · ')||'—';
-  pxBri.textContent=typeof s.bri==='number'?String(s.bri):'—';
 }
 function applyStats(s){
   applyChrome(s);
   applyPixels(s);
-  const radio=[
-    s.ssid||'no STA',
-    s.ip?('STA '+s.ip):null,
-    typeof s.rssi==='number'?(s.rssi+' dBm'):null,
-    s.ap_ip?('AP '+s.ap_ip):null
-  ].filter(Boolean).join(' · ');
-  liveRadio.textContent=radio+(s.saved?('\nsaved '+s.saved):'');
-  liveNode.textContent=[
-    s.ver?('fw '+s.ver):null,
-    s.board||null,
-    s.chip||null,
-    typeof s.bri==='number'?('bri '+s.bri):null
-  ].filter(Boolean).join(' · ');
-  liveSd.textContent=sdLine(s.sd);
-  const now=s.play&&s.play.now?displayName(s.play.now):'stopped';
-  liveXport.textContent=[
-    s.mode||(s.live?'live':'idle'),
-    s.proto||null,
-    s.src&&s.src!=='none'?('lock '+s.src):null,
-    typeof s.fps==='number'?(s.fps+' fps'):null,
-    typeof s.buf==='number'?('buf '+s.buf):null,
-    typeof s.age_ms==='number'?('age '+s.age_ms+' ms'):null,
-    typeof s.queued==='number'?('q '+s.queued):null,
-    typeof s.drops==='number'?('drops '+s.drops):null,
-    typeof s.pps==='number'?(s.pps+' pps'):null
-  ].filter(Boolean).join(' · ');
+  setTxt('lrSsid',s.ssid||'no STA');
+  setTxt('lrSta',s.ip||'—');
+  setTxt('lrRssi',typeof s.rssi==='number'?s.rssi+' dBm':'—');
+  setTxt('lrAp',s.ap_ip||'AP off');
+  setTxt('lrSaved',s.saved||'none');
+  const bars=document.getElementById('lrBars');
+  if(bars){
+    let n=0,lvl='';
+    if(typeof s.rssi==='number'){
+      n=s.rssi>=-50?4:s.rssi>=-60?3:s.rssi>=-70?2:1;
+      lvl=s.rssi>=-50?'hi':s.rssi>=-70?'mid':'lo';
+    }
+    bars.dataset.n=String(n);
+    bars.className='bars'+(lvl&&lvl!=='hi'?' '+lvl:'');
+  }
+  setTxt('lnBoard',s.board||'—');
+  setTxt('lnChip',s.chip||'—');
+  setTxt('lnBri',typeof s.bri==='number'?s.bri:'—');
+  const sd=s.sd;
+  setTxt('lsOk',!sd?'no SD':(sd.ok?'mounted':'not mounted'));
+  setTxt('lsType',sd&&sd.type?sd.type:'—');
+  setTxt('lsSize',sd&&sd.size_mb!=null?sd.size_mb+' MB':'—');
+  setTxt('lsUse',sd&&sd.used_mb!=null?sd.used_mb+' / '+sd.free_mb+' MB':'—');
+  const bar=document.getElementById('lsBar');
+  if(bar){
+    const pct=(sd&&sd.used_mb!=null&&sd.size_mb)?Math.max(0,Math.min(100,sd.used_mb/sd.size_mb*100)):0;
+    bar.style.width=pct+'%';
+  }
+  setTxt('lxProto',s.proto||'—');
+  setTxt('lxSrc',s.src&&s.src!=='none'?s.src:'none');
+  setTxt('lxFps',typeof s.fps==='number'?s.fps:'—');
+  setTxt('lxBuf',typeof s.buf==='number'?s.buf:'—');
+  setTxt('lxAge',typeof s.age_ms==='number'?s.age_ms+' ms':'—');
+  setTxt('lxQ',typeof s.queued==='number'?s.queued:'—');
+  setTxt('lxDrops',typeof s.drops==='number'?s.drops:'—');
+  setTxt('lxPps',typeof s.pps==='number'?s.pps:'—');
+  const cap=document.getElementById('lxCap');
+  if(cap){
+    const locked=s.src&&s.src!=='none';
+    cap.className='cap'+(!locked?' idle':(typeof s.age_ms==='number'&&s.age_ms>1000?' stale':''));
+  }
   const p=s.play||{};
-  livePlay.textContent=[
-    'now '+now,
-    p.parked?'parked':null,
-    p.underrun?'underrun':null,
-    typeof p.frame==='number'?('frame '+p.frame):null
-  ].filter(Boolean).join(' · ');
-  liveHealth.textContent=[
-    typeof s.up_ms==='number'?('up '+fmtUp(s.up_ms)):null,
-    typeof s.heap==='number'?('heap '+s.heap):null,
-    typeof s.psram==='number'?('psram '+s.psram):null
-  ].filter(Boolean).join(' · ');
+  setTxt('lpNow',p.now?displayName(p.now):'stopped');
+  const parkPip=document.getElementById('lpPark');
+  if(parkPip) parkPip.className='pip'+(p.parked?' on':'');
+  const urPip=document.getElementById('lpUr');
+  if(urPip) urPip.className='pip'+(p.underrun?' warn':'');
+  setTxt('lpFrame',typeof p.frame==='number'?p.frame:'—');
+  setTxt('lhUp',typeof s.up_ms==='number'?fmtUp(s.up_ms):'—');
+  setTxt('lhHeap',fmtKb(s.heap));
+  setTxt('lhPsram',fmtKb(s.psram));
 }
 function applyMeta(s){
   applyChrome(s);
+  applyPixels(s);
   applyPlay(s);
 }
 async function jget(url){
@@ -524,6 +693,45 @@ function scheduleLive(){
   clearTimeout(liveTimer);
   liveTimer=setTimeout(postLive,300);
 }
+function postMap(){
+  const count=Math.max(1,Math.min(1024,parseInt(pxCount.value,10)||64));
+  const data=Math.max(0,Math.min(48,parseInt(pxData.value,10)||0));
+  const clk=Math.max(0,Math.min(48,parseInt(pxClk.value,10)||0));
+  const uni=Math.max(0,Math.min(32767,parseInt(pxUniStart.value,10)||0));
+  const ch=Math.max(1,Math.min(512,parseInt(pxCh.value,10)||1));
+  pxCount.value=String(count);
+  pxData.value=String(data);
+  pxClk.value=String(clk||21);
+  pxUniStart.value=String(uni);
+  pxCh.value=String(ch);
+  cntwarn.className=count!==64?'on':'';
+  fillOrders(pxOrder.value);
+  return postForm('/map',{
+    chip:pxChip.value,order:pxOrder.value,data:String(data),clk:String(clk),
+    count:String(count),white:pxWhite.checked?'1':'0',cct:pxCct.checked?'1':'0',
+    uni:String(uni),ch:String(ch)
+  }).then(async r=>{
+      const s=await r.json().catch(()=>({}));
+      if(!r.ok){setNote(s.error||'Map save failed','err');return;}
+      mapDirty=false;
+      setNote('');
+      applyMeta(s);
+    });
+}
+function markPatch(){mapDirty=true;}
+function savePatch(){
+  mapSave.textContent='Saving…';
+  mapSave.disabled=true;
+  const jobs=[];
+  if(mapDirty) jobs.push(postMap());
+  if(liveDirty) jobs.push(postLive());
+  Promise.all(jobs).then(()=>{
+    if(!mapDirty&&!liveDirty) setNote('');
+  }).catch(dropHint).finally(()=>{
+    mapSave.textContent='Save';
+    mapSave.disabled=!!(idBtn&&idBtn.disabled);
+  });
+}
 function parsePlayN(){
   const t=foldernEl.value.trim();
   if(!/^\d+$/.test(t)) return 1;
@@ -575,10 +783,20 @@ function endEdit(save){
     applyChrome(s);
   }).catch(()=>{nameDirty=false;nameEl.value=lastName;nameView.textContent=lastName;dropHint();});
 }
-protoEl.onchange=scheduleLive;
+protoEl.onchange=()=>{liveDirty=true;};
 fpsEl.onchange=scheduleLive;
 bufEl.onchange=scheduleLive;
 parkEl.onchange=scheduleLive;
+pxChip.onchange=()=>{showClk();markPatch();};
+pxOrder.onchange=markPatch;
+pxCount.oninput=markPatch;
+pxData.oninput=markPatch;
+pxClk.oninput=markPatch;
+pxUniStart.oninput=markPatch;
+pxCh.oninput=markPatch;
+pxWhite.onchange=()=>{fillOrders();markPatch();};
+pxCct.onchange=()=>{fillOrders();markPatch();};
+mapSave.onclick=savePatch;
 folderrepEl.onchange=showPlayOpts;
 tabLive.onclick=()=>showTab('live');
 tabPlay.onclick=()=>showTab('play');
@@ -627,6 +845,8 @@ document.getElementById('renok').onclick=()=>{
     applyMeta(s);
   }).catch(dropHint);
 };
+fillOrders();
+showClk();
 (async()=>{
   try{
     const s=await jget('/api/stats');

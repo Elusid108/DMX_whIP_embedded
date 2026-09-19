@@ -6,6 +6,7 @@
 #include "board_matrix.h"
 #include "board_profile.h"
 #include "identify.h"
+#include "led_bus.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
 #include "live_input.h"
@@ -19,16 +20,19 @@
 #include "version.h"
 #include "wifi_setup.h"
 
-static CRGB leds[kLedCount];
 static bool s_livePreemptedPlay = false;
 
-static void renderRgb(const uint8_t *d, uint16_t len) {
-  for (uint16_t p = 0; p < kLedCount; ++p) {
-    const uint16_t i = static_cast<uint16_t>(p * 3);
-    if (i + 2 < len) {
-      leds[p] = CRGB(d[i], d[i + 1], d[i + 2]);
+static uint8_t s_frame[kPlayMaxPayload];
+
+static void renderPacked(const uint8_t *d, uint16_t len) {
+  const uint16_t n = LedBus::count();
+  const uint8_t ch = PixelMap::cfg().channelsPerPixel;
+  for (uint16_t p = 0; p < n; ++p) {
+    const uint16_t i = static_cast<uint16_t>(p * ch);
+    if (ch >= 3 && static_cast<uint16_t>(i + ch) <= len) {
+      LedBus::setPacked(p, d + i);
     } else {
-      leds[p] = CRGB::Black;
+      LedBus::setRgb(p, 0, 0, 0);
     }
   }
 }
@@ -49,15 +53,17 @@ void setup() {
   Playback::begin();
   Sync::begin();
 
-  FastLED.addLeds<WS2812B, kLedPin, GRB>(leds, kLedCount);
+  LedBus::begin();
   LedCtrl::begin();
-  FastLED.clear(true);
-  LOG_V("led", "init pin=%u count=%u brightness=%u", kLedPin, kLedCount,
-        LedCtrl::get());
+  LedBus::clear();
+  LedBus::show();
+  LOG_V("led", "init pin=%u count=%u brightness=%u",
+        PixelMap::cfg().dataGpio, PixelMap::cfg().pixelCount, LedCtrl::get());
 }
 
 void loop() {
   Log::service();
+  LedBus::service();
   LiveInput::service();
   Sync::service();
 
@@ -136,42 +142,40 @@ void loop() {
           latestLen = len;
         }
         if (latest) {
-          renderRgb(latest, latestLen);
+          renderPacked(latest, latestLen);
         }
       }
     } else {
       const uint8_t *d = nullptr;
       uint16_t len = 0;
       if (LiveInput::pop(d, len)) {
-        renderRgb(d, len);
+        renderPacked(d, len);
       }
     }
   } else if (Identify::active()) {
-    Identify::render(leds, kLedCount, now);
+    Identify::render(now);
   } else if (Playback::hasFile()) {
     if (Sync::cueFollow()) {
       if (cuePulse && Sync::cuePlaying() &&
           (Sync::cueHasTime() || Sync::cueHasFrame())) {
-        uint8_t rgb[kPlayMaxPayload];
-        memset(rgb, 0, sizeof(rgb));
-        if (Playback::catchTick(rgb, sizeof(rgb), Sync::cueTargetMs(),
+        memset(s_frame, 0, sizeof(s_frame));
+        if (Playback::catchTick(s_frame, sizeof(s_frame), Sync::cueTargetMs(),
                                 Sync::cueTargetFrame(), Sync::cueHasTime(),
                                 Sync::cueHasFrame())) {
-          renderRgb(rgb, static_cast<uint16_t>(sizeof(rgb)));
+          renderPacked(s_frame, static_cast<uint16_t>(sizeof(s_frame)));
         }
       }
     } else if (fpsDue) {
       uint32_t t_us = 0;
       if (Playback::peek(t_us)) {
-        uint8_t rgb[kPlayMaxPayload];
-        memset(rgb, 0, sizeof(rgb));
-        if (Playback::copyFrame(rgb, sizeof(rgb))) {
-          renderRgb(rgb, static_cast<uint16_t>(sizeof(rgb)));
+        memset(s_frame, 0, sizeof(s_frame));
+        if (Playback::copyFrame(s_frame, sizeof(s_frame))) {
+          renderPacked(s_frame, static_cast<uint16_t>(sizeof(s_frame)));
         }
       }
     }
   } else if (fpsDue) {
-    FastLED.clear();
+    LedBus::clear();
   }
-  FastLED.show();
+  LedBus::show();
 }

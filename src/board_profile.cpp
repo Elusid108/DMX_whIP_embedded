@@ -1,6 +1,7 @@
 #include "board_profile.h"
 
 #include "log.h"
+#include "pixel_map.h"
 
 #include <Preferences.h>
 
@@ -70,9 +71,9 @@ const char *BoardProfile::chip() { return kBoardChip; }
 
 const char *BoardProfile::flashClass() { return kBoardFlashClass; }
 
-uint8_t BoardProfile::ledPin() { return kLedPin; }
+uint8_t BoardProfile::ledPin() { return PixelMap::cfg().dataGpio; }
 
-uint16_t BoardProfile::ledCount() { return kLedCount; }
+uint16_t BoardProfile::ledCount() { return PixelMap::cfg().pixelCount; }
 
 uint8_t BoardProfile::sdCs() {
   loadNvs();

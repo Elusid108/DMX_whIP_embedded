@@ -9,5 +9,5 @@ public:
   static void start(uint32_t ms);
   static void cancel();
   static bool active();
-  static void render(CRGB *leds, uint16_t count, uint32_t now);
+  static void render(uint32_t now);
 };

@@ -5,8 +5,8 @@
 #include "board_matrix.h"
 
 // Waveshare ESP32-S3-Matrix compile-time identity. Extra PIO envs later
-// swap the defaults; src/ stays shared. LED data pin is still FastLED
-// template kLedPin. SD pins may be overlaid from NVS (0xFF = default).
+// swap the defaults; src/ stays shared. LED data pin/count come from
+// PixelMap (NVS overlay). SD pins may be overlaid from NVS (0xFF = default).
 
 static constexpr char kBoardId[] = "waveshare-s3-matrix";
 static constexpr char kBoardChip[] = "esp32s3";

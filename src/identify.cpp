@@ -1,5 +1,6 @@
 #include "identify.h"
 
+#include "led_bus.h"
 #include "led_ctrl.h"
 #include "log.h"
 
@@ -69,12 +70,12 @@ bool Identify::active() {
   return true;
 }
 
-void Identify::render(CRGB *leds, uint16_t count, uint32_t now) {
-  if (!leds || !count) {
-    return;
-  }
+void Identify::render(uint32_t now) {
   applyBoost();
   const bool flash = ((now / 150) % 2) == 0;
-  const CRGB c = flash ? CRGB(0, 255, 255) : CRGB(255, 255, 255);
-  fill_solid(leds, count, c);
+  if (flash) {
+    LedBus::fillRgb(0, 255, 255);
+  } else {
+    LedBus::fillRgb(255, 255, 255);
+  }
 }

@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.14.0**
+Version: **0.17.1**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -11,7 +11,7 @@ Local `ARCHIVE/` is gitignored. It is the old generic ESP32-S3 controller (GPIO 
 ## Current hardware (`[env:matrix]`)
 
 - MCU: ESP32-S3FH4R2 — **4MB flash, 2MB QSPI PSRAM** (`qio_qspi`, `default.csv`)
-- LED: 8×8 WS2812B on GPIO 14, GRB, default brightness **10/255** (portal 0–255; warn above 64 — this panel can overheat)
+- LED: 8×8 WS2812B on GPIO 14, GRB, default brightness **10/255** (Patch tab 0–255; warn above 64 — this panel can overheat). IC / order / count / GPIO / clock / white / CCT / start universe+channel are NVS overlays (`POST /map`, idle). Count 1–1024.
 - USB-C: native USB-Serial/JTAG (`ARDUINO_USB_CDC_ON_BOOT=1`, `ARDUINO_USB_MODE=1`)
 - microSD: **SPI** CS 7, MOSI 6, CLK 5, MISO 4 (3.3 V module only)
 
@@ -23,19 +23,19 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 
 ## SoftAP config portal
 
-- SSID `dmxwhip`, password `pass1234`, page `http://4.3.2.1` (Live / Playback / Pixels / Setup)
-- Click the bold title to rename (Enter or blur saves; Escape cancels). **Identify** sits under the name (idle only). A `live` / `play` / `idle` pill stays in the header. Lands on **Live** when STA has an IP, otherwise **Setup**.
+- SSID `dmxwhip`, password `pass1234`, page `http://4.3.2.1` (Live / Playback / Patch / Setup)
+- Click the bold title to rename (Enter or blur saves; Escape cancels). **Identify** sits under the name (idle only). Lands on **Live** when STA has an IP, otherwise **Setup**. The `live` / `play` / `idle` pill is the first block on Live.
 - AP+STA: scan 2.4 GHz networks, connect, always **remember** last STA network in NVS and reconnect at boot. **Forget saved network** on the page clears NVS and drops STA. HTTP stays up on whichever interface has an IP (SoftAP `4.3.2.1` and/or STA). **Hide AP if connected** (Setup, NVS `park`, default **Yes**): Yes + STA → SoftAP and captive DNS stop so the radio is STA-only; HTTP stays on the STA IP. **No** leaves SoftAP up alongside STA so a phone can still join `dmxwhip`. SoftAP returns if STA drops or never connects. The page **scans the first time Setup is opened**; **Scan** starts a fresh scan.
 - Captive DNS hijacks all names to `4.3.2.1`. Probe URLs (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`, …) return the portal HTML with **200**, never OS “success” tokens (no HTTP 204 for Android, no Apple `Success`, no Windows NCSI pass string).
 - Limit: HTTPS connectivity checks cannot be spoofed. Some new phones only show a sign-in notification. DHCP Captive-Portal-API (RFC 8910) needs IDF 5+; this Arduino core is IDF 4.4. If the sheet does not open, use `http://4.3.2.1` (not https).
 - Connecting STA may hop the SoftAP channel; if the page drops, rejoin `dmxwhip`. With park **Yes** and STA up the AP is gone — unicast to the **STA IP** (serial `[V][wifi] connected ... ip=`). Park **No** keeps `dmxwhip` / `http://4.3.2.1` plus STA HTTP. With no STA, use `dmxwhip` / `http://4.3.2.1`. STA connect timeout starts when `loop()` runs so a slow SD mount cannot drop a saved network. Art-Net UDP rebinds on STA IP. Wi-Fi power save is off while STA is connected.
-- Max brightness slider **and number field** 0–255 on Setup (default 10, stored in NVS). Warning on the page above 64; the value is not capped. `/status` field `bri`. Live pixels use this as FastLED global scale.
-- Live block on Setup (NVS): **protocol** Auto / Art-Net / sACN (`/status` `proto`); **show FPS** 20 / 30 / 40 / 60 (`fps`); **buffer** 0 latest … 3 frames (`buf`); **Hide AP if connected** Yes / No (`park`, default Yes). Auto = first live protocol locks until 2 s silence. `/live` accepts `park` while a stream is up. **Identify:** header button and `POST /identify` (form `ms`, default 3000, 200–15000) flashes cyan/white on the matrix while idle; it does not mark the node live. 503 if a protocol is live. Locate scale is `max(saved bri, 64)` then restored.
-- Live tab polls cheap `GET /api/stats` (radio, RSSI, SD summary, transport counters, playback now/underrun/frame, heap/PSRAM, pixel `map`). Pixels is a read-only identity pane. Playback lists `.dmx` files and folders (`/status` `play`) with Prev / Play / Stop / Next; row click selects only. POSTs `/play` for the idle playlist (NVS). `src=stop` (or `action=stop`) parks playback without changing the saved playlist. Companion `POST /upload` (multipart `path` + `file`) streams a `.dmx` onto the card while idle. Pull the card → not mounted; reinsert → automount. `/status` object `sd` (`used_mb` / `free_mb` omitted until the walk finishes). Skip SD I/O while a protocol is live.
+- Max brightness slider **and number field** 0–255 on **Patch** (default 10, stored in NVS). Warning on the page above 64; the value is not capped. `/status` field `bri`. Live pixels use this as FastLED global scale.
+- Live protocol Auto / Art-Net / sACN lives on **Patch** (`/status` `proto`, still `POST /live` from Save). Setup keeps **show FPS** 20 / 30 / 40 / 60 (`fps`), **buffer** 0 latest … 3 frames (`buf`), and **Hide AP if connected** Yes / No (`park`, default Yes). Auto = first live protocol locks until 2 s silence. `/live` accepts `park` while a stream is up. **Identify:** header button and `POST /identify` (form `ms`, default 3000, 200–15000) flashes cyan/white on the matrix while idle; it does not mark the node live. 503 if a protocol is live. Locate scale is `max(saved bri, 64)` then restored.
+- Live tab polls cheap `GET /api/stats` and shows a no-scroll 2×2 dashboard (radio with RSSI bars, stream numbers, SD meter, now-playing) plus an identity/health strip. **Patch** edits IC (clockless + clocked), color order, pixel count (1–1024), data/clock GPIO, white/CCT channels (RGB / RGBW / RGB+C / RGBWC), start universe (Art-Net 0-based; sACN is +1), start channel, live protocol, and brightness. **Save** posts `/map` (and `/live` if protocol changed); browsing the form does not rebind. Brightness still applies immediately. Idle `POST /map` persists NVS and queues an LED rebind after the HTTP reply. 503 while live. Playback lists `.dmx` files and folders (`/status` `play`) with Prev / Play / Stop / Next; row click selects only. POSTs `/play` for the idle playlist (NVS). `src=stop` (or `action=stop`) parks playback without changing the saved playlist. Companion `POST /upload` (multipart `path` + `file`) streams a `.dmx` onto the card while idle. Pull the card → not mounted; reinsert → automount. `/status` object `sd` (`used_mb` / `free_mb` omitted until the walk finishes). Skip SD I/O while a protocol is live.
 
 ## Art-Net / sACN (Resolume)
 
-- Art-Net: UDP **6454**, universe **0** (Resolume “universe 1” is often Art-Net 0). sACN: UDP **5568**, universe **1**, unicast to STA IP or multicast `239.255.0.1`. 64 pixels = 192 RGB channels, **1:1** onto the strip. FastLED maps RGB → GRB.
+- Art-Net: UDP **6454**, start universe from Patch (default **0**; Resolume “universe 1” is often Art-Net 0). sACN: UDP **5568**, start = Art-Net + 1 (default **1**), unicast to STA IP or multicast `239.255.(uni>>8).(uni&0xFF)`. Default 64 RGB pixels = 192 channels, **1:1** onto the strip. Wire order is the Patch `order` (default GRB). White and/or CCT add channels and shrink pixels-per-universe.
 - Live path: buf 0 = drop-to-latest; buf 1–3 = small jitter queue (drop oldest if full). Show rate from portal FPS. Idle plays companion `DMXREC` `.dmx` from SD 1:1 (Art-Net universe 0 or sACN universe 1). Default: all `.dmx` directly in `/`, alphabetical, wrap forever. A selected file can loop itself or continue with its parent playlist; a selected folder plays nested `.dmx` by full path (repeat forever, or N times then black). No file = black. Serial `[V][artnet]` / `[V][sacn]` first packet + 5 s counters; `[V][live] auto lock …`; `[V][ap] down (sta)` / `[V][ap] up`; `[V][play] file=` / `[V][play] list`.
 
 ## Living milestone list
@@ -65,6 +65,10 @@ Bring-up (this board)
 - [x] Companion node name + SD rename / stream pull / order prefixes — implemented (not verified)
 - [x] SoftAP faceplate (status strip, Playback / Setup, companion-equivalent transport and radio list) — implemented (not verified)
 - [x] Portal Live / Playback / Pixels / Setup; click-to-edit name; Identify under title; `/api/stats` + `/status` `rssi` — implemented (not verified)
+- [x] Live status cards + Pixels editor (IC / order / count / GPIO / brightness); idle `POST /map` + NVS LED overlay — implemented (not verified)
+- [x] Live tab no-scroll 2×2 dashboard (signal bars, SD meter, stream numbers, identity/health strip) — implemented (not verified)
+- [x] Patch tab (was Pixels): IC catalog, clock pin, RGB/RGBW/CCT, start universe/channel, live protocol; queued LED rebind — implemented (not verified)
+- [x] Patch Save button (no auto `/map` / proto while browsing the form) — implemented (not verified)
 - [x] Park portal while live Yes/No (NVS; default Yes) — implemented (not verified; superseded: `park` now hides SoftAP when STA is up; HTTP stays)
 - [x] Hide AP if connected (`park` Yes/No) + HTTP always on STA; SD boot no longer drops STA/ArtPoll — implemented (not verified)
 
@@ -107,10 +111,10 @@ Companion PC (sibling repo `DMX_whIP_companion`, not this tree)
 
 The companion discovers and locates nodes over the **selected NIC**. Contract:
 
-- **ArtPoll** (UDP 6454, opcode `0x2000`) — this firmware replies with **ArtPollReply** (`0x2100`, 239 bytes): short/long name from NVS (`POST /name`; default `dmxwhip` / `dmxwhip v…`), IP, MAC, BindIndex 1, one DMX-out port, Art-Net **universe 0**. Poll does not count as live input. **sACN-only** portal proto stops Art-Net UDP, so those nodes will not appear in ArtPoll.
-- **Universes** — live Art-Net **0** (Resolume “universe 1” is often 0). Live sACN is universe **1** and is not advertised in ArtPollReply.
-- **HTTP on every IP; SoftAP is a fallback** — SoftAP `http://4.3.2.1` (SSID `dmxwhip` / `pass1234`) when there is no STA, and the STA IP when connected. **Park Yes** (default, **Hide AP if connected**): SoftAP and captive DNS are down while STA is up; HTTP stays on the STA IP during playback and during a live stream. **Park No:** SoftAP stays up alongside STA. SoftAP returns if STA drops. SD routes (`/upload`, `/play`, `/rename`, `/file`, `/order`), `/identify`, and `/pins` stay 503 while live.
-- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `api` (integer wire version; `1` here), `chip`, `board`, `name`, `short`, `bri`, `proto`, `fps`, `buf`, `park` (`yes`/`no`; hide SoftAP when STA is up), `live` (bool), `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`; `used_mb` / `free_mb` after the deferred FAT walk), `pins` (`led`; `sd.cs` / `sd.mosi` / `sd.clk` / `sd.miso`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `files`, `dirs`). When present: `ssid`, `saved`, `ip` (STA), `rssi` (STA dBm), `error`. Extra keys are additive.
+- **ArtPoll** (UDP 6454, opcode `0x2000`) — this firmware replies with **ArtPollReply** (`0x2100`, 239 bytes): short/long name from NVS (`POST /name`; default `dmxwhip` / `dmxwhip v…`), IP, MAC, BindIndex 1, one DMX-out port, Art-Net **start universe** from the Patch map (default 0). Poll does not count as live input. **sACN-only** portal proto stops Art-Net UDP, so those nodes will not appear in ArtPoll.
+- **Universes** — live Art-Net start from `map.artnet` (default 0; Resolume “universe 1” is often 0). Live sACN start is `map.sacn` (Art-Net + 1) and is not advertised in ArtPollReply. A patch may span up to six universes.
+- **HTTP on every IP; SoftAP is a fallback** — SoftAP `http://4.3.2.1` (SSID `dmxwhip` / `pass1234`) when there is no STA, and the STA IP when connected. **Park Yes** (default, **Hide AP if connected**): SoftAP and captive DNS are down while STA is up; HTTP stays on the STA IP during playback and during a live stream. **Park No:** SoftAP stays up alongside STA. SoftAP returns if STA drops. SD routes (`/upload`, `/play`, `/rename`, `/file`, `/order`), `/identify`, `/pins`, and `/map` stay 503 while live.
+- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `api` (integer wire version; `1` here), `chip`, `board`, `name`, `short`, `bri`, `proto`, `fps`, `buf`, `park` (`yes`/`no`; hide SoftAP when STA is up), `live` (bool), `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`; `used_mb` / `free_mb` after the deferred FAT walk), `pins` (`led` follows the PixelMap overlay; `sd.cs` / `sd.mosi` / `sd.clk` / `sd.miso`), `map` (`chip`, `order`, `data`, `clk`, `count`, `artnet`, `sacn`, `ch`, `split`, plus additive `white`, `cct`, `ch_px`, `span`, `fit`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `files`, `dirs`). When present: `ssid`, `saved`, `ip` (STA), `rssi` (STA dBm), `error`. Extra keys are additive.
 - **GET `/api/stats`** — cheap dashboard JSON (no SD file list). Same radio/`sd` summary as `/status` plus `rssi`, `mode` (`live`/`play`/`idle`), `src`, `age_ms`, `queued`, `drops`, `pps`, `heap`, `psram`, `up_ms`, compact `play` (`now`, `parked`, `underrun`, `frame`), and `map` (chipset, order, data GPIO, count, Art-Net/sACN start, start channel). Available while live. Companion may ignore this route.
 - **POST `/identify`** — form `ms` (default 3000, 200–15000). Idle LED locate pattern. Must not call `LiveInput::push`. 503 when live. Show scale is `max(saved bri, 64)` for the flash only, then restored (not written to NVS).
 - **POST `/upload`** — multipart form `path` (absolute, e.g. `/scene_1.dmx`) + file part `file`. Query `path=` is also accepted. Idle-only. Validates like playlist paths (leading `/`, no `..`, length &lt; 64) and requires a `.dmx` basename. 503 `live` / `no sd` / `busy`. Parks playback, writes chunks to SD, refreshes `/status` `play.files`. Success `200 {"ok":true,"path":"/foo.dmx","bytes":N}`. No sidecar JSON on the card.
@@ -120,7 +124,8 @@ The companion discovers and locates nodes over the **selected NIC**. Contract:
 - **POST `/rename`** — form `from` + `to` (absolute `.dmx`, same path rules as `/upload`). Idle-only. 404 missing, 409 exists. Updates the NVS file playlist path if it matched `from`.
 - **GET `/file`** — query `path=/foo.dmx`. Idle-only. Streams the file (`streamFile`); no full-file RAM buffer. 404 missing.
 - **POST `/order`** — repeated form `path` in the desired order. Two-phase rename to `/01_basename.dmx`, `/02_…` (strips an existing `NN_` prefix). Idle-only. Response is full `/status`.
-- **POST `/pins`** — form `cs`, `mosi`, `clk`, `miso` (ESP32-S3 GPIO 0–48, four distinct). Idle-only (503 when live; remounts SD). Persists NVS `board` overlay (missing/`0xFF` = Matrix compile-time defaults). LED data pin is not accepted. Response is full `/status`.
+- **POST `/pins`** — form `cs`, `mosi`, `clk`, `miso` (ESP32-S3 GPIO 0–48, four distinct). Idle-only (503 when live; remounts SD). Persists NVS `board` overlay (missing/`0xFF` = Matrix compile-time defaults). LED data pin is not accepted (`POST /map`). Response is full `/status`.
+- **POST `/map`** — optional form `chip` (clockless/clocked id), `order` (wire permutation of `rgb` plus `w`/`c` when those channels are on), `data` (GPIO), `clk` (required for clocked ICs), `count` (1–1024), `white` / `cct` (`0`/`1`), `uni` (Art-Net start, 0–32767), `ch` (start channel 1–512). Idle-only (503 when live). Persists NVS `pmap` and queues an LED rebind after the HTTP reply. Rejects USB-JTAG (19/20), flash/PSRAM (26–32), current SD pins, and a clock pin equal to data. Omitted fields keep the current map. Response is full `/status`.
 
 - [ ] Art-Net / sACN test sender that can also emit ArtSync / E1.31 sync / playback cues
 - [ ] Later: recorder and SD file pull; node exposes the files/API this app will use
@@ -182,6 +187,10 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.17.1** — Patch Save button; IC / proto / map fields no longer POST on every change
+- **0.17.0** — Patch tab: IC catalog + clock pin, RGBW/CCT, start universe/channel, live protocol moved from Setup; IC change no longer tears down RMT on the HTTP task
+- **0.16.0** — Live tab no-scroll dashboard: 2×2 tiles, RSSI bars, SD meter, stream numbers
+- **0.15.0** — Live status cards; Pixels editor (IC / order / count / GPIO / brightness); idle `POST /map` + NVS LED overlay
 - **0.14.0** — Portal Live tab + click-to-edit name; Pixels identity pane; cheap `GET /api/stats`; `/status` `rssi`
 - **0.13.1** — Portal HTML no-cache + static version so Hide AP label is not stuck from a pre-0.13 tab
 - **0.13.0** — Hide AP if connected (`park`); HTTP stays on STA; SD boot no longer times out STA/ArtPoll
