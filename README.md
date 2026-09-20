@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.22.0**
+Version: **0.22.1**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
 
@@ -242,6 +242,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.22.1** — RMT5 clockless timings in nanoseconds so WS2812 on the Matrix actually lights
 - **0.22.0** — pioarduino 55.03.39 (Arduino 3.3.9 / IDF 5.5); selectable `BOARD_PROFILE_*`; FastLED 3.10 RMT5 LedBus; living **Adding a board** starter
 - **0.21.0** — Portal Playback matches the companion Library list: nested SD folders, multi-select, graphic transport with pause, second-click titles, delete, sidecar names
 - **0.20.1** — Patch Save / `POST /map` reboots after persist so the new map is loaded

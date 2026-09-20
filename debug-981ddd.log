@@ -1,0 +1,85 @@
+{"sessionId":"981ddd","timestamp":1789867661521,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=52778000 fr=1599 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867661522,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=4 g=0 b=4 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867662522,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867662522,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=54097000 fr=1639 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867662523,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867663527,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=55418000 fr=1679 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867663528,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867664529,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=56737000 fr=1719 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867664530,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=1 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867664930,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867665131,"location":"serial-monitor.py","message":"[V][artnet] rx pkts=16 dmx=0 sync=0 poll=16 reply=16 uni=0 seq=0 skip_uni=0","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867665532,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=57960000 fr=1756 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867665532,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867666535,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=59278000 fr=1796 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867666535,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867667539,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867667540,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=60599000 fr=1836 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867667540,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=3 g=2 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867668544,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=61919000 fr=1876 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867668544,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=3 g=2 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867669547,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=63139000 fr=1913 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867669548,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=2 g=4 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867670150,"location":"serial-monitor.py","message":"[V][artnet] rx pkts=17 dmx=0 sync=0 poll=17 reply=17 uni=0 seq=0 skip_uni=0","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867670551,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=64460000 fr=1953 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867670551,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=5 b=2 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867671556,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=65780000 fr=1993 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867671557,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=1 b=3 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867672559,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=67100000 fr=2033 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867672559,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=2 g=0 b=4 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867673561,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=68321000 fr=2070 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867673561,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867674566,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=69641000 fr=2110 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867674566,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867675167,"location":"serial-monitor.py","message":"[V][artnet] rx pkts=17 dmx=0 sync=0 poll=17 reply=17 uni=0 seq=0 skip_uni=0","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867675568,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=70960000 fr=2150 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867675568,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=1 b=1 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867676572,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=72292000 fr=2190 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867676572,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=1 b=2 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867676573,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867676974,"location":"serial-monitor.py","message":"[V][play] wrap list","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867676974,"location":"serial-monitor.py","message":"[V][play] file=/60fps test.dmx frames=308 payload=192 artnet=0 sacn=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867676975,"location":"serial-monitor.py","message":"[V][play] next /60fps test.dmx","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867676975,"location":"serial-monitor.py","message":"[C][play] underrun","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867677577,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=650000 fr=19 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867677577,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=4 g=2 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867678581,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=2022000 fr=59 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867678582,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=4 g=0 b=2 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867678983,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867679585,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=3355000 fr=99 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867679585,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=7 g=2 b=2 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867680188,"location":"serial-monitor.py","message":"[V][artnet] rx pkts=19 dmx=0 sync=0 poll=19 reply=19 uni=0 seq=0 skip_uni=0","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867680588,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=4723000 fr=139 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867680588,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=3 g=0 b=1 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867681591,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=5990000 fr=177 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867681591,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=3 g=0 b=2 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867681592,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867682594,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=7325000 fr=217 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867682595,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867683597,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=8656000 fr=257 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867683597,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=1 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867684199,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867684600,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=9990000 fr=297 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867684600,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=6 g=6 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867684801,"location":"serial-monitor.py","message":"[V][play] file=/Color wave.dmx frames=2211 payload=192 artnet=0 sacn=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867684801,"location":"serial-monitor.py","message":"[V][play] next /Color wave.dmx","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867684802,"location":"serial-monitor.py","message":"[C][play] underrun","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867685203,"location":"serial-monitor.py","message":"[V][artnet] rx pkts=21 dmx=0 sync=0 poll=21 reply=21 uni=0 seq=0 skip_uni=0","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867685604,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=967000 fr=29 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867685604,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867686608,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867686608,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=2287000 fr=69 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867686609,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=2 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867687612,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=3608000 fr=109 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867687612,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=5 g=5 b=1 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867688615,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=4928000 fr=149 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867688615,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867689016,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867689618,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=6182000 fr=187 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867689618,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=4 b=4 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867690221,"location":"serial-monitor.py","message":"[V][artnet] rx pkts=23 dmx=0 sync=0 poll=23 reply=23 uni=0 seq=0 skip_uni=0","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867690623,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=7502000 fr=227 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867690623,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=0 b=0 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867691627,"location":"serial-monitor.py","message":"[V][artnet] poll from=10.0.0.57 reply ip=10.0.0.198","hypothesisId":"B","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867691627,"location":"serial-monitor.py","message":"[V][dbg] H-C avail=4 peek=1 t=8822000 fr=267 underrun=0 play=1","hypothesisId":"C","runId":"post-fix"}
+{"sessionId":"981ddd","timestamp":1789867691628,"location":"serial-monitor.py","message":"[V][dbg] H-D show nout=1 px=64 r=0 g=1 b=1 t1=250 t2=625 t3=375 fmul=30","hypothesisId":"D","runId":"post-fix"}

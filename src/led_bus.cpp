@@ -9,17 +9,7 @@
 
 #include "platforms/esp/32/rmt_5/idf5_rmt.h"
 
-#ifndef CLOCKLESS_FREQUENCY
-#define CLOCKLESS_FREQUENCY F_CPU
-#endif
-
 namespace {
-
-#ifndef FMUL
-#define LEDBUS_FMUL (CLOCKLESS_FREQUENCY / 8000000)
-#else
-#define LEDBUS_FMUL FMUL
-#endif
 
 static CRGB s_leds[kLedCountMax];
 static uint8_t s_px[kLedCountMax][kMaxChannelsPerPixel];
@@ -72,10 +62,10 @@ static void timings(LedChipset chip, int &t1, int &t2, int &t3) {
   uint8_t b = 5;
   uint8_t c = 3;
   PixelMap::clocklessUnits(chip, a, b, c);
-  const int fmul = LEDBUS_FMUL;
-  t1 = a * fmul;
-  t2 = b * fmul;
-  t3 = c * fmul;
+  // Chip table stores old FastLED FMUL units (125 ns). RMT5 wants ns.
+  t1 = static_cast<int>(a) * 125;
+  t2 = static_cast<int>(b) * 125;
+  t3 = static_cast<int>(c) * 125;
 }
 
 static uint8_t chanOf(char letter, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
