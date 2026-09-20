@@ -1,6 +1,5 @@
 #include "live_input.h"
 
-#include "dbg981.h"
 #include "artnet_rx.h"
 #include "led_bus.h"
 #include "log.h"
@@ -281,25 +280,9 @@ bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
     return false;
   }
   if (src == LiveSource::ArtNet && !PixelMap::wantsArtNet(universe)) {
-    // #region agent log
-    static uint32_t s_dbgRejA = 0;
-    if (s_dbgRejA < 8) {
-      dbg981("B", "live_input.cpp:push", "reject_art", universe,
-             PixelMap::cfg().startArtNetUniverse);
-    }
-    s_dbgRejA++;
-    // #endregion
     return false;
   }
   if (src == LiveSource::Sacn && !PixelMap::wantsSacn(universe)) {
-    // #region agent log
-    static uint32_t s_dbgRejS = 0;
-    if (s_dbgRejS < 8) {
-      dbg981("B", "live_input.cpp:push", "reject_sacn", universe,
-             PixelMap::cfg().startSacnUniverse);
-    }
-    s_dbgRejS++;
-    // #endregion
     return false;
   }
   UniSlot *slot = findSlot(src, universe, true);
@@ -310,16 +293,6 @@ bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
     len = kDmxUniverseSize;
   }
   ++s_rx;
-  // #region agent log
-  static uint32_t s_dbgAcc = 0;
-  if (s_dbgAcc < 6 || (s_dbgAcc % 40) == 0) {
-    dbg981("B", "live_input.cpp:push", "accept", universe,
-           static_cast<uint32_t>(src) << 24 |
-               (len > 0 ? data[0] : 0u) << 16 |
-               (len > 1 ? data[1] : 0u) << 8 | (len > 2 ? data[2] : 0u));
-  }
-  s_dbgAcc++;
-  // #endregion
   if (s_fresh) {
     ++s_drops;
   }

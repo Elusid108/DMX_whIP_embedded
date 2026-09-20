@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.24.1</title>
+<title>dmxwhip v0.26.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -74,7 +74,7 @@ body.editing #nameView{display:none}
 #list,#plist{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:6px;margin:6px 0;padding:3px;background:var(--bg)}
 .net,.playrow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;margin:3px;background:var(--chrome);border:1px solid var(--border);border-radius:6px;cursor:pointer;user-select:none;-webkit-user-select:none}
 .net.sel,.playrow.sel{border-color:#22d3ee66;box-shadow:inset 2px 0 0 var(--accent)}
-.playrow.now{border-color:#86efac66}
+.net.now,.playrow.now{border-color:#86efac66}
 .playrow .playname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .playrow .playfile{flex:0 1 auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
 .playrow .chev{width:1.15rem;flex:0 0 auto;padding:0;margin:0;border:0;background:transparent;color:var(--muted);font-size:.7rem;line-height:1}
@@ -88,6 +88,10 @@ input,button,select{width:100%;box-sizing:border-box;padding:8px 10px;font-size:
 .brirow{display:flex;gap:8px;align-items:center}
 .brirow input[type=range]{flex:1 1 auto;padding:8px 0;min-width:0;accent-color:var(--accent)}
 #brinum{width:4.6rem;flex:0 0 4.6rem;padding:8px 6px;text-align:right;font-family:ui-monospace,monospace}
+.passwrap{position:relative}
+.passwrap input{padding-right:2.75rem}
+#passEye{position:absolute;right:2px;top:50%;transform:translateY(-50%);width:auto;min-width:2.2rem;margin:0;padding:6px;border:0;background:transparent;color:var(--muted);line-height:0}
+#passEye svg{display:block;width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2}
 button{background:var(--chrome);border:1px solid var(--border);margin:6px 0 0;font-weight:600;color:var(--text)}
 button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 #savedrow,#fileopts,#folderopts,#foldernrow,#note{display:none}
@@ -147,6 +151,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div class="sig">
 <div class="bars" id="lrBars" data-n="0"><i></i><i></i><i></i><i></i></div>
 <span class="tmono" id="lrRssi">—</span>
+<span class="tmono" id="lrLink">—</span>
 </div>
 <p class="cap"><span id="lrAp">—</span> · saved <span id="lrSaved">—</span></p>
 </div>
@@ -209,18 +214,31 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 </div>
 <div id="viewSetup">
-<p class="hint">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
+<p class="hint" id="setupHint">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
 <div class="lab">Radio</div>
 <div class="row">
 <button id="scan" type="button">Scan</button>
 <button class="pri" id="go" type="button">Connect</button>
 <button id="forget" type="button">Forget</button>
 </div>
+<div id="bandrow" hidden>
+<label class="lab" for="band">Band</label>
+<select id="band">
+<option value="2g" selected>2.4 GHz</option>
+<option value="5g">5 GHz</option>
+<option value="auto">Auto</option>
+</select>
+</div>
 <div id="list"></div>
 <label class="lab" for="ssid">SSID</label>
 <input id="ssid" maxlength="32" placeholder="SSID or hidden network" autocomplete="off">
 <label class="lab" for="pass">Password</label>
+<div class="passwrap">
 <input id="pass" type="password" maxlength="63" placeholder="Leave empty if open" autocomplete="off">
+<button id="passEye" type="button" aria-label="Show password" title="Show password">
+<svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8" ry="5"/><circle cx="12" cy="12" r="2"/></svg>
+</button>
+</div>
 <div id="savedrow"><p class="readout" id="savedlab"></p></div>
 <p id="status"></p>
 <div class="mod lab">Live input</div>
@@ -232,8 +250,11 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
+<div class="row">
+<button class="pri" id="setupSave" type="button">Save</button>
 </div>
-<p id="ver" class="readout">dmxwhip v0.24.1</p>
+</div>
+<p id="ver" class="readout">dmxwhip v0.26.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -253,6 +274,10 @@ const playnowEl=document.getElementById('playnow');
 const fpsEl=document.getElementById('fps');
 const bufEl=document.getElementById('buf');
 const parkEl=document.getElementById('park');
+const bandEl=document.getElementById('band');
+const bandRow=document.getElementById('bandrow');
+const setupHint=document.getElementById('setupHint');
+const setupSave=document.getElementById('setupSave');
 const patchList=document.getElementById('patchList');
 const mapAdd=document.getElementById('mapAdd');
 const fileloopEl=document.getElementById('fileloop');
@@ -394,7 +419,8 @@ function refreshPatchTitles(){
 }
 function setTxt(id,v){const el=document.getElementById(id);if(el) el.textContent=v==null||v===''?'—':String(v);}
 let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0,mapSaveNoteTimer=0;
-let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,scanning=false;
+let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,bandDirty=false,scanning=false;
+let lastNets=[],credsFilled=false,liveSsid='',liveLink='',selBssid='',selCh=0;
 let patchSavePending=false;
 let playSrc='root',playPath='/',playListKey='',lastFiles=[],lastTitles=[],lastDirs=[];
 let playSel=new Set(['root\t/']),playAnchor='root\t/',playCollapsed={},playPaused=false,playNow='',titleEdit=null;
@@ -635,6 +661,21 @@ function applyLive(s){
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
   if(s.park) parkEl.value=s.park;
 }
+function linkLabel(v){
+  if(v==='5g') return '5 GHz';
+  if(v==='wired') return 'Wired';
+  if(v==='2g') return '2.4 GHz';
+  return '—';
+}
+function applyBand(s){
+  if(bandRow) bandRow.hidden=!s.wifi_5g;
+  if(bandEl && s.wifi_5g && s.band && !bandDirty) bandEl.value=s.band;
+  if(setupHint){
+    setupHint.innerHTML=s.wifi_5g
+      ? 'This board can use 2.4 or 5 GHz. Auto/5 GHz may drop USB-JTAG. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1'
+      : '2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1';
+  }
+}
 function fmtUp(ms){
   const s=Math.floor((ms||0)/1000);
   const h=Math.floor(s/3600);
@@ -654,8 +695,16 @@ function showName(n){
     nameEl.value=n;
   }
 }
+function fillCreds(s){
+  if(credsFilled) return;
+  if(!s.saved) return;
+  ssidEl.value=s.saved;
+  if(typeof s.pass==='string') passEl.value=s.pass;
+  credsFilled=true;
+}
 function applyChrome(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
+  fillCreds(s);
   showName(s.name);
   const mode=s.mode||(s.live?'live':(s.play&&s.play.now?'play':'idle'));
   modeEl.className='mode '+mode;
@@ -670,6 +719,7 @@ function applyChrome(s){
   if(s.saved){savedRow.className='on';savedLab.textContent='saved '+s.saved+' (connects at boot)'+(s.ip?(' · STA '+s.ip):'');}
   else {savedRow.className='';savedLab.textContent='';}
   applyLive(s);
+  applyBand(s);
 }
 function applyPixels(s){
   if(s.patch){
@@ -698,9 +748,12 @@ function applyPixels(s){
 function applyStats(s){
   applyChrome(s);
   applyPixels(s);
+  liveSsid=s.ssid||'';
+  liveLink=s.link||'';
   setTxt('lrSsid',s.ssid||'no STA');
   setTxt('lrSta',s.ip||'—');
   setTxt('lrRssi',typeof s.rssi==='number'?s.rssi+' dBm':'—');
+  setTxt('lrLink',linkLabel(s.link));
   setTxt('lrAp',s.ap_ip||'AP off');
   setTxt('lrSaved',s.saved||'none');
   const bars=document.getElementById('lrBars');
@@ -751,6 +804,7 @@ function applyStats(s){
   setTxt('lhUp',typeof s.up_ms==='number'?fmtUp(s.up_ms):'—');
   setTxt('lhHeap',fmtKb(s.heap));
   setTxt('lhPsram',fmtKb(s.psram));
+  if(tab==='setup'&&lastNets.length) paintNetClasses();
 }
 function applyMeta(s){
   applyChrome(s);
@@ -771,28 +825,102 @@ function postForm(url,fields){
   });
   return fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:b});
 }
+function bandFilter(){
+  return (bandEl&&bandRow&&!bandRow.hidden)?bandEl.value:'2g';
+}
+function pickTwin(n){
+  const mode=bandFilter();
+  if(n.both){
+    if(mode==='5g'&&n.b5) return n.b5;
+    if(mode==='2g'&&n.b2) return n.b2;
+    if(liveLink==='5g'&&n.b5) return n.b5;
+    if(liveLink==='2g'&&n.b2) return n.b2;
+    if(n.b5&&n.b2) return (n.b5.rssi>=n.b2.rssi)?n.b5:n.b2;
+    return n.b5||n.b2||n;
+  }
+  return n;
+}
+function mergeNets(nets){
+  const mode=bandFilter();
+  const raw=nets||[];
+  if(mode==='2g') return raw.filter(n=>n.ghz===2);
+  if(mode==='5g') return raw.filter(n=>n.ghz===5);
+  const map=new Map();
+  raw.forEach(n=>{
+    let e=map.get(n.ssid);
+    if(!e){
+      e={ssid:n.ssid,rssi:n.rssi,secure:!!n.secure,ghz:n.ghz,bssid:n.bssid,ch:n.ch,both:false,b2:null,b5:null};
+      map.set(n.ssid,e);
+    }
+    if(n.rssi>e.rssi) e.rssi=n.rssi;
+    e.secure=e.secure||!!n.secure;
+    const twin={bssid:n.bssid,ch:n.ch,rssi:n.rssi};
+    if(n.ghz===5) e.b5=twin;
+    else e.b2=twin;
+  });
+  return Array.from(map.values()).map(e=>{
+    if(e.b2&&e.b5){e.both=true;e.ghz=0;}
+    return e;
+  });
+}
+function rowGhzLabel(n){
+  if(n.both||n.ghz===0) return '2.4 + 5 GHz ';
+  if(n.ghz===5) return '5 GHz ';
+  if(n.ghz===2) return '2.4 GHz ';
+  return '';
+}
+function rowIsNow(n){
+  if(!liveSsid||liveSsid!==n.ssid) return false;
+  if(n.both) return true;
+  if(liveLink==='5g') return n.ghz===5;
+  if(liveLink==='2g') return n.ghz===2;
+  return true;
+}
+function paintNetClasses(){
+  const rows=list.children;
+  for(let i=0;i<rows.length;i++){
+    const name=rows[i].dataset.ssid||'';
+    const ghz=+rows[i].dataset.ghz;
+    const both=rows[i].dataset.both==='1';
+    rows[i].classList.toggle('sel',ssidEl.value===name);
+    const now=!!liveSsid&&liveSsid===name&&(both||!liveLink||liveLink==='wired'||(liveLink==='5g'&&ghz===5)||(liveLink==='2g'&&ghz===2));
+    rows[i].classList.toggle('now',now);
+  }
+}
 function renderNets(nets){
+  if(nets) lastNets=nets;
+  const rows=mergeNets(lastNets);
   list.innerHTML='';
-  (nets||[]).forEach(n=>{
+  rows.forEach(n=>{
     const d=document.createElement('div');
-    d.className='net'+(ssidEl.value===n.ssid?' sel':'');
-    d.innerHTML='<span>'+escapeHtml(n.ssid)+'</span><span class="readout">'+(n.secure?'lock ':'open ')+n.rssi+' dBm</span>';
+    d.dataset.ssid=n.ssid;
+    d.dataset.ghz=String(n.ghz||0);
+    d.dataset.both=n.both?'1':'0';
+    d.className='net';
+    d.innerHTML='<span>'+escapeHtml(n.ssid)+'</span><span class="readout">'+rowGhzLabel(n)+(n.secure?'lock ':'open ')+n.rssi+' dBm</span>';
     d.onclick=()=>{
-      const kids=list.children;
-      for(let i=0;i<kids.length;i++) kids[i].classList.remove('sel');
-      d.classList.add('sel');
       ssidEl.value=n.ssid;
+      const t=pickTwin(n);
+      selBssid=t&&t.bssid?t.bssid:'';
+      selCh=t&&t.ch?t.ch:0;
+      paintNetClasses();
     };
     list.appendChild(d);
   });
-  if(!nets||!nets.length) setStatus('No networks found. Try Scan again.');
+  paintNetClasses();
+  if(!rows.length){
+    if((lastNets||[]).length&&bandFilter()==='5g') setStatus('No 5 GHz networks in this scan. Scan again.');
+    else if((lastNets||[]).length&&bandFilter()==='2g') setStatus('No 2.4 GHz networks in this scan. Scan again.');
+    else setStatus('No networks found. Try Scan again.');
+  }
 }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 async function scan(force){
   scanning=true;
   setStatus('Scanning…');
   try{
-    await jget('/scan'+(force?'?start=1':''));
+    const q=force?'?start=1&band='+encodeURIComponent(bandFilter()):'';
+    await jget('/scan'+q);
     let finished=false;
     for(let i=0;i<25;i++){
       const data=await jget('/scan');
@@ -847,7 +975,10 @@ async function connect(){
   const password=passEl.value;
   if(!ssid){setStatus('Enter a network name.','err');return;}
   try{
-    const r=await postForm('/connect',{ssid,password});
+    const fields={ssid,password};
+    if(bandEl&&bandRow&&!bandRow.hidden) fields.band=bandEl.value;
+    if(selBssid){fields.bssid=selBssid;if(selCh) fields.ch=String(selCh);}
+    const r=await postForm('/connect',fields);
     const s=await r.json();
     applyMeta(s);
     if(!r.ok){setStatus(s.error||'Connect rejected','err');return;}
@@ -860,6 +991,11 @@ async function forget(){
   try{
     const r=await fetch('/forget',{method:'POST'});
     const s=await r.json();
+    ssidEl.value='';
+    passEl.value='';
+    credsFilled=false;
+    selBssid='';
+    selCh=0;
     applyMeta(s);
     setStatus('Saved network forgotten. SoftAP is still up.');
   }catch(e){dropHint();}
@@ -876,15 +1012,34 @@ function scheduleBri(v,i){
   clearTimeout(briTimer);
   briTimer=setTimeout(()=>postBri(v,i),300);
 }
+function postBand(){
+  if(!bandEl||(bandRow&&bandRow.hidden)) return Promise.resolve();
+  return postForm('/band',{band:bandEl.value})
+    .then(async r=>{if(!r.ok) throw new Error('http');bandDirty=false;applyMeta(await r.json());})
+    .catch(()=>{bandDirty=false;dropHint();});
+}
 function postLive(){
-  postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value})
+  return postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value})
     .then(async r=>{if(!r.ok) throw new Error('http');liveDirty=false;applyMeta(await r.json());})
     .catch(dropHint);
 }
-function scheduleLive(){
+function markSetupDirty(){
   liveDirty=true;
-  clearTimeout(liveTimer);
-  liveTimer=setTimeout(postLive,300);
+  if(bandEl&&bandRow&&!bandRow.hidden) bandDirty=true;
+  if(setupSave) setupSave.textContent='Save';
+}
+function saveSetup(){
+  if(setupSave){setupSave.textContent='Saving…';setupSave.disabled=true;}
+  const jobs=[];
+  if(bandEl&&bandRow&&!bandRow.hidden) jobs.push(postBand());
+  jobs.push(postLive());
+  Promise.all(jobs).then(()=>{
+    if(setupSave){setupSave.textContent='Saved';setupSave.disabled=false;}
+    setStatus('Settings saved.');
+  }).catch(()=>{
+    if(setupSave){setupSave.textContent='Save';setupSave.disabled=false;}
+    dropHint();
+  });
 }
 function readPatchDom(){
   const cards=patchList.querySelectorAll('.patch');
@@ -1173,9 +1328,29 @@ function endEdit(save){
     applyChrome(s);
   }).catch(()=>{nameDirty=false;nameEl.value=lastName;nameView.textContent=lastName;dropHint();});
 }
-fpsEl.onchange=scheduleLive;
-bufEl.onchange=scheduleLive;
-parkEl.onchange=scheduleLive;
+fpsEl.onchange=markSetupDirty;
+bufEl.onchange=markSetupDirty;
+parkEl.onchange=markSetupDirty;
+if(bandEl) bandEl.onchange=()=>{
+  markSetupDirty();
+  renderNets();
+  const ssid=ssidEl.value;
+  const n=mergeNets(lastNets).find(x=>x.ssid===ssid);
+  if(n){
+    const t=pickTwin(n);
+    selBssid=t&&t.bssid?t.bssid:'';
+    selCh=t&&t.ch?t.ch:0;
+  }
+};
+if(ssidEl) ssidEl.oninput=()=>{selBssid='';selCh=0;paintNetClasses();};
+const passEye=document.getElementById('passEye');
+if(passEye) passEye.onclick=()=>{
+  const show=passEl.type==='password';
+  passEl.type=show?'text':'password';
+  passEye.setAttribute('aria-label',show?'Hide password':'Show password');
+  passEye.title=show?'Hide password':'Show password';
+};
+if(setupSave) setupSave.onclick=saveSetup;
 mapSave.onclick=savePatch;
 if(mapAdd) mapAdd.onclick=addOutput;
 folderrepEl.onchange=showPlayOpts;

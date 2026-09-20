@@ -1,6 +1,7 @@
 #include "wifi_setup.h"
 
 #include "board_profile.h"
+#include "board_types.h"
 #include "identify.h"
 #include "led_bus.h"
 #include "led_ctrl.h"
@@ -26,6 +27,7 @@
 extern "C" void phy_bbpll_en_usb(bool en);
 #endif
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <strings.h>
@@ -39,19 +41,35 @@ enum class ConnectStatus : uint8_t {
   Failed,
 };
 
+enum class WifiBandPref : uint8_t {
+  TwoG = 0,
+  FiveG = 1,
+  Auto = 2,
+};
+
 static constexpr uint16_t kHttpPort = 80;
 static constexpr uint16_t kDnsPort = 53;
 static constexpr uint32_t kConnectTimeoutMs = 20000;
 static constexpr uint32_t kScanDwellMs = 75;
 static constexpr uint32_t kDisconnectGraceMs = 800;
 static constexpr uint32_t kRebootDelayMs = 300;
-static constexpr int kMaxNets = 24;
+static constexpr int kMaxNets = 40;
 static constexpr char kPrefsNs[] = "wifi";
 
 static WebServer s_server(kHttpPort);
 static DNSServer s_dns;
 static String s_pendingSsid;
 static String s_savedSsid;
+static String s_savedPass;
+static uint8_t s_savedBssid[6] = {};
+static int32_t s_savedCh = 0;
+static uint8_t s_savedGhz = 0;
+static bool s_haveSavedBssid = false;
+static uint8_t s_pendingBssid[6] = {};
+static int32_t s_pendingCh = 0;
+static bool s_havePendingBssid = false;
+static bool s_pick5g = false;
+static WifiBandPref s_bandPref = WifiBandPref::TwoG;
 static char s_error[48];
 static ConnectStatus s_connectStatus = ConnectStatus::Idle;
 static bool s_scanRunning = false;
@@ -59,6 +77,7 @@ static bool s_haveScan = false;
 static uint32_t s_connectStart = 0;
 static bool s_connectTimerArmed = false;
 static bool s_apUp = false;
+static uint32_t s_apFailMs = 0;
 static volatile bool s_gotIp = false;
 static volatile bool s_discPending = false;
 static volatile bool s_lostPending = false;
@@ -142,16 +161,236 @@ static void setError(const char *text) {
   s_error[sizeof(s_error) - 1] = '\0';
 }
 
-static void saveCreds(const String &ssid, const String &pass) {
+static bool wifi5gCapable() {
+#if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
+  return true;
+#else
+  return false;
+#endif
+}
+
+static const char *bandPrefName(WifiBandPref pref) {
+  switch (pref) {
+  case WifiBandPref::FiveG:
+    return "5g";
+  case WifiBandPref::Auto:
+    return "auto";
+  case WifiBandPref::TwoG:
+  default:
+    return "2g";
+  }
+}
+
+static bool parseBandPref(const String &s, WifiBandPref &out) {
+  if (s == "2g") {
+    out = WifiBandPref::TwoG;
+    return true;
+  }
+  if (s == "5g") {
+    out = WifiBandPref::FiveG;
+    return true;
+  }
+  if (s == "auto") {
+    out = WifiBandPref::Auto;
+    return true;
+  }
+  return false;
+}
+
+static const char *linkName() {
+  if (BoardProfile::radioKind() == BoardRadio::Eth) {
+    return "wired";
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    return nullptr;
+  }
+#if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
+  return WiFi.getBand() == WIFI_BAND_5G ? "5g" : "2g";
+#else
+  return "2g";
+#endif
+}
+
+static void appendWifiBand(String &out) {
+  out += "\"wifi_5g\":";
+  out += wifi5gCapable() ? "true" : "false";
+  if (wifi5gCapable()) {
+    out += ",\"band\":";
+    jsonEscape(out, String(bandPrefName(s_bandPref)));
+  }
+  const char *link = linkName();
+  if (link != nullptr) {
+    out += ",\"link\":";
+    jsonEscape(out, String(link));
+  }
+}
+
+static void saveBandPref() {
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNs, false)) {
+    LOG_C("wifi", "nvs open failed");
+    return;
+  }
+  prefs.putString("band", bandPrefName(s_bandPref));
+  prefs.end();
+}
+
+static void loadBandPref() {
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNs, true)) {
+    return;
+  }
+  const String v = prefs.getString("band", "2g");
+  prefs.end();
+  WifiBandPref pref = WifiBandPref::TwoG;
+  if (parseBandPref(v, pref)) {
+    if (!wifi5gCapable() && pref != WifiBandPref::TwoG) {
+      pref = WifiBandPref::TwoG;
+    }
+    s_bandPref = pref;
+  }
+}
+
+static wifi_band_mode_t wantedBandMode() {
+#if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
+  if (s_bandPref == WifiBandPref::Auto || s_bandPref == WifiBandPref::FiveG) {
+    return WIFI_BAND_MODE_AUTO;
+  }
+#endif
+  return WIFI_BAND_MODE_2G_ONLY;
+}
+
+static bool setRadioBand(wifi_band_mode_t want) {
+#if CONFIG_IDF_TARGET_ESP32C5
+  phy_bbpll_en_usb(true);
+#endif
+#if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
+  if (!WiFi.setBandMode(want)) {
+    LOG_C("wifi", "band set failed want=%u pref=%s",
+          static_cast<unsigned>(want), bandPrefName(s_bandPref));
+    return false;
+  }
+#if CONFIG_IDF_TARGET_ESP32C5
+  phy_bbpll_en_usb(true);
+#endif
+#else
+  (void)want;
+#endif
+  return true;
+}
+
+static void applyBandPref() {
+  const wifi_band_mode_t want = wantedBandMode();
+  setRadioBand(want);
+  const char *link = linkName();
+  LOG_V("wifi", "band pref=%s link=%s", bandPrefName(s_bandPref),
+        link != nullptr ? link : "-");
+}
+
+static bool parseHexByte(const char *p, uint8_t &out) {
+  if (p[0] == '\0' || p[1] == '\0') {
+    return false;
+  }
+  char buf[3] = {p[0], p[1], 0};
+  char *end = nullptr;
+  const long v = strtol(buf, &end, 16);
+  if (end != buf + 2 || v < 0 || v > 255) {
+    return false;
+  }
+  out = static_cast<uint8_t>(v);
+  return true;
+}
+
+static bool parseBssid(const String &s, uint8_t out[6]) {
+  if (s.length() != 17) {
+    return false;
+  }
+  for (int i = 0; i < 6; ++i) {
+    if (i > 0 && s[static_cast<unsigned>(i) * 3 - 1] != ':') {
+      return false;
+    }
+    if (!parseHexByte(s.c_str() + i * 3, out[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static void bssidToStr(const uint8_t mac[6], char out[18]) {
+  snprintf(out, 18, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
+           mac[3], mac[4], mac[5]);
+}
+
+static void clearSavedBssidMem() {
+  memset(s_savedBssid, 0, sizeof(s_savedBssid));
+  s_savedCh = 0;
+  s_savedGhz = 0;
+  s_haveSavedBssid = false;
+}
+
+static void saveBssid(const uint8_t mac[6], int32_t ch, uint8_t ghz) {
+  Preferences prefs;
+  if (!prefs.begin(kPrefsNs, false)) {
+    LOG_C("wifi", "nvs open failed");
+    return;
+  }
+  char buf[18];
+  bssidToStr(mac, buf);
+  prefs.putString("bssid", buf);
+  prefs.putInt("ch", static_cast<int>(ch));
+  prefs.putUChar("ghz", ghz);
+  prefs.end();
+  memcpy(s_savedBssid, mac, 6);
+  s_savedCh = ch;
+  s_savedGhz = ghz;
+  s_haveSavedBssid = true;
+  LOG_V("wifi", "saved bssid ch=%d ghz=%u", static_cast<int>(ch),
+        static_cast<unsigned>(ghz));
+}
+
+static void clearSavedBssid() {
+  Preferences prefs;
+  if (prefs.begin(kPrefsNs, false)) {
+    prefs.remove("bssid");
+    prefs.remove("ch");
+    prefs.remove("ghz");
+    prefs.end();
+  }
+  clearSavedBssidMem();
+}
+
+static void beginConnect(const String &ssid, const String &pass, int32_t ch,
+                         const uint8_t *bssid);
+
+static bool setBandPref(const String &arg) {
+  WifiBandPref pref = WifiBandPref::TwoG;
+  if (!parseBandPref(arg, pref)) {
+    return false;
+  }
+  if (!wifi5gCapable() && pref != WifiBandPref::TwoG) {
+    return false;
+  }
+  s_bandPref = pref;
+  saveBandPref();
+  applyBandPref();
+  return true;
+}
+
+static void saveCreds(const String &ssid, const String &pass, bool writePass) {
   Preferences prefs;
   if (!prefs.begin(kPrefsNs, false)) {
     LOG_C("wifi", "nvs open failed");
     return;
   }
   prefs.putString("ssid", ssid);
-  prefs.putString("pass", pass);
+  if (writePass) {
+    prefs.putString("pass", pass);
+  }
   prefs.end();
   s_savedSsid = ssid;
+  if (writePass) {
+    s_savedPass = pass;
+  }
   LOG_V("wifi", "saved ssid=%s", ssid.c_str());
 }
 
@@ -163,8 +402,13 @@ static void clearCreds() {
   }
   prefs.remove("ssid");
   prefs.remove("pass");
+  prefs.remove("bssid");
+  prefs.remove("ch");
+  prefs.remove("ghz");
   prefs.end();
   s_savedSsid = "";
+  s_savedPass = "";
+  clearSavedBssidMem();
   LOG_V("wifi", "forgot saved network");
 }
 
@@ -172,19 +416,32 @@ static void startAp() {
   if (s_apUp) {
     return;
   }
+  if (s_apFailMs != 0 && (millis() - s_apFailMs) < 2000) {
+    return;
+  }
+#if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
+  setRadioBand(WIFI_BAND_MODE_2G_ONLY);
+#endif
   WiFi.mode(WIFI_AP_STA);
   if (!WiFi.softAPConfig(kApIp, kApIp, kApMask)) {
     LOG_C("ap", "softAPConfig failed");
   }
   if (!WiFi.softAP(kApSsid, kApPass)) {
     LOG_C("ap", "softAP failed");
+    s_apFailMs = millis();
     return;
   }
+  s_apFailMs = 0;
   s_dns.setTTL(0);
   if (!s_dns.start(kDnsPort, "*", kApIp)) {
     LOG_C("ap", "dns failed");
   }
   s_apUp = true;
+#if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
+  if (s_bandPref != WifiBandPref::TwoG) {
+    setRadioBand(WIFI_BAND_MODE_AUTO);
+  }
+#endif
   LOG_V("ap", "up ssid=%s ip=%s", kApSsid, WiFi.softAPIP().toString().c_str());
 }
 
@@ -207,35 +464,58 @@ static void failConnect(const char *why) {
   startAp();
 }
 
-static void beginConnect(const String &ssid, const String &pass) {
+static void beginConnect(const String &ssid, const String &pass, int32_t ch,
+                         const uint8_t *bssid) {
   s_pendingSsid = ssid;
   s_error[0] = '\0';
   s_gotIp = false;
   s_discPending = false;
   s_lostPending = false;
+  s_pick5g = false;
   s_connectStart = millis();
   s_connectStatus = ConnectStatus::Connecting;
   WiFi.setAutoReconnect(true);
-  if (pass.length() == 0) {
-    WiFi.begin(ssid.c_str());
+  const char *pw = pass.length() ? pass.c_str() : nullptr;
+  if (bssid != nullptr) {
+    memcpy(s_pendingBssid, bssid, 6);
+    s_pendingCh = ch;
+    s_havePendingBssid = true;
+    WiFi.begin(ssid.c_str(), pw, ch, bssid);
+    char mac[18];
+    bssidToStr(bssid, mac);
+    LOG_V("wifi", "connect ssid=%s ch=%d bssid=%s", ssid.c_str(),
+          static_cast<int>(ch), mac);
   } else {
-    WiFi.begin(ssid.c_str(), pass.c_str());
+    s_havePendingBssid = false;
+    s_pendingCh = 0;
+    if (pw == nullptr) {
+      WiFi.begin(ssid.c_str());
+    } else {
+      WiFi.begin(ssid.c_str(), pw);
+    }
+    LOG_V("wifi", "connect ssid=%s", ssid.c_str());
   }
-  LOG_V("wifi", "connect ssid=%s", ssid.c_str());
 }
 
-static void startScan() {
+static void startScan(WifiBandPref pref) {
+  const wifi_band_mode_t mode =
+#if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
+      (pref == WifiBandPref::TwoG) ? WIFI_BAND_MODE_2G_ONLY
+                                   : WIFI_BAND_MODE_AUTO;
+#else
+      WIFI_BAND_MODE_2G_ONLY;
+#endif
+  setRadioBand(mode);
   WiFi.scanDelete();
   s_haveScan = false;
-  const int16_t rc =
-      WiFi.scanNetworks(true, false, true, kScanDwellMs);
+  const int16_t rc = WiFi.scanNetworks(true, false, true, kScanDwellMs);
   if (rc == WIFI_SCAN_FAILED) {
     LOG_C("wifi", "scan start failed");
     s_scanRunning = false;
     return;
   }
   s_scanRunning = true;
-  LOG_V("wifi", "scan start");
+  LOG_V("wifi", "scan start pref=%s", bandPrefName(pref));
 }
 
 static const char *modeName() {
@@ -417,6 +697,10 @@ static void sendStatus(int code) {
   if (s_savedSsid.length()) {
     out += ",\"saved\":";
     jsonEscape(out, s_savedSsid);
+    if (s_savedPass.length()) {
+      out += ",\"pass\":";
+      jsonEscape(out, s_savedPass);
+    }
   }
   if (WiFi.status() == WL_CONNECTED) {
     out += ",\"ip\":\"";
@@ -458,6 +742,8 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(LiveCfg::buf());
   out += ",\"park\":";
   jsonEscape(out, String(LiveCfg::parkName()));
+  out += ',';
+  appendWifiBand(out);
   out += ",\"live\":";
   out += LiveInput::active() ? "true" : "false";
   out += ",\"play\":{\"src\":";
@@ -514,7 +800,7 @@ static void sendStatus(int code) {
 
 static void sendScanResults() {
   String out;
-  out.reserve(1024);
+  out.reserve(4096);
   out += "{\"state\":\"idle\",\"networks\":[";
   bool first = true;
   int emitted = 0;
@@ -535,6 +821,13 @@ static void sendScanResults() {
       out += WiFi.RSSI(i);
       out += ",\"secure\":";
       out += (WiFi.encryptionType(i) != WIFI_AUTH_OPEN) ? "true" : "false";
+      const int32_t ch = WiFi.channel(i);
+      out += ",\"ghz\":";
+      out += ch > 14 ? "5" : "2";
+      out += ",\"ch\":";
+      out += static_cast<int>(ch);
+      out += ",\"bssid\":";
+      jsonEscape(out, WiFi.BSSIDstr(i));
       out += '}';
       ++emitted;
     }
@@ -543,9 +836,27 @@ static void sendScanResults() {
   sendJson(200, out);
 }
 
+static bool parseScanBandArg(WifiBandPref &out) {
+  if (!s_server.hasArg("band")) {
+    out = s_bandPref;
+    return true;
+  }
+  if (!parseBandPref(s_server.arg("band"), out)) {
+    return false;
+  }
+  if (!wifi5gCapable() && out != WifiBandPref::TwoG) {
+    return false;
+  }
+  return true;
+}
+
 static void handleScan() {
   if (s_connectStatus == ConnectStatus::Connecting) {
     sendJson(200, "{\"state\":\"connecting\"}");
+    return;
+  }
+  if (s_pick5g) {
+    sendJson(200, "{\"state\":\"scanning\"}");
     return;
   }
   const bool force = s_server.hasArg("start");
@@ -554,7 +865,12 @@ static void handleScan() {
     return;
   }
   if (force || !s_haveScan) {
-    startScan();
+    WifiBandPref scanPref = s_bandPref;
+    if (!parseScanBandArg(scanPref)) {
+      sendJson(400, "{\"error\":\"bad band\"}");
+      return;
+    }
+    startScan(scanPref);
     sendJson(200, "{\"state\":\"scanning\"}");
     return;
   }
@@ -614,6 +930,8 @@ static void sendStats() {
   out += static_cast<unsigned>(LiveCfg::buf());
   out += ",\"park\":";
   jsonEscape(out, String(LiveCfg::parkName()));
+  out += ',';
+  appendWifiBand(out);
   out += ",\"live\":";
   out += live ? "true" : "false";
   out += ",\"src\":";
@@ -1850,29 +2168,87 @@ static void handlePlay() {
   sendStatus(200);
 }
 
+static int32_t parseChannelArg(const String &s) {
+  if (!s.length()) {
+    return 0;
+  }
+  char *end = nullptr;
+  const long v = strtol(s.c_str(), &end, 10);
+  if (end == s.c_str() || *end != '\0' || v < 0 || v > 196) {
+    return -1;
+  }
+  return static_cast<int32_t>(v);
+}
+
+static void startPick5g(const String &ssid, const String &pass) {
+  s_pendingSsid = ssid;
+  s_savedPass = pass;
+  s_pick5g = true;
+  startScan(WifiBandPref::FiveG);
+}
+
 static void handleConnect() {
-  if (s_scanRunning) {
+  if (s_scanRunning || s_pick5g) {
     sendJson(409, "{\"error\":\"scan in progress\"}");
     return;
   }
   String ssid = s_server.arg("ssid");
   ssid.trim();
-  const String pass = s_server.arg("password");
+  const String incomingPass = s_server.arg("password");
   if (ssid.length() == 0 || ssid.length() > 32) {
     sendJson(400, "{\"error\":\"bad ssid\"}");
     return;
   }
-  if (pass.length() > 0 && pass.length() < 8) {
+  if (incomingPass.length() > 0 && incomingPass.length() < 8) {
     sendJson(400, "{\"error\":\"password must be 8+ characters\"}");
     return;
   }
-  if (pass.length() > 63) {
+  if (incomingPass.length() > 63) {
     sendJson(400, "{\"error\":\"password too long\"}");
     return;
   }
+  if (s_server.hasArg("band") && !setBandPref(s_server.arg("band"))) {
+    sendJson(400, "{\"error\":\"bad band\"}");
+    return;
+  }
+  String pass = incomingPass;
+  if (pass.length() == 0 && ssid == s_savedSsid) {
+    pass = s_savedPass;
+  }
+  const bool writePass = incomingPass.length() > 0 || ssid != s_savedSsid;
+  uint8_t bssid[6];
+  const bool haveBssid = parseBssid(s_server.arg("bssid"), bssid);
+  const int32_t ch = parseChannelArg(s_server.arg("ch"));
+  if (s_server.hasArg("ch") && s_server.arg("ch").length() && ch < 0) {
+    sendJson(400, "{\"error\":\"bad ch\"}");
+    return;
+  }
   LOG_V("http", "connect ssid=%s", ssid.c_str());
-  saveCreds(ssid, pass);
-  beginConnect(ssid, pass);
+  const String prevSsid = s_savedSsid;
+  saveCreds(ssid, pass, writePass);
+  if (haveBssid) {
+    const uint8_t ghz = ch > 14 ? 5 : 2;
+    saveBssid(bssid, ch > 0 ? ch : 0, ghz);
+    beginConnect(ssid, pass, ch > 0 ? ch : 0, bssid);
+  } else if (s_bandPref == WifiBandPref::FiveG) {
+    if (ssid != prevSsid) {
+      clearSavedBssid();
+    }
+    startPick5g(ssid, pass);
+  } else {
+    if (ssid != prevSsid) {
+      clearSavedBssid();
+    }
+    beginConnect(ssid, pass, 0, nullptr);
+  }
+  sendStatus(200);
+}
+
+static void handleBand() {
+  if (!s_server.hasArg("band") || !setBandPref(s_server.arg("band"))) {
+    sendJson(400, "{\"error\":\"bad band\"}");
+    return;
+  }
   sendStatus(200);
 }
 
@@ -1881,6 +2257,8 @@ static void handleForget() {
   WiFi.disconnect(false, false);
   clearCreds();
   s_pendingSsid = "";
+  s_pick5g = false;
+  s_havePendingBssid = false;
   s_connectStatus = ConnectStatus::Idle;
   s_error[0] = '\0';
   startAp();
@@ -1921,6 +2299,44 @@ static void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
   }
 }
 
+static void finishPick5g(int16_t n) {
+  s_pick5g = false;
+  int best = -1;
+  int32_t bestRssi = -127;
+  if (n > 0) {
+    for (int i = 0; i < n; ++i) {
+      if (WiFi.SSID(i) != s_pendingSsid && WiFi.SSID(i) != s_savedSsid) {
+        continue;
+      }
+      if (WiFi.channel(i) <= 14) {
+        continue;
+      }
+      const int32_t rssi = WiFi.RSSI(i);
+      if (best < 0 || rssi > bestRssi) {
+        best = i;
+        bestRssi = rssi;
+      }
+    }
+  }
+  const String ssid = s_pendingSsid.length() ? s_pendingSsid : s_savedSsid;
+  const String pass = s_savedPass;
+  if (best >= 0) {
+    const uint8_t *mac = WiFi.BSSID(best);
+    const int32_t ch = WiFi.channel(best);
+    if (mac != nullptr) {
+      saveBssid(mac, ch, 5);
+      beginConnect(ssid, pass, ch, mac);
+      return;
+    }
+  }
+  LOG_V("wifi", "pick5g fallback ssid=%s", ssid.c_str());
+  if (s_haveSavedBssid) {
+    beginConnect(ssid, pass, s_savedCh, s_savedBssid);
+  } else {
+    beginConnect(ssid, pass, 0, nullptr);
+  }
+}
+
 static void pollScan() {
   if (!s_scanRunning) {
     return;
@@ -1933,10 +2349,16 @@ static void pollScan() {
   if (n < 0) {
     LOG_C("wifi", "scan failed");
     s_haveScan = false;
+    if (s_pick5g) {
+      finishPick5g(-1);
+    }
     return;
   }
   s_haveScan = true;
   LOG_V("wifi", "scan n=%d", n);
+  if (s_pick5g) {
+    finishPick5g(n);
+  }
 }
 
 static void pollConnect() {
@@ -1946,6 +2368,12 @@ static void pollConnect() {
     s_error[0] = '\0';
     LOG_V("wifi", "connected ssid=%s ip=%s", WiFi.SSID().c_str(),
           WiFi.localIP().toString().c_str());
+    uint8_t mac[6];
+    uint8_t *bssid = WiFi.BSSID(mac);
+    const int32_t ch = WiFi.channel();
+    if (bssid != nullptr) {
+      saveBssid(bssid, ch, ch > 14 ? 5 : 2);
+    }
     s_staIpPending = true;
   }
 
@@ -2004,20 +2432,15 @@ void WifiSetup::begin() {
   WiFi.setHostname(kApSsid);
   WiFi.onEvent(onWifiEvent);
 
+  loadBandPref();
   startAp();
-#if CONFIG_IDF_TARGET_ESP32C5
-  if (!WiFi.setBandMode(WIFI_BAND_MODE_2G_ONLY)) {
-    LOG_C("wifi", "2.4 GHz lock failed");
-  } else {
-    LOG_V("wifi", "band 2.4 only");
-  }
-#endif
 
   s_server.on("/", HTTP_GET, sendPage);
   s_server.on("/scan", HTTP_GET, handleScan);
   s_server.on("/status", HTTP_GET, handleStatus);
   s_server.on("/api/stats", HTTP_GET, handleStats);
   s_server.on("/connect", HTTP_POST, handleConnect);
+  s_server.on("/band", HTTP_POST, handleBand);
   s_server.on("/forget", HTTP_POST, handleForget);
   s_server.on("/brightness", HTTP_POST, handleBrightness);
   s_server.on("/pins", HTTP_POST, handlePins);
@@ -2049,15 +2472,35 @@ void WifiSetup::begin() {
   Preferences prefs;
   String ssid;
   String pass;
+  String bssidStr;
+  int32_t ch = 0;
+  uint8_t ghz = 0;
   if (prefs.begin(kPrefsNs, true)) {
     ssid = prefs.getString("ssid", "");
     pass = prefs.getString("pass", "");
+    bssidStr = prefs.getString("bssid", "");
+    ch = prefs.getInt("ch", 0);
+    ghz = prefs.getUChar("ghz", 0);
     prefs.end();
+  }
+  s_savedPass = pass;
+  if (parseBssid(bssidStr, s_savedBssid)) {
+    s_savedCh = ch;
+    s_savedGhz = ghz;
+    s_haveSavedBssid = true;
+  } else {
+    clearSavedBssidMem();
   }
   if (ssid.length()) {
     s_savedSsid = ssid;
     LOG_V("wifi", "saved ssid=%s", ssid.c_str());
-    beginConnect(ssid, pass);
+    if (s_bandPref == WifiBandPref::FiveG && s_savedGhz != 5) {
+      startPick5g(ssid, pass);
+    } else if (s_haveSavedBssid) {
+      beginConnect(ssid, pass, s_savedCh, s_savedBssid);
+    } else {
+      beginConnect(ssid, pass, 0, nullptr);
+    }
   } else {
     s_savedSsid = "";
     LOG_V("wifi", "no saved creds");
