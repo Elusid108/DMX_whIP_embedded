@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.26.0</title>
+<title>dmxwhip v0.26.1</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -254,7 +254,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.26.0</p>
+<p id="ver" class="readout">dmxwhip v0.26.1</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -833,10 +833,8 @@ function pickTwin(n){
   if(n.both){
     if(mode==='5g'&&n.b5) return n.b5;
     if(mode==='2g'&&n.b2) return n.b2;
-    if(liveLink==='5g'&&n.b5) return n.b5;
-    if(liveLink==='2g'&&n.b2) return n.b2;
-    if(n.b5&&n.b2) return (n.b5.rssi>=n.b2.rssi)?n.b5:n.b2;
-    return n.b5||n.b2||n;
+    if(n.b5) return n.b5;
+    return n.b2||n;
   }
   return n;
 }

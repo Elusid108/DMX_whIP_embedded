@@ -68,7 +68,7 @@ static bool s_haveSavedBssid = false;
 static uint8_t s_pendingBssid[6] = {};
 static int32_t s_pendingCh = 0;
 static bool s_havePendingBssid = false;
-static bool s_pick5g = false;
+static bool s_pickBand = false;
 static WifiBandPref s_bandPref = WifiBandPref::TwoG;
 static char s_error[48];
 static ConnectStatus s_connectStatus = ConnectStatus::Idle;
@@ -471,7 +471,7 @@ static void beginConnect(const String &ssid, const String &pass, int32_t ch,
   s_gotIp = false;
   s_discPending = false;
   s_lostPending = false;
-  s_pick5g = false;
+  s_pickBand = false;
   s_connectStart = millis();
   s_connectStatus = ConnectStatus::Connecting;
   WiFi.setAutoReconnect(true);
@@ -855,7 +855,7 @@ static void handleScan() {
     sendJson(200, "{\"state\":\"connecting\"}");
     return;
   }
-  if (s_pick5g) {
+  if (s_pickBand) {
     sendJson(200, "{\"state\":\"scanning\"}");
     return;
   }
@@ -2180,15 +2180,64 @@ static int32_t parseChannelArg(const String &s) {
   return static_cast<int32_t>(v);
 }
 
-static void startPick5g(const String &ssid, const String &pass) {
-  s_pendingSsid = ssid;
-  s_savedPass = pass;
-  s_pick5g = true;
-  startScan(WifiBandPref::FiveG);
+static bool postedBssidOk(WifiBandPref pref, bool haveBssid, int32_t ch) {
+  if (!haveBssid) {
+    return false;
+  }
+  if (pref == WifiBandPref::FiveG) {
+    return ch > 14;
+  }
+  if (pref == WifiBandPref::TwoG) {
+    return ch <= 14;
+  }
+  return ch > 14;
 }
 
+static int pickScanIndex(int16_t n, const String &ssid) {
+  int best5 = -1;
+  int best2 = -1;
+  int32_t rssi5 = -127;
+  int32_t rssi2 = -127;
+  if (n <= 0) {
+    return -1;
+  }
+  for (int i = 0; i < n; ++i) {
+    const String seen = WiFi.SSID(i);
+    if (seen != ssid && seen != s_pendingSsid && seen != s_savedSsid) {
+      continue;
+    }
+    const int32_t rssi = WiFi.RSSI(i);
+    if (WiFi.channel(i) > 14) {
+      if (best5 < 0 || rssi > rssi5) {
+        best5 = i;
+        rssi5 = rssi;
+      }
+    } else if (best2 < 0 || rssi > rssi2) {
+      best2 = i;
+      rssi2 = rssi;
+    }
+  }
+  if (s_bandPref == WifiBandPref::FiveG) {
+    return best5;
+  }
+  if (s_bandPref == WifiBandPref::TwoG) {
+    return best2;
+  }
+  return best5 >= 0 ? best5 : best2;
+}
+
+static void startPickBand(const String &ssid, const String &pass) {
+  s_pendingSsid = ssid;
+  s_savedPass = pass;
+  s_pickBand = true;
+  startScan(s_bandPref == WifiBandPref::TwoG ? WifiBandPref::TwoG
+                                            : WifiBandPref::FiveG);
+}
+
+static void finishPickBand(int16_t n);
+
 static void handleConnect() {
-  if (s_scanRunning || s_pick5g) {
+  if (s_scanRunning || s_pickBand) {
     sendJson(409, "{\"error\":\"scan in progress\"}");
     return;
   }
@@ -2226,20 +2275,15 @@ static void handleConnect() {
   LOG_V("http", "connect ssid=%s", ssid.c_str());
   const String prevSsid = s_savedSsid;
   saveCreds(ssid, pass, writePass);
-  if (haveBssid) {
+  if (ssid != prevSsid) {
+    clearSavedBssid();
+  }
+  if (postedBssidOk(s_bandPref, haveBssid, ch)) {
     const uint8_t ghz = ch > 14 ? 5 : 2;
     saveBssid(bssid, ch > 0 ? ch : 0, ghz);
     beginConnect(ssid, pass, ch > 0 ? ch : 0, bssid);
-  } else if (s_bandPref == WifiBandPref::FiveG) {
-    if (ssid != prevSsid) {
-      clearSavedBssid();
-    }
-    startPick5g(ssid, pass);
   } else {
-    if (ssid != prevSsid) {
-      clearSavedBssid();
-    }
-    beginConnect(ssid, pass, 0, nullptr);
+    startPickBand(ssid, pass);
   }
   sendStatus(200);
 }
@@ -2257,7 +2301,7 @@ static void handleForget() {
   WiFi.disconnect(false, false);
   clearCreds();
   s_pendingSsid = "";
-  s_pick5g = false;
+  s_pickBand = false;
   s_havePendingBssid = false;
   s_connectStatus = ConnectStatus::Idle;
   s_error[0] = '\0';
@@ -2299,42 +2343,29 @@ static void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
   }
 }
 
-static void finishPick5g(int16_t n) {
-  s_pick5g = false;
-  int best = -1;
-  int32_t bestRssi = -127;
-  if (n > 0) {
-    for (int i = 0; i < n; ++i) {
-      if (WiFi.SSID(i) != s_pendingSsid && WiFi.SSID(i) != s_savedSsid) {
-        continue;
-      }
-      if (WiFi.channel(i) <= 14) {
-        continue;
-      }
-      const int32_t rssi = WiFi.RSSI(i);
-      if (best < 0 || rssi > bestRssi) {
-        best = i;
-        bestRssi = rssi;
-      }
-    }
-  }
+static void finishPickBand(int16_t n) {
+  s_pickBand = false;
   const String ssid = s_pendingSsid.length() ? s_pendingSsid : s_savedSsid;
   const String pass = s_savedPass;
+  const int best = pickScanIndex(n, ssid);
   if (best >= 0) {
     const uint8_t *mac = WiFi.BSSID(best);
     const int32_t ch = WiFi.channel(best);
     if (mac != nullptr) {
-      saveBssid(mac, ch, 5);
+      saveBssid(mac, ch, ch > 14 ? 5 : 2);
       beginConnect(ssid, pass, ch, mac);
       return;
     }
   }
-  LOG_V("wifi", "pick5g fallback ssid=%s", ssid.c_str());
-  if (s_haveSavedBssid) {
-    beginConnect(ssid, pass, s_savedCh, s_savedBssid);
-  } else {
+  if (s_bandPref == WifiBandPref::TwoG) {
+    LOG_V("wifi", "pick 2g ssid-only ssid=%s", ssid.c_str());
     beginConnect(ssid, pass, 0, nullptr);
+    return;
   }
+  LOG_C("wifi", "pick failed pref=%s ssid=%s", bandPrefName(s_bandPref),
+        ssid.c_str());
+  s_pendingSsid = ssid;
+  failConnect("no network found");
 }
 
 static void pollScan() {
@@ -2349,32 +2380,45 @@ static void pollScan() {
   if (n < 0) {
     LOG_C("wifi", "scan failed");
     s_haveScan = false;
-    if (s_pick5g) {
-      finishPick5g(-1);
+    if (s_pickBand) {
+      finishPickBand(-1);
     }
     return;
   }
   s_haveScan = true;
   LOG_V("wifi", "scan n=%d", n);
-  if (s_pick5g) {
-    finishPick5g(n);
+  if (s_pickBand) {
+    finishPickBand(n);
   }
 }
 
 static void pollConnect() {
   if (s_gotIp) {
     s_gotIp = false;
-    s_connectStatus = ConnectStatus::Connected;
-    s_error[0] = '\0';
-    LOG_V("wifi", "connected ssid=%s ip=%s", WiFi.SSID().c_str(),
-          WiFi.localIP().toString().c_str());
     uint8_t mac[6];
     uint8_t *bssid = WiFi.BSSID(mac);
     const int32_t ch = WiFi.channel();
-    if (bssid != nullptr) {
-      saveBssid(bssid, ch, ch > 14 ? 5 : 2);
+    const uint8_t ghz = ch > 14 ? 5 : 2;
+    const bool wrongFive = s_bandPref == WifiBandPref::FiveG && ghz != 5;
+    const bool wrongTwo = s_bandPref == WifiBandPref::TwoG && ghz == 5;
+    if ((wrongFive || wrongTwo) && !s_pickBand) {
+      LOG_C("wifi", "wrong band pref=%s link=%ug", bandPrefName(s_bandPref),
+            static_cast<unsigned>(ghz));
+      WiFi.setAutoReconnect(false);
+      WiFi.disconnect(false, false);
+      const String ssid =
+          s_pendingSsid.length() ? s_pendingSsid : s_savedSsid;
+      startPickBand(ssid, s_savedPass);
+    } else {
+      s_connectStatus = ConnectStatus::Connected;
+      s_error[0] = '\0';
+      LOG_V("wifi", "connected ssid=%s ip=%s", WiFi.SSID().c_str(),
+            WiFi.localIP().toString().c_str());
+      if (bssid != nullptr) {
+        saveBssid(bssid, ch, ghz);
+      }
+      s_staIpPending = true;
     }
-    s_staIpPending = true;
   }
 
   if (s_discPending) {
@@ -2494,12 +2538,12 @@ void WifiSetup::begin() {
   if (ssid.length()) {
     s_savedSsid = ssid;
     LOG_V("wifi", "saved ssid=%s", ssid.c_str());
-    if (s_bandPref == WifiBandPref::FiveG && s_savedGhz != 5) {
-      startPick5g(ssid, pass);
-    } else if (s_haveSavedBssid) {
+    const bool savedOk =
+        s_haveSavedBssid && postedBssidOk(s_bandPref, true, s_savedCh);
+    if (savedOk) {
       beginConnect(ssid, pass, s_savedCh, s_savedBssid);
     } else {
-      beginConnect(ssid, pass, 0, nullptr);
+      startPickBand(ssid, pass);
     }
   } else {
     s_savedSsid = "";
