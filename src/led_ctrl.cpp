@@ -1,6 +1,6 @@
 #include "led_ctrl.h"
 
-#include "board_matrix.h"
+#include "boards/select.h"
 #include "log.h"
 
 #include <FastLED.h>

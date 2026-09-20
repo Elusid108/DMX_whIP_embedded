@@ -1,5 +1,6 @@
 #include "playback.h"
 
+#include "board_profile.h"
 #include "dmxrec.h"
 #include "log.h"
 #include "pixel_map.h"
@@ -22,7 +23,6 @@ static constexpr uint32_t kPlayUnderrunLogMs = 5000;
 static constexpr uint32_t kPlayDiscoverMs = 1000;
 static constexpr uint32_t kPlayTaskStack = 8192;
 static constexpr UBaseType_t kPlayTaskPrio = 1;
-static constexpr BaseType_t kPlayTaskCore = 1;
 static constexpr uint32_t kPlayPathLen = kSdPathLen;
 
 struct Slot {
@@ -825,7 +825,8 @@ void Playback::begin() {
   if (s_task == nullptr) {
     const BaseType_t ok =
         xTaskCreatePinnedToCore(playbackTask, "play", kPlayTaskStack, nullptr,
-                                kPlayTaskPrio, &s_task, kPlayTaskCore);
+                                kPlayTaskPrio, &s_task,
+                                BoardProfile::serviceCore());
     if (ok != pdPASS) {
       s_task = nullptr;
       LOG_C("play", "task failed");

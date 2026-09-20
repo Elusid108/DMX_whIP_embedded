@@ -3,7 +3,6 @@
 
 #include <cstring>
 
-#include "board_matrix.h"
 #include "board_profile.h"
 #include "identify.h"
 #include "led_bus.h"
@@ -41,7 +40,7 @@ static void renderPacked(const uint8_t *d, uint16_t len) {
 
 void setup() {
   Log::begin(115200, kLogLevelDefault);
-  LOG_V("boot", "ESP32-S3-Matrix v%s", kFirmwareVersion);
+  LOG_V("boot", "%s v%s", BoardProfile::id(), kFirmwareVersion);
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
   NodeId::begin();

@@ -7,9 +7,9 @@ alwaysApply: true
 
 This repo is multi-board firmware. Current hardware is the **Waveshare ESP32-S3-Matrix** (`[env:matrix]`). It is a compact bring-up node, not the production pixel controller. Share `src/`; add a new PlatformIO env for a later board instead of forking the tree.
 
-The living rebuild plan and milestone checklist are in [`README.md`](README.md). The PDF in the repo root is historical only.
+The living rebuild plan and milestone checklist are in [`README.md`](README.md). New chips use README **Adding a board**, not the historical PDF.
 
-## This chip (do not copy the rebuild-plan PDF starter)
+## This chip (Matrix env only)
 
 - MCU: ESP32-S3FH4R2. **4MB flash, 2MB QSPI PSRAM.**
 - LED: 8x8 WS2812B on **GPIO 14**, color order **GRB**, 64 pixels.

@@ -840,13 +840,7 @@ bool PixelMap::parseOrder(const char *s, char out[6], bool white, bool cct) {
 bool PixelMap::validCount(uint16_t n) { return n >= 1 && n <= kLedCountMax; }
 
 bool PixelMap::validDataGpio(uint8_t pin) {
-  if (pin > kS3GpioMax) {
-    return false;
-  }
-  if (pin == 19 || pin == 20) {
-    return false;
-  }
-  if (pin >= 26 && pin <= 32) {
+  if (pin > BoardProfile::gpioMax() || BoardProfile::reservedGpio(pin)) {
     return false;
   }
   if (pin == BoardProfile::sdCs() || pin == BoardProfile::sdMosi() ||

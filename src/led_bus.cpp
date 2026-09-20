@@ -7,7 +7,7 @@
 #include <Arduino.h>
 #include <FastLED.h>
 
-#include "platforms/esp/32/clockless_rmt_esp32.h"
+#include "platforms/esp/32/rmt_5/idf5_rmt.h"
 
 #ifndef CLOCKLESS_FREQUENCY
 #define CLOCKLESS_FREQUENCY F_CPU
@@ -39,8 +39,8 @@ public:
 
   void rebind(int pin, int t1, int t2, int t3) {
     release();
-    s_rmt = new RmtController(pin, t1, t2, t3, FASTLED_RMT_MAX_CHANNELS,
-                              FASTLED_RMT_BUILTIN_DRIVER);
+    s_rmt = new fl::RmtController5(pin, t1, t2, t3,
+                                   fl::RmtController5::DMA_AUTO);
   }
 
   bool bound() const { return s_rmt != nullptr; }
@@ -55,11 +55,12 @@ protected:
       return;
     }
     PixelIterator iterator = pixels.as_iterator(this->getRgbw());
-    s_rmt->showPixels(iterator);
+    s_rmt->loadPixelData(iterator);
+    s_rmt->showPixels();
   }
 
 private:
-  RmtController *s_rmt = nullptr;
+  fl::RmtController5 *s_rmt = nullptr;
 };
 
 static RuntimeClockless s_ctrl[kPatchMaxOutputs];

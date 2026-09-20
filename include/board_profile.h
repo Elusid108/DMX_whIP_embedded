@@ -2,17 +2,14 @@
 
 #include <stdint.h>
 
-#include "board_matrix.h"
+#include "board_types.h"
+#include "boards/select.h"
 
-// Waveshare ESP32-S3-Matrix compile-time identity. Extra PIO envs later
-// swap the defaults; src/ stays shared. LED data pin/count come from
+// Compile-time board identity. Extra PIO envs swap the selected header
+// via BOARD_PROFILE_*. src/ stays shared. LED data pin/count come from
 // PixelMap (NVS overlay). SD pins may be overlaid from NVS (0xFF = default).
 
-static constexpr char kBoardId[] = "waveshare-s3-matrix";
-static constexpr char kBoardChip[] = "esp32s3";
-static constexpr char kBoardFlashClass[] = "4mb-qspi";
 static constexpr uint8_t kGpioUnset = 0xFF;
-static constexpr uint8_t kS3GpioMax = 48;
 
 class BoardProfile {
 public:
@@ -20,6 +17,11 @@ public:
   static const char *id();
   static const char *chip();
   static const char *flashClass();
+  static BoardRadio radioKind();
+  static uint8_t gpioMax();
+  static uint8_t cpuCount();
+  static uint8_t serviceCore();
+  static bool reservedGpio(uint8_t pin);
   static uint8_t ledPin();
   static uint16_t ledCount();
   static uint8_t sdCs();

@@ -1,0 +1,30 @@
+---
+description: Multi-board firmware platform, artifacts vs SKUs, queued chip work
+alwaysApply: true
+---
+
+# Multi-board firmware
+
+Platform is **pinned pioarduino** in [`platformio.ini`](platformio.ini) (`[esp32]`). Official `platform = espressif32` is not for new chips (no C5 / C6 / P4).
+
+New boards follow README **Adding a board**. Do not copy the historical PDF starter (`qspi_opi`, 8MB partitions, SDMMC, huge rings).
+
+## Next work (do not start unless asked)
+
+See README **Multi-board (queued)**: C6 DevKitC-1-N8, C5 DevKitC-1-N8R4, XIAO C5, dual-band scan, `NetIf`, P4 Ethernet, companion catalog harvest + Flash **Custom…**, P4+Wi-Fi coprocessor (ESP-Hosted), RFC 8910.
+
+## Artifacts vs SKUs
+
+- Firmware **artifact** = chip + flash + PSRAM + USB class (one PIO env / image).
+- Amazon / vendor SKU = catalog row that points at an artifact plus default pin overlays.
+- Custom boards are catalog rows (core + flash + PSRAM + USB + pins), not a new `src/` tree.
+
+## P4 combo
+
+P4 + C6/C5/S3 via ESP-Hosted is a later node class. Ethernet-only P4 first. If the desk board is Waveshare ESP32-P4-WIFI6-POE-ETH, the C6 is already onboard.
+
+## Flash and scale
+
+Matrix flash handshake stays Matrix-only (`pio run -e matrix -t upload`, COM3 script). Other boards get their own env and port when that env exists.
+
+Firmware is one node. Size rings from the board profile. Do not hard-code 100k buffers.

@@ -1,5 +1,7 @@
 #include "log.h"
 
+#include "board_profile.h"
+
 #include <Arduino.h>
 #include <cstdarg>
 #include <cstdio>
@@ -66,7 +68,7 @@ void Log::begin(uint32_t baud, LogLevel level) {
   Serial.begin(baud);
   if (s_task == nullptr) {
     xTaskCreatePinnedToCore(logServiceTask, "logsvc", 4096, nullptr, 1, &s_task,
-                            1);
+                            BoardProfile::serviceCore());
   }
 }
 

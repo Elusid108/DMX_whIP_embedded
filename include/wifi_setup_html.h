@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.21.0</title>
+<title>dmxwhip v0.22.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -227,7 +227,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.21.0</p>
+<p id="ver" class="readout">dmxwhip v0.22.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -278,7 +278,7 @@ const ORDERS={
 function orderKey(w,c){return w&&c?'rgbwc':w?'rgbw':c?'rgbc':'rgb';}
 function defaultSeg(){return {proto:'auto',chip:'ws2812b',data:14,clk:0,count:64,white:false,cct:false,order:'grb',uni:0,ch:1,bri:10};}
 let patch=[defaultSeg()];
-let patchCaps={max_out:8,max_seg:24,max_px:1024};
+let patchCaps={max_out:8,max_seg:24,max_px:1024,gpio_max:48};
 let openSeg=0;
 let patchKey='';
 function chipOpts(sel){
@@ -605,7 +605,8 @@ function applyPixels(s){
     patchCaps={
       max_out:s.patch.max_out||8,
       max_seg:s.patch.max_seg||24,
-      max_px:s.patch.max_px||1024
+      max_px:s.patch.max_px||1024,
+      gpio_max:s.patch.gpio_max||48
     };
   }
   if(!mapDirty){
@@ -932,9 +933,9 @@ function renderPatch(){
       '<option value="artnet"'+(row.proto==='artnet'?' selected':'')+'>Art-Net</option>'+
       '<option value="sacn"'+(row.proto==='sacn'?' selected':'')+'>sACN</option></select>'+
       '<label class="lab">IC type</label><select data-f="chip"'+locked+'>'+chipOpts(row.chip)+'</select>'+
-      '<label class="lab">Data GPIO</label><input data-f="data" type="number" min="0" max="48" value="'+row.data+'" inputmode="numeric"'+locked+'>'+
+      '<label class="lab">Data GPIO</label><input data-f="data" type="number" min="0" max="'+patchCaps.gpio_max+'" value="'+row.data+'" inputmode="numeric"'+locked+'>'+
       '<div class="clkrow'+(CLOCKED[row.chip]?' on':'')+'"><label class="lab">Clock GPIO</label>'+
-      '<input data-f="clk" type="number" min="1" max="48" value="'+(row.clk||21)+'" inputmode="numeric"'+locked+'></div>'+
+      '<input data-f="clk" type="number" min="1" max="'+patchCaps.gpio_max+'" value="'+(row.clk||21)+'" inputmode="numeric"'+locked+'></div>'+
       '<label class="lab">Pixel count</label><input data-f="count" type="number" min="1" max="'+patchCaps.max_px+'" value="'+row.count+'" inputmode="numeric">'+
       '<p class="cntwarn'+(row.count!==64?' on':'')+'">This board’s panel is 64 pixels (8×8).</p>'+
       '<label class="tog"><input data-f="white" type="checkbox"'+(row.white?' checked':'')+'> White channel</label>'+

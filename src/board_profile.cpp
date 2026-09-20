@@ -60,9 +60,11 @@ static void saveNvs() {
 
 void BoardProfile::begin() {
   loadNvs();
-  LOG_V("board", "id=%s chip=%s flash=%s led=%u sd cs=%u mosi=%u clk=%u miso=%u",
-        id(), chip(), flashClass(), ledPin(), sdCs(), sdMosi(), sdClk(),
-        sdMiso());
+  LOG_V("board",
+        "id=%s chip=%s flash=%s radio=%u gpio_max=%u cores=%u led=%u sd "
+        "cs=%u mosi=%u clk=%u miso=%u",
+        id(), chip(), flashClass(), static_cast<unsigned>(radioKind()),
+        gpioMax(), cpuCount(), ledPin(), sdCs(), sdMosi(), sdClk(), sdMiso());
 }
 
 const char *BoardProfile::id() { return kBoardId; }
@@ -70,6 +72,16 @@ const char *BoardProfile::id() { return kBoardId; }
 const char *BoardProfile::chip() { return kBoardChip; }
 
 const char *BoardProfile::flashClass() { return kBoardFlashClass; }
+
+BoardRadio BoardProfile::radioKind() { return kRadioKind; }
+
+uint8_t BoardProfile::gpioMax() { return kGpioMax; }
+
+uint8_t BoardProfile::cpuCount() { return kCpuCount; }
+
+uint8_t BoardProfile::serviceCore() { return kServiceCore; }
+
+bool BoardProfile::reservedGpio(uint8_t pin) { return boardReservedGpio(pin); }
 
 uint8_t BoardProfile::ledPin() { return PixelMap::cfg().dataGpio; }
 
@@ -97,7 +109,7 @@ uint8_t BoardProfile::sdMiso() {
 
 uint32_t BoardProfile::sdSpiHz() { return kSdSpiHz; }
 
-bool BoardProfile::validGpio(uint8_t pin) { return pin <= kS3GpioMax; }
+bool BoardProfile::validGpio(uint8_t pin) { return pin <= gpioMax(); }
 
 bool BoardProfile::setSdPins(uint8_t cs, uint8_t mosi, uint8_t clk, uint8_t miso,
                              bool save) {

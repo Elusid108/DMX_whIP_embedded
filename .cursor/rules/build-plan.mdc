@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Living rebuild plan
 
-Before planning or implementing, read [`README.md`](README.md). That file is the plan. The PDF in the repo root is historical only. Do not copy its `platformio.ini` starter onto this chip (`qspi_opi`, 8MB partitions, SDMMC, huge rings).
+Before planning or implementing, read [`README.md`](README.md). That file is the plan. New boards follow README **Adding a board** (pioarduino + `BOARD_PROFILE_*`). The PDF in the repo root is historical only. Do not copy its `platformio.ini` starter (`qspi_opi`, 8MB partitions, SDMMC, huge rings). Queued C5/C6/P4/`NetIf`/catalog work is listed under README **Multi-board**; see also [`.cursor/rules/multi-board.mdc`](multi-board.mdc).
 
 ## Checklist
 

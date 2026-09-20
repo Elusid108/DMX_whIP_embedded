@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-#include "board_matrix.h"
+#include "boards/select.h"
 
 // Node identity + 1:1 pixel map (not a renderer).
 //

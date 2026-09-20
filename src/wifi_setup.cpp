@@ -370,6 +370,8 @@ static void appendOutputs(String &out) {
   out += static_cast<unsigned>(kLedCountMax);
   out += ",\"slots\":";
   out += static_cast<unsigned>(kLiveUniSlots);
+  out += ",\"gpio_max\":";
+  out += static_cast<unsigned>(BoardProfile::gpioMax());
   out += '}';
 }
 
@@ -700,7 +702,8 @@ static bool parseGpioArg(const char *name, uint8_t &out) {
   const String arg = s_server.arg(name);
   char *end = nullptr;
   const long v = strtol(arg.c_str(), &end, 10);
-  if (end == arg.c_str() || *end != '\0' || v < 0 || v > kS3GpioMax) {
+  if (end == arg.c_str() || *end != '\0' || v < 0 ||
+      v > static_cast<long>(BoardProfile::gpioMax())) {
     return false;
   }
   out = static_cast<uint8_t>(v);
@@ -814,13 +817,13 @@ static bool handleMapAll() {
     }
     long v = 0;
     if (s_server.hasArg(dataK)) {
-      if (!parseLongArg(s_server.arg(dataK), 0, kS3GpioMax, v)) {
+      if (!parseLongArg(s_server.arg(dataK), 0, BoardProfile::gpioMax(), v)) {
         return false;
       }
       segs[i].dataGpio = static_cast<uint8_t>(v);
     }
     if (s_server.hasArg(clkK)) {
-      if (!parseLongArg(s_server.arg(clkK), 0, kS3GpioMax, v)) {
+      if (!parseLongArg(s_server.arg(clkK), 0, BoardProfile::gpioMax(), v)) {
         return false;
       }
       segs[i].clockGpio = static_cast<uint8_t>(v);
@@ -921,7 +924,8 @@ static void handleMap() {
     const String arg = s_server.arg("data");
     char *end = nullptr;
     const long v = strtol(arg.c_str(), &end, 10);
-    if (end == arg.c_str() || *end != '\0' || v < 0 || v > kS3GpioMax) {
+    if (end == arg.c_str() || *end != '\0' || v < 0 ||
+        v > static_cast<long>(BoardProfile::gpioMax())) {
       sendJson(400, "{\"error\":\"bad data\"}");
       return;
     }
@@ -931,7 +935,8 @@ static void handleMap() {
     const String arg = s_server.arg("clk");
     char *end = nullptr;
     const long v = strtol(arg.c_str(), &end, 10);
-    if (end == arg.c_str() || *end != '\0' || v < 0 || v > kS3GpioMax) {
+    if (end == arg.c_str() || *end != '\0' || v < 0 ||
+        v > static_cast<long>(BoardProfile::gpioMax())) {
       sendJson(400, "{\"error\":\"bad clk\"}");
       return;
     }

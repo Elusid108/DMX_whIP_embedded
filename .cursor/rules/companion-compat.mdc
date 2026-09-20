@@ -12,7 +12,7 @@ Sibling companion repo: `../DMX_whIP_companion` (same parent as this tree).
 - HTTP, `/status`, 503/live/park: README **Companion PC** block (this repo)
 - `DMXREC` `.dmx`: [`include/dmxrec.h`](include/dmxrec.h) and companion `src/services/shared/dmxRecording.js`
 - ArtPoll pairing: `artnet_rx.cpp` OEM `0x00FF`, BindIndex 1, DMX-out, style node, `#0001 […] vX.Y.Z` report
-- Board identity / default pins: `BoardProfile` + `include/board_matrix.h`; companion `firmware/catalog.json` must match
+- Board identity / default pins: `BoardProfile` + [`include/boards/select.h`](include/boards/select.h) / `board_*.h`; companion `firmware/catalog.json` must match
 
 `/status` extra keys are additive. Companion ignores unknowns. Do not require HTML scraping.
 
