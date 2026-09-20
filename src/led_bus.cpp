@@ -1,5 +1,6 @@
 #include "led_bus.h"
 
+#include "dbg981.h"
 #include "identify.h"
 #include "log.h"
 #include "pixel_map.h"
@@ -256,10 +257,30 @@ static void showClockless(uint8_t out) {
   const uint16_t n = PixelMap::outputPixelCount(out);
   const uint16_t off = PixelMap::outputPixelOffset(out);
   if (n == 0 || !s_ctrl[out].bound()) {
+    // #region agent log
+    dbg981("C", "led_bus.cpp:showClockless", "skip", n,
+           s_ctrl[out].bound() ? 1 : 0);
+    // #endregion
     return;
   }
   if (!outputWide(out)) {
     s_ctrl[out].setLeds(s_leds + off, static_cast<int>(n));
+    // #region agent log
+    static uint32_t s_dbgShow = 0;
+    if (s_dbgShow < 6 || (s_dbgShow % 80) == 0) {
+      uint16_t nz = 0;
+      for (uint16_t p = 0; p < n; ++p) {
+        if (s_leds[off + p].r | s_leds[off + p].g | s_leds[off + p].b) {
+          nz++;
+        }
+      }
+      dbg981("C", "led_bus.cpp:showClockless", "rgb",
+             static_cast<uint32_t>(s_boundPin[out] + 1) << 16 | n,
+             (static_cast<uint32_t>(s_leds[off].r) << 16) |
+                 (static_cast<uint32_t>(s_leds[off].g) << 8) | nz);
+    }
+    s_dbgShow++;
+    // #endregion
     s_ctrl[out].showLeds(255);
     return;
   }
@@ -367,6 +388,10 @@ void LedBus::apply() {
     int t3 = 0;
     timings(m.chipset, t1, t2, t3);
     s_ctrl[o].rebind(static_cast<int>(m.dataGpio), t1, t2, t3);
+    // #region agent log
+    dbg981("D", "led_bus.cpp:apply", "rebind", m.dataGpio,
+           static_cast<uint32_t>(t1) << 16 | static_cast<uint16_t>(t2));
+    // #endregion
     if (!s_ctrl[o].bound()) {
       LOG_C("led", "rmt rebind failed pin=%u", m.dataGpio);
       s_boundPin[o] = -1;

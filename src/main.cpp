@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "board_profile.h"
+#include "dbg981.h"
 #include "identify.h"
 #include "led_bus.h"
 #include "led_ctrl.h"
@@ -140,6 +141,14 @@ void loop() {
   }
 
   if (live) {
+    // #region agent log
+    static uint32_t s_dbgLive = 0;
+    if (s_dbgLive < 4 || (s_dbgLive % 40) == 0) {
+      dbg981("A", "main.cpp:loop", "live", LiveInput::pps(),
+             static_cast<uint32_t>(LiveInput::source()));
+    }
+    s_dbgLive++;
+    // #endregion
     if (syncLive) {
       if (liveFence) {
         LiveInput::renderLeds();
@@ -148,6 +157,9 @@ void loop() {
       LiveInput::renderLeds();
     }
   } else if (Identify::active()) {
+    // #region agent log
+    dbg981("C", "main.cpp:loop", "identify", now, 0);
+    // #endregion
     Identify::render(now);
   } else if (Playback::hasFile() && !Playback::userPaused()) {
     if (Sync::cueFollow()) {
@@ -170,6 +182,14 @@ void loop() {
       }
     }
   } else if (fpsDue) {
+    // #region agent log
+    static uint32_t s_dbgIdle = 0;
+    if (s_dbgIdle < 3 || (s_dbgIdle % 40) == 0) {
+      dbg981("A", "main.cpp:loop", "idle_clear", LiveInput::pps(),
+             Playback::hasFile() ? 1 : 0);
+    }
+    s_dbgIdle++;
+    // #endregion
     LedBus::clear();
   }
   LedBus::show();
