@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.22.3</title>
+<title>dmxwhip v0.24.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -233,7 +233,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.22.3</p>
+<p id="ver" class="readout">dmxwhip v0.24.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -282,9 +282,9 @@ const ORDERS={
   rgbwc:['grbwc','rgbwc','grbcw','rgbcw','wrgbc','wrgcb','bgrwc','bgrcw','crgbw','cgrbw']
 };
 function orderKey(w,c){return w&&c?'rgbwc':w?'rgbw':c?'rgbc':'rgb';}
-function defaultSeg(){return {proto:'auto',chip:'ws2812b',data:14,clk:0,count:64,white:false,cct:false,order:'grb',uni:0,ch:1,bri:10};}
+function defaultSeg(){return {proto:'auto',chip:'ws2812b',data:patchCaps.led_data,clk:0,count:patchCaps.panel_px||64,white:false,cct:false,order:'grb',uni:0,ch:1,bri:10};}
+let patchCaps={max_out:8,max_seg:24,max_px:1024,gpio_max:48,panel_w:8,panel_h:8,panel_px:64,bri_warn:128,led_data:14};
 let patch=[defaultSeg()];
-let patchCaps={max_out:8,max_seg:24,max_px:1024,gpio_max:48};
 let openSeg=0;
 let patchKey='';
 function chipOpts(sel){
@@ -319,10 +319,20 @@ function groupCounts(rows){
 }
 function unusedGpio(rows){
   const used=new Set(rows.map(r=>r.data));
-  const tryPins=[14,21,1,2,3,8,9,10,11,12,13,15,16,17,18,35,36,37,38,39,40,41,42,47,48];
-  for(let i=0;i<tryPins.length;i++) if(!used.has(tryPins[i])) return tryPins[i];
-  return 14;
+  const max=patchCaps.gpio_max;
+  const start=patchCaps.led_data;
+  if(!used.has(start)) return start;
+  for(let i=0;i<=max;i++) if(!used.has(i)) return i;
+  return start;
 }
+function panelLabel(){
+  const n=patchCaps.panel_px,w=patchCaps.panel_w,h=patchCaps.panel_h;
+  if(w&&h) return n+' pixels ('+w+'×'+h+')';
+  return n+' pixels';
+}
+function cntWarnOn(count){return !!patchCaps.panel_px&&parseInt(count,10)!==patchCaps.panel_px;}
+function briWarnOn(v){return patchCaps.bri_warn>0&&v>patchCaps.bri_warn;}
+function briWarnText(){return 'This '+patchCaps.panel_w+'×'+patchCaps.panel_h+' can overheat above '+patchCaps.bri_warn+'.';}
 function segsFromStatus(s){
   if(s.outputs&&s.outputs.length){
     const rows=[];
@@ -331,7 +341,7 @@ function segsFromStatus(s){
         const proto=seg.proto||'auto';
         rows.push({
           proto:proto,chip:o.chip||'ws2812b',data:o.data,clk:o.clk||0,
-          count:seg.count||64,white:!!seg.white,cct:!!seg.cct,order:seg.order||'grb',
+          count:seg.count||patchCaps.panel_px||64,white:!!seg.white,cct:!!seg.cct,order:seg.order||'grb',
           uni:proto==='sacn'?(seg.sacn||1):(seg.artnet||0),ch:seg.ch||1,
           bri:seg.bri!=null?seg.bri:10
         });
@@ -341,8 +351,8 @@ function segsFromStatus(s){
   }
   const m=s.map||{};
   return [{
-    proto:m.proto||'auto',chip:m.chip||'ws2812b',data:m.data!=null?m.data:14,clk:m.clk||0,
-    count:m.count||64,white:!!m.white,cct:!!m.cct,order:m.order||'grb',
+    proto:m.proto||'auto',chip:m.chip||'ws2812b',data:m.data!=null?m.data:patchCaps.led_data,clk:m.clk||0,
+    count:m.count||patchCaps.panel_px||64,white:!!m.white,cct:!!m.cct,order:m.order||'grb',
     uni:m.artnet!=null?m.artnet:0,ch:m.ch||1,bri:m.bri!=null?m.bri:10
   }];
 }
@@ -667,7 +677,12 @@ function applyPixels(s){
       max_out:s.patch.max_out||8,
       max_seg:s.patch.max_seg||24,
       max_px:s.patch.max_px||1024,
-      gpio_max:s.patch.gpio_max||48
+      gpio_max:s.patch.gpio_max||48,
+      panel_w:s.patch.panel_w||0,
+      panel_h:s.patch.panel_h||0,
+      panel_px:s.patch.panel_px||0,
+      bri_warn:s.patch.bri_warn||0,
+      led_data:s.patch.led_data!=null?s.patch.led_data:14
     };
   }
   if(!mapDirty){
@@ -1002,7 +1017,7 @@ function renderPatch(){
       '<input data-f="clk" type="number" min="1" max="'+patchCaps.gpio_max+'" value="'+(row.clk||21)+'" inputmode="numeric"'+locked+'></div>'+
       '<div class="patchfield'+(clocked?' span2':'')+'"><label class="lab">Pixels</label>'+
       '<input data-f="count" type="number" min="1" max="'+patchCaps.max_px+'" value="'+row.count+'" inputmode="numeric"></div>'+
-      '<p class="cntwarn span2'+(row.count!==64?' on':'')+'">This board’s panel is 64 pixels (8×8).</p>'+
+      '<p class="cntwarn span2'+(cntWarnOn(row.count)?' on':'')+'">This board’s panel is '+panelLabel()+'.</p>'+
       '<div class="patchfield"><label class="lab">Channels</label><div class="patchtogs">'+
       '<label class="tog"><input data-f="white" type="checkbox"'+(row.white?' checked':'')+'> White</label>'+
       '<label class="tog"><input data-f="cct" type="checkbox"'+(row.cct?' checked':'')+'> CCT</label></div></div>'+
@@ -1015,7 +1030,7 @@ function renderPatch(){
       '<div class="patchfield span2"><label class="lab">Brightness</label><div class="brirow">'+
       '<input data-f="bri" type="range" min="0" max="255" value="'+row.bri+'">'+
       '<input data-f="brinum" type="number" min="0" max="255" value="'+row.bri+'" inputmode="numeric"></div></div>'+
-      '<p class="briwarn span2'+(row.bri>64?' on':'')+'">This 8×8 can overheat above 64.</p>'+
+      '<p class="briwarn span2'+(briWarnOn(row.bri)?' on':'')+'">'+briWarnText()+'</p>'+
       '<p class="readout span2">'+escapeHtml(uniReadout(row))+'</p></div></div>';
     const head=card.querySelector('.patchhead');
     head.onclick=e=>{
@@ -1045,7 +1060,7 @@ function renderPatch(){
           if(range) range.value=String(v);
           if(num) num.value=String(v);
           const warn=card.querySelector('.briwarn');
-          if(warn) warn.className='briwarn span2'+(v>64?' on':'');
+          if(warn) warn.className='briwarn span2'+(briWarnOn(v)?' on':'');
           scheduleBri(v,i);
         };
         return;
@@ -1079,7 +1094,7 @@ function renderPatch(){
         }
         const warn=card.querySelector('.cntwarn');
         const cnt=card.querySelector('[data-f="count"]');
-        if(warn&&cnt) warn.className='cntwarn span2'+(parseInt(cnt.value,10)!==64?' on':'');
+        if(warn&&cnt) warn.className='cntwarn span2'+(cntWarnOn(cnt.value)?' on':'');
         refreshPatchTitles();
       };
     });

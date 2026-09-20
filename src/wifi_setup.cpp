@@ -12,6 +12,7 @@
 #include "play_cfg.h"
 #include "playback.h"
 #include "sd_info.h"
+#include "sync.h"
 #include "version.h"
 #include "wifi_setup_html.h"
 
@@ -372,6 +373,16 @@ static void appendOutputs(String &out) {
   out += static_cast<unsigned>(kLiveUniSlots);
   out += ",\"gpio_max\":";
   out += static_cast<unsigned>(BoardProfile::gpioMax());
+  out += ",\"panel_w\":";
+  out += static_cast<unsigned>(kMatrixWidth);
+  out += ",\"panel_h\":";
+  out += static_cast<unsigned>(kMatrixHeight);
+  out += ",\"panel_px\":";
+  out += static_cast<unsigned>(kLedCount);
+  out += ",\"bri_warn\":";
+  out += static_cast<unsigned>(kBrightnessWarn);
+  out += ",\"led_data\":";
+  out += static_cast<unsigned>(kLedPin);
   out += '}';
 }
 
@@ -481,7 +492,20 @@ static void sendStatus(int code) {
     }
     jsonEscape(out, String(SdInfo::dirAt(i)));
   }
-  out += "]}}";
+  out += "],\"sync\":{\"group\":";
+  jsonEscape(out, String(Sync::groupId()));
+  out += ",\"members\":[";
+  for (uint8_t i = 0; i < Sync::memberCount(); ++i) {
+    if (i) {
+      out += ',';
+    }
+    jsonEscape(out, String(Sync::memberNameAt(i)));
+  }
+  out += "],\"master\":";
+  out += Sync::isMaster() ? "true" : "false";
+  out += ",\"follow\":";
+  out += Sync::cueFollow() ? "true" : "false";
+  out += "}}}" ;
   sendJson(code, out);
 }
 
@@ -1144,12 +1168,64 @@ static void sanitizeTitle(const char *in, char *out, size_t n) {
   out[i] = '\0';
 }
 
-static bool writeSidecarName(const char *dmx, const char *name) {
+static void jsonWriteEscaped(File &f, const char *s) {
+  if (!s) {
+    return;
+  }
+  for (const char *p = s; *p; ++p) {
+    if (*p == '\\' || *p == '"') {
+      f.write('\\');
+    }
+    f.write(static_cast<uint8_t>(*p));
+  }
+}
+
+static bool writeSidecarName(const char *dmx, const char *name,
+                             const char *group, const char *members) {
   char side[kSdPathLen];
   if (!sidecarPath(dmx, side, sizeof(side))) {
     return false;
   }
-  if (!name || !name[0]) {
+  char keepGroup[40] = {};
+  char keepMembers[512] = {};
+  if ((!group || !group[0]) && SD.exists(side)) {
+    File in = SD.open(side, FILE_READ);
+    if (in) {
+      char buf[768];
+      const int n = in.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
+      in.close();
+      if (n > 0) {
+        buf[n] = '\0';
+        const char *g = strstr(buf, "\"group\"");
+        if (g) {
+          const char *q = strchr(g + 7, '"');
+          if (q) {
+            q = strchr(q + 1, '"');
+            if (q) {
+              q++;
+              size_t i = 0;
+              while (*q && *q != '"' && i + 1 < sizeof(keepGroup)) {
+                keepGroup[i++] = *q++;
+              }
+              keepGroup[i] = '\0';
+            }
+          }
+        }
+        const char *m = strstr(buf, "\"members\"");
+        if (m) {
+          const char *b = strchr(m, '[');
+          const char *e = b ? strchr(b, ']') : nullptr;
+          if (b && e && static_cast<size_t>(e - b + 1) < sizeof(keepMembers)) {
+            memcpy(keepMembers, b, static_cast<size_t>(e - b + 1));
+            keepMembers[e - b + 1] = '\0';
+          }
+        }
+      }
+    }
+  }
+  const char *useGroup = (group && group[0]) ? group : keepGroup;
+  const char *useMembers = (members && members[0]) ? members : keepMembers;
+  if ((!name || !name[0]) && !useGroup[0]) {
     if (SD.exists(side)) {
       SD.remove(side);
     }
@@ -1163,13 +1239,16 @@ static bool writeSidecarName(const char *dmx, const char *name) {
     return false;
   }
   f.print("{\"name\":\"");
-  for (const char *p = name; *p; ++p) {
-    if (*p == '\\' || *p == '"') {
-      f.write('\\');
-    }
-    f.write(static_cast<uint8_t>(*p));
+  jsonWriteEscaped(f, name ? name : "");
+  f.print("\"");
+  if (useGroup[0]) {
+    f.print(",\"sync\":{\"group\":\"");
+    jsonWriteEscaped(f, useGroup);
+    f.print("\",\"members\":");
+    f.print(useMembers[0] ? useMembers : "[]");
+    f.print("}");
   }
-  f.print("\"}\n");
+  f.print("}\n");
   f.close();
   return true;
 }
@@ -1436,6 +1515,8 @@ static void handleMeta() {
   }
   char title[kSdTitleLen];
   sanitizeTitle(s_server.arg("name").c_str(), title, sizeof(title));
+  const String groupArg = s_server.arg("sync_group");
+  const String membersArg = s_server.arg("sync_members");
   if (!SdInfo::lock(2000)) {
     sendJson(503, "{\"error\":\"busy\"}");
     return;
@@ -1445,13 +1526,17 @@ static void handleMeta() {
     sendJson(404, "{\"error\":\"missing\"}");
     return;
   }
-  const bool ok = writeSidecarName(path.c_str(), title);
+  const bool ok = writeSidecarName(path.c_str(), title, groupArg.c_str(),
+                                   membersArg.c_str());
   SdInfo::unlock();
   if (!ok) {
     sendJson(500, "{\"error\":\"meta failed\"}");
     return;
   }
   SdInfo::refreshTree();
+  if (Playback::path()[0] && strcmp(Playback::path(), path.c_str()) == 0) {
+    Sync::onPlayFile(path.c_str());
+  }
   LOG_V("http", "meta %s", path.c_str());
   sendStatus(200);
 }
@@ -1687,16 +1772,19 @@ static void handlePlay() {
   const String actionArg = s_server.arg("action");
   if (srcArg == "stop" || actionArg == "stop") {
     Playback::park();
+    Sync::noteLocalPause();
     sendStatus(200);
     return;
   }
   if (srcArg == "pause" || actionArg == "pause") {
     Playback::userPause();
+    Sync::noteLocalPause();
     sendStatus(200);
     return;
   }
   if (srcArg == "resume" || actionArg == "resume") {
     Playback::userResume();
+    Sync::noteLocalTrigger();
     sendStatus(200);
     return;
   }
@@ -1755,6 +1843,7 @@ static void handlePlay() {
     return;
   }
   Playback::reload();
+  Sync::noteLocalTrigger();
   sendStatus(200);
 }
 

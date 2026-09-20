@@ -97,6 +97,8 @@ void loop() {
             Playback::start();
           }
         }
+      } else if (Sync::waitingForMaster()) {
+        // Wait for the elected master; fall back in Sync::service.
       } else if (!Playback::running()) {
         if (s_livePreemptedPlay) {
           LOG_V("main", "play resume after silence");
@@ -104,6 +106,7 @@ void loop() {
         }
         Playback::start();
         Playback::play();
+        Sync::noteAutoStart();
       } else if (!Playback::playing()) {
         Playback::play();
       }

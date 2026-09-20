@@ -1,8 +1,8 @@
 # DMX_whIP_embedded
 
-Version: **0.22.3**
+Version: **0.24.0**
 
-The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node, not the production controller.
+The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
 The 18-month-old [`Esp32-s3 Pixel Playback — Rebuild Plan (step-by-step).pdf`](Esp32-s3%20Pixel%20Playback%20%E2%80%94%20Rebuild%20Plan%20(step-by-step).pdf) is **historical**. New boards follow **Adding a board** below. Never copy the PDF’s `platformio.ini` (`qspi_opi`, 8MB-class flash, SDMMC, huge rings, AsyncWebServer + LittleFS SPA) and never use official `platform = espressif32` for a new chip.
 
@@ -11,11 +11,19 @@ Local `ARCHIVE/` is gitignored. It is the old generic ESP32-S3 controller (GPIO 
 ## Current hardware (`[env:matrix]`)
 
 - MCU: ESP32-S3FH4R2 — **4MB flash, 2MB QSPI PSRAM** (`qio_qspi`, `default.csv`)
-- LED: 8×8 WS2812B on GPIO 14, GRB, default brightness **10/255** (Patch tab 0–255; warn above 64 — this panel can overheat). Patch is a list of outputs and same-GPIO chain segments (NVS `pmap` blob + segment-0 mirror). Matrix caps: 8 outputs, 24 segments, 1024 total pixels, 16 live universe slots. `POST /map`, idle.
+- LED: 8×8 WS2812B on GPIO 14, GRB, default brightness **10/255** (Patch tab 0–255; warn above 128 — this panel can overheat). Patch is a list of outputs and same-GPIO chain segments (NVS `pmap` blob + segment-0 mirror). Matrix caps: 8 outputs, 24 segments, 1024 total pixels, 16 live universe slots. `POST /map`, idle.
 - USB-C: native USB-Serial/JTAG (`ARDUINO_USB_CDC_ON_BOOT=1`, `ARDUINO_USB_MODE=1`)
 - microSD: **SPI** CS 7, MOSI 6, CLK 5, MISO 4 (3.3 V module only)
 
 Prove the **pipeline** here with 64 pixels. Retarget with **Adding a board**. Share `src/`; do not fork the tree. One node is not 100k live pixels.
+
+## Current hardware (`[env:c5]`)
+
+- MCU: ESP32-C5 — **8MB flash, 4MB QSPI PSRAM** (pioarduino `esp32-c5-devkitc1-n8r4`, `default_8MB.csv`)
+- LED: 5×5 WS2812B on GPIO **24**, GRB, default brightness **10/255** (no overheat banner; Patch count hint is 25)
+- USB: UART bridge for `Serial` (no `ARDUINO_USB_CDC_ON_BOOT`). Native USB-JTAG GPIO 13/14 is reserved.
+- microSD: **SPI** CS 10, MOSI 7, CLK 6, MISO 2 (3.3 V module only)
+- Caps: 2 outputs (C5 has 2 RMT TX channels), 24 segments, 1024 total pixels, 16 live universe slots. Reserved: USB 13/14, flash/PSRAM 15–22.
 
 ## Adding a board
 
@@ -29,11 +37,9 @@ This section is the starter. Platform is pinned **pioarduino** in the common `[e
 
 ### Bring-up set (inventory)
 
-No extra envs yet. Next hardware, in order:
-
-- Waveshare ESP32-S3-Matrix — `[env:matrix]` (current)
-- ESP32-C6-DevKitC-1-N8 (8MB flash, no PSRAM)
-- ESP32-C5-DevKitC-1-N8R4 (8MB flash + 4MB PSRAM)
+- Waveshare ESP32-S3-Matrix — `[env:matrix]` (default)
+- ESP32-C5-DevKitC-1-N8R4 — `[env:c5]`
+- Next: ESP32-C6-DevKitC-1-N8 (8MB flash, no PSRAM)
 - Seeed XIAO ESP32-C5 (dual-band, tiny pinout; likely no onboard SD)
 - ESP32-P4-POE-ETH — Waveshare P4 PoE ETH family until the exact SKU is confirmed. [ESP32-P4-WIFI6-POE-ETH](https://www.waveshare.com/wiki/ESP32-P4-WIFI6-POE-ETH) is P4 + onboard C6-MINI-1 (SDIO ESP-Hosted) + IP101 10/100 + PoE header. First P4 bring-up is **Ethernet-only**; hosted Wi-Fi is later.
 
@@ -51,7 +57,7 @@ ESP-Hosted / `esp_wifi_remote` over SDIO or SPI. If the PoE ETH board is WIFI6-P
 
 ## Flash and serial
 
-Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e matrix -t upload`. Serial window: `ESP32 COM3` via [`scripts/serial-monitor.ps1`](scripts/serial-monitor.ps1). Details are in [`.cursor/rules/esp32-matrix.mdc`](.cursor/rules/esp32-matrix.mdc).
+Matrix upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e matrix -t upload`. Serial window: `ESP32 COM3` via [`scripts/serial-monitor.ps1`](scripts/serial-monitor.ps1). Details are in [`.cursor/rules/esp32-matrix.mdc`](.cursor/rules/esp32-matrix.mdc). C5 uses `pio run -e c5 -t upload` on its own COM port (UART USB); do not use the Matrix COM3 handshake.
 
 ## SoftAP config portal
 
@@ -61,14 +67,14 @@ Every upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e m
 - Captive DNS hijacks all names to `4.3.2.1`. Probe URLs (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`, …) return the portal HTML with **200**, never OS “success” tokens (no HTTP 204 for Android, no Apple `Success`, no Windows NCSI pass string).
 - Limit: HTTPS connectivity checks cannot be spoofed. Some new phones only show a sign-in notification. DHCP Captive-Portal-API (RFC 8910) is possible on this IDF 5.5 core but is not implemented yet. If the sheet does not open, use `http://4.3.2.1` (not https).
 - Connecting STA may hop the SoftAP channel; if the page drops, rejoin `dmxwhip`. With park **Yes** and STA up the AP is gone — unicast to the **STA IP** (serial `[V][wifi] connected ... ip=`). Park **No** keeps `dmxwhip` / `http://4.3.2.1` plus STA HTTP. With no STA, use `dmxwhip` / `http://4.3.2.1`. STA connect timeout starts when `loop()` runs so a slow SD mount cannot drop a saved network. Art-Net / sACN UDP rebind after park applies SoftAP policy so companion ArtPoll still sees a node that auto-plays SD at plug-in. Show-LAN polls advertise the STA IP, not `4.3.2.1`. Bind retries if the first listen fails. Wi-Fi power save is off while STA is connected.
-- Per-segment brightness 0–255 on **Patch** (immediate `POST /brightness` with `i`). Applied once when packing pixels. Identify may temporarily use the FastLED boost. Node master `/status` `bri` is still `LedCtrl` (`POST /brightness` without `i`). Warning on the page above 64; the value is not capped.
+- Per-segment brightness 0–255 on **Patch** (immediate `POST /brightness` with `i`). Applied once when packing pixels. Identify may temporarily use the FastLED boost. Node master `/status` `bri` is still `LedCtrl` (`POST /brightness` without `i`). Matrix warning on the page above 128; the value is not capped. C5 has no overheat banner.
 - Live protocol is per Patch segment (Auto / Art-Net / sACN). Art-Net and sACN can run at once when different segments need them. `/status` `proto` is `auto` / `artnet` / `sacn` / `mixed`. `POST /live` `proto` still sets every segment (compat). Setup keeps **show FPS** 20 / 30 / 40 / 60 (`fps`), **buffer** 0 latest … 3 frames (`buf`), and **Hide AP if connected** Yes / No (`park`, default Yes). `/live` accepts `park` while a stream is up. **Identify:** header button and `POST /identify` (form `ms`, default 3000, 200–15000) flashes cyan/white on all outputs while idle; it does not mark the node live. 503 if a protocol is live. Locate scale is `max(saved bri, 64)` then restored.
 - Live tab polls cheap `GET /api/stats` and shows a no-scroll 2×2 dashboard (radio with RSSI bars, stream numbers, SD meter, now-playing) plus an identity/health strip. A full-width red banner above the tabs reads **Live input — Playback and Patch are locked** while a protocol is live. **Patch** is a collapsible list: **Add Output +** (right of Save) adds an output; parent **+** adds a same-GPIO chain segment (GPIO / IC / clock locked; list order is wire order). Child rows use up/down/trash icons (arrows hidden at the ends of a group). Each row has protocol, IC, data/clock GPIO, count, white/CCT, order, start universe/channel, and brightness. The collapsed line shows that fixture’s start–end universe.channel (e.g. `0.1–0.192`). The expanded editor packs two fields per line. **Save** posts indexed `/map` (`n`, `proto0`…). Browsing the form does not rebind. Idle `POST /map` persists NVS and arms the same delayed reboot as `POST /reboot` so the new patch is live after boot. 503 while live. Playback lists `.dmx` files and folders (`/status` `play`) as an indented tree with Ctrl/Shift multi-select, second-click title edit, and icon Prev / Play / Pause / Stop / Next / Delete. POSTs `/play` for the idle playlist (NVS). `src=stop` (or `action=stop`) parks playback without changing the saved playlist; `action=pause` / `action=resume` hold and continue the current file. Companion `POST /upload` (multipart `path` + `file`) streams a `.dmx` onto the card while idle, then `POST /meta` for the sidecar title. Pull the card → not mounted; reinsert → automount. `/status` object `sd` (`used_mb` / `free_mb` omitted until the walk finishes). Skip SD I/O while a protocol is live. Playback still fills output 0 from segment 0’s start uni/ch; other outputs stay black while idle.
 
 ## Art-Net / sACN (Resolume)
 
 - Art-Net: UDP **6454**. Each Art-Net/`auto` segment has its own start universe (default **0**; Resolume “universe 1” is often Art-Net 0). sACN: UDP **5568**, per-segment start (sACN-native on an sACN row; otherwise Art-Net + 1), unicast to STA IP or multicast `239.255.(uni>>8).(uni&0xFF)`. Same data GPIO concatenates segments in list order (e.g. 64 px Art-Net 0.1 then 150 px sACN 8.1). Wire order is the row `order` (default GRB). White and/or CCT add channels and shrink pixels-per-universe.
-- Live path: buf 0 = drop-to-latest; buf 1–3 = small jitter queue (drop oldest if full). Show rate from portal FPS. Idle plays companion `DMXREC` `.dmx` from SD 1:1 onto **output 0** (Art-Net universe 0 or sACN universe 1). Default: all `.dmx` directly in `/`, alphabetical, wrap forever. A selected file can loop itself or continue with its parent playlist; a selected folder plays nested `.dmx` by full path (repeat forever, or N times then black). No file = black. Serial `[V][artnet]` / `[V][sacn]` first packet + 5 s counters; `[V][ap] down (sta)` / `[V][ap] up`; `[V][play] file=` / `[V][play] list`.
+- Live path: buf 0 = drop-to-latest; buf 1–3 = small jitter queue (drop oldest if full). Show rate from portal FPS. Idle plays companion `DMXREC` `.dmx` from SD onto **output 0** (consecutive universes from the first segment start uni/ch, packed to that output’s pixel count). Default: all `.dmx` directly in `/`, alphabetical, wrap forever. A selected file can loop itself or continue with its parent playlist; a selected folder plays nested `.dmx` by full path (repeat forever, or N times then black). No file = black. Serial `[V][artnet]` / `[V][sacn]` first packet + 5 s counters; `[V][ap] down (sta)` / `[V][ap] up`; `[V][play] file=` / `[V][play] list`.
 
 ## Living milestone list
 
@@ -111,9 +117,9 @@ Bring-up (this board)
 
 Multi-board (queued — do not start unless asked)
 
-- [ ] **Adding a board** recipe used for the next env
+- [x] **Adding a board** recipe used for the next env — implemented (`[env:c5]`; not verified)
 - [ ] `[env:c6]` ESP32-C6-DevKitC-1-N8
-- [ ] `[env:c5]` ESP32-C5-DevKitC-1-N8R4
+- [x] `[env:c5]` ESP32-C5-DevKitC-1-N8R4 — implemented (25 px GPIO 24, SD 10/7/6/2; not verified)
 - [ ] `[env:xiao-c5]` Seeed XIAO ESP32-C5
 - [ ] Dual-band STA scan/connect (C5 / XIAO C5); SoftAP stays 2.4 GHz
 - [ ] `NetIf` so UDP/HTTP do not call `WiFi.*` directly
@@ -124,9 +130,9 @@ Multi-board (queued — do not start unless asked)
 
 From the historical PDF (adapted)
 
-- [x] Board profile as data (pins, flash, PSRAM, LED count, ring sizes); extra PlatformIO envs without forking `src/` — implemented (Matrix profile + NVS SD overlay; still one `[env:matrix]`; not verified)
+- [x] Board profile as data (pins, flash, PSRAM, LED count, ring sizes); extra PlatformIO envs without forking `src/` — implemented (Matrix + C5 profiles + NVS SD overlay; not verified)
 - [x] pioarduino common `[esp32]` platform (55.03.39 / Arduino 3.3.9 / IDF 5.5.4); `[env:matrix]` still the default — implemented (`pio run -e matrix` succeeds; flash not verified)
-- [x] Board profile selectable via `BOARD_PROFILE_*` + [`include/boards/select.h`](include/boards/select.h); GPIO max / reserved pins / radio / service core from the profile; `/status` `patch.gpio_max` — implemented (Matrix is the only selected profile; not verified)
+- [x] Board profile selectable via `BOARD_PROFILE_*` + [`include/boards/select.h`](include/boards/select.h); GPIO max / reserved pins / radio / service core from the profile; `/status` `patch.gpio_max` — implemented (Matrix + C5; not verified)
 - [x] Companion `/status` `api` plus `chip` / `board` / `pins` — implemented (not verified)
 - [x] NVS SD pin overlay + idle `POST /pins` remount — implemented (not verified)
 - [x] JSON `/api/stats` (Wi-Fi IP/RSSI, later queue depths / drops / FPS) — implemented (`rssi`, `queued`, `drops`, `pps`, `src`, `age_ms`, heap/PSRAM; not verified)
@@ -139,7 +145,7 @@ From the historical PDF (adapted)
 - [x] Render scheduler at target FPS; drop-to-latest for live — implemented (portal 20/30/40/60 FPS; buf 0–3; not verified)
 - [x] SD async reader (SPI on this board; SDMMC only on boards that have it); ring sized from profile — not 128–512 KB on the Matrix — implemented (4-frame Matrix ring + `play` task; not verified)
 - [x] Recording file spec v1 (header + timestamped frames + CRC + index) — replace archive `DMXREC` + 10-byte headers; show-relative timestamps — implemented (structs in `rec_format.h`; SD player uses companion `DMXREC` `.dmx`; not verified)
-- [x] Playback engine; pause on underrun — implemented (companion `DMXREC` `.dmx`; 1:1 slice; not verified)
+- [x] Playback engine; pause on underrun — implemented (companion `DMXREC` `.dmx`; consecutive-universe assemble on output 0; not verified)
 - [ ] Web UI beyond SoftAP (protocol + playback + stats). Stay on PROGMEM/`WebServer` until the UI outgrows it; no AsyncWebServer / LittleFS SPA yet
 - [ ] Watchdog + `/api/logs`; soak test
 
@@ -166,7 +172,7 @@ The companion discovers and locates nodes over the **selected NIC**. Contract:
 - **ArtPoll** (UDP 6454, opcode `0x2000`) — this firmware replies with **ArtPollReply** (`0x2100`, 239 bytes): short/long name from NVS (`POST /name`; default `dmxwhip` / `dmxwhip v…`), IP, MAC, BindIndex 1, one DMX-out port, Art-Net **start universe** from the first Art-Net/`auto` Patch segment (default 0). Poll does not count as live input. **All segments sACN-only** stops Art-Net UDP, so those nodes will not appear in ArtPoll.
 - **Universes** — `map` is still the first segment of the first output (`map.artnet` default 0; Resolume “universe 1” is often 0; `map.sacn` is Art-Net + 1). Full patch is additive `outputs[]`. A segment may span up to six universes; the node keeps up to 16 live slots.
 - **HTTP on every IP; SoftAP is a fallback** — SoftAP `http://4.3.2.1` (SSID `dmxwhip` / `pass1234`) when there is no STA, and the STA IP when connected. **Park Yes** (default, **Hide AP if connected**): SoftAP and captive DNS are down while STA is up; HTTP stays on the STA IP during playback and during a live stream. **Park No:** SoftAP stays up alongside STA. SoftAP returns if STA drops. SD routes (`/upload`, `/play`, `/rename`, `/meta`, `/delete`, `/file`, `/order`), `/identify`, `/pins`, and `/map` stay 503 while live. `POST /reboot` stays up while live.
-- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `api` (integer wire version; `1` here), `chip`, `board`, `name`, `short`, `bri`, `proto` (`auto` / `artnet` / `sacn` / `mixed`), `fps`, `buf`, `park` (`yes`/`no`; hide SoftAP when STA is up), `live` (bool), `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`; `used_mb` / `free_mb` after the deferred FAT walk), `pins` (`led` follows the first output data GPIO; `sd.cs` / `sd.mosi` / `sd.clk` / `sd.miso`), `map` (first segment of first output: `chip`, `order`, `data`, `clk`, `count`, `artnet`, `sacn`, `ch`, `split`, plus additive `white`, `cct`, `ch_px`, `span`, `fit`, `proto`, `bri`), `outputs` (array of `{ data, clk, chip, count, segs: [{ proto, order, count, white, cct, artnet, sacn, ch, ch_px, span, fit, split, bri }] }`), `patch` (`max_out`, `max_seg`, `max_px`, `slots`, additive `gpio_max`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `paused`, `files`, `titles`, `dirs`). `titles` is a parallel string array to `files` (sidecar display names; empty means use the basename). When present: `ssid`, `saved`, `ip` (STA), `rssi` (STA dBm), `error`. Extra keys are additive.
+- **GET `/status`** — JSON the companion may read (do not scrape portal HTML). Always: `state`, `ver`, `api` (integer wire version; `1` here), `chip`, `board`, `name`, `short`, `bri`, `proto` (`auto` / `artnet` / `sacn` / `mixed`), `fps`, `buf`, `park` (`yes`/`no`; hide SoftAP when STA is up), `live` (bool), `ap_ip`, `sd` (`ok`; when mounted also `type`, `size_mb`; `used_mb` / `free_mb` after the deferred FAT walk), `pins` (`led` follows the first output data GPIO; `sd.cs` / `sd.mosi` / `sd.clk` / `sd.miso`), `map` (first segment of first output: `chip`, `order`, `data`, `clk`, `count`, `artnet`, `sacn`, `ch`, `split`, plus additive `white`, `cct`, `ch_px`, `span`, `fit`, `proto`, `bri`), `outputs` (array of `{ data, clk, chip, count, segs: [{ proto, order, count, white, cct, artnet, sacn, ch, ch_px, span, fit, split, bri }] }`), `patch` (`max_out`, `max_seg`, `max_px`, `slots`, additive `gpio_max`, `panel_w`, `panel_h`, `panel_px`, `bri_warn`, `led_data`), `play` (`src`, `path`, `file_loop`, `folder_rep`, `n`, `now`, `paused`, `files`, `titles`, `dirs`, additive `sync` `{ group, members, master, follow }`). `titles` is a parallel string array to `files` (sidecar display names; empty means use the basename). When present: `ssid`, `saved`, `ip` (STA), `rssi` (STA dBm), `error`. Extra keys are additive.
 - **GET `/api/stats`** — cheap dashboard JSON (no SD file list). Same radio/`sd` summary as `/status` plus `rssi`, `mode` (`live`/`play`/`idle`), `src`, `age_ms`, `queued`, `drops`, `pps`, `heap`, `psram`, `up_ms`, compact `play` (`now`, `parked`, `paused`, `underrun`, `frame`), `map`, `outputs`, and `patch`. Available while live. Companion may ignore this route.
 - **POST `/identify`** — form `ms` (default 3000, 200–15000). Idle LED locate pattern. Must not call `LiveInput::push`. 503 when live. Show scale is `max(saved bri, 64)` for the flash only, then restored (not written to NVS).
 - **POST `/reboot`** — empty form. Available while live. `200 {"ok":true}` then restart. SoftAP `4.3.2.1` works if STA is down.
@@ -175,12 +181,13 @@ The companion discovers and locates nodes over the **selected NIC**. Contract:
 - **Portal-equivalent POSTs** (same as the SoftAP page; companion calls these, does not scrape HTML): `POST /brightness` (`v` 0–255; optional `i` = segment index), `POST /live` (`proto` auto/artnet/sacn sets every segment, `fps` 20/30/40/60, `buf` 0–3, `park` yes/no), `GET /scan` (`?start=1` then poll until `networks`), `POST /connect` (`ssid`, `password`), `POST /forget`. Available while live. `/live` may change `park` while a stream is up.
 - **POST `/name`** — form `long` (required, 1–63), optional `short` (1–17; else truncated `long`). Persists NVS; next ArtPollReply uses the names. Available while live. Response is full `/status`.
 - **POST `/rename`** — form `from` + `to` (absolute `.dmx`, same path rules as `/upload`). Idle-only. 404 missing, 409 exists. Updates the NVS file playlist path if it matched `from`. Moves a sibling sidecar if present.
-- **POST `/meta`** — form `path` (absolute `.dmx`) + `name` (display title, max 48). Idle-only. Writes or removes sibling `{basename}.json`. 404 missing. Response is full `/status`.
+- **POST `/meta`** — form `path` (absolute `.dmx`) + `name` (display title, max 48). Optional additive `sync_group` (string) and `sync_members` (JSON array of `{n,m}` long name + MAC). Idle-only. Writes sibling `{basename}.json` as `{ name, sync?: { group, members } }`. Empty name without a group removes the sidecar. 404 missing. Response is full `/status`.
+- **Playback cue bus** — UDP 4777, multicast `239.255.77.77`. v1 is 16 bytes (`WHIP` + play/pause/seek/tick + `t_ms`). v2 appends a 4-byte group hash; followers with a sidecar group only lock to that id. Portal or companion `POST /play` on a node makes it master. Auto-boot elects by numeric-aware long name among `sync.members` (MAC tie-break). Non-masters wait for a cue (~4 s) then fall back to local auto-play. Sync is show-relative `t_ms`.
 - **POST `/delete`** — repeated form `path` (absolute `.dmx`). Idle-only. Removes each file and its sidecar. 404 missing. If the NVS file playlist was deleted, falls back to root and parks. Response is full `/status`.
 - **GET `/file`** — query `path=/foo.dmx`. Idle-only. Streams the file (`streamFile`); no full-file RAM buffer. 404 missing.
 - **POST `/order`** — repeated form `path` in the desired order. Two-phase rename to `/01_basename.dmx`, `/02_…` (strips an existing `NN_` prefix). Idle-only. Moves sibling sidecars. Response is full `/status`.
 - **POST `/pins`** — form `cs`, `mosi`, `clk`, `miso` (GPIO 0…`patch.gpio_max`, four distinct). Idle-only (503 when live; remounts SD). Persists NVS `board` overlay (missing/`0xFF` = compile-time profile defaults). LED data pin is not accepted (`POST /map`). Response is full `/status`.
-- **POST `/map`** — indexed form `n` plus `proto0` / `chip0` / `data0` / `clk0` / `count0` / `white0` / `cct0` / `order0` / `uni0` / `ch0` / `bri0` … Same-GPIO rows are one chain (first row is the head). `uni` is Art-Net 0-based except on `proto=sacn` rows (sACN 1-based). Idle-only (503 when live). Persists NVS `pmap` blob + segment-0 mirror and arms a delayed reboot after the HTTP reply (same as `POST /reboot`). Rejects profile reserved GPIOs (`BoardProfile::reservedGpio`; Matrix = USB-JTAG 19/20 and flash/PSRAM 26–32), current SD pins, clock=data, over-cap outputs/segments/pixels/slots. Legacy single-field POST (no `n`) still patches segment 0 only. Response is full `/status`.
+- **POST `/map`** — indexed form `n` plus `proto0` / `chip0` / `data0` / `clk0` / `count0` / `white0` / `cct0` / `order0` / `uni0` / `ch0` / `bri0` … Same-GPIO rows are one chain (first row is the head). `uni` is Art-Net 0-based except on `proto=sacn` rows (sACN 1-based). Idle-only (503 when live). Persists NVS `pmap` blob + segment-0 mirror and arms a delayed reboot after the HTTP reply (same as `POST /reboot`). Rejects profile reserved GPIOs (`BoardProfile::reservedGpio`; Matrix = USB-JTAG 19/20 and flash/PSRAM 26–32; C5 = USB-JTAG 13/14 and flash/PSRAM 15–22), current SD pins, clock=data, over-cap outputs/segments/pixels/slots. Legacy single-field POST (no `n`) still patches segment 0 only. Response is full `/status`.
 
 - [ ] Art-Net / sACN test sender that can also emit ArtSync / E1.31 sync / playback cues
 - [ ] Later: recorder and SD file pull; node exposes the files/API this app will use
@@ -242,6 +249,8 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.24.0** — `[env:c5]` ESP32-C5-DevKitC-1-N8R4 (GPIO 24 / 5×5, SD 10/7/6/2); Matrix brightness warn 128; Patch panel/overheat copy from `/status` `patch`
+- **0.23.0** — SD play packs consecutive universes onto output 0; cue v2 group lockstep; `/meta` sync sidecar; `/status` `play.sync`
 - **0.22.3** — Patch Save shows green Saved after the map reboot; portal poll resumes when HTTP drops
 - **0.22.2** — Patch collapsed rows show start–end universe.channel; expanded editor is two fields per line
 - **0.22.1** — RMT5 clockless timings in nanoseconds so WS2812 on the Matrix actually lights

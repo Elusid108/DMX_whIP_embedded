@@ -48,7 +48,9 @@ static constexpr char kCueMagic1 = 'H';
 static constexpr char kCueMagic2 = 'I';
 static constexpr char kCueMagic3 = 'P';
 static constexpr uint8_t kCueVersion = 1;
+static constexpr uint8_t kCueVersion2 = 2;
 static constexpr uint8_t kCuePktLen = 16;
+static constexpr uint8_t kCuePktLenV2 = 20;
 
 static constexpr uint8_t kCueOpPlay = 1;
 static constexpr uint8_t kCueOpPause = 2;
@@ -104,4 +106,15 @@ public:
   static bool cueHasFrame();
   static uint32_t cueTargetMs();
   static uint32_t cueTargetFrame();
+
+  static void onPlayFile(const char *path);
+  static void noteLocalTrigger();
+  static void noteLocalPause();
+  static void noteAutoStart();
+  static bool waitingForMaster();
+  static bool isMaster();
+  static bool hasGroup();
+  static const char *groupId();
+  static uint8_t memberCount();
+  static const char *memberNameAt(uint8_t i);
 };

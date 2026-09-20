@@ -13,7 +13,7 @@
 //
 // Frame: t_ms | universe | protocol | 512 DMX slots.
 // Protocol 0 = Art-Net, 1 = sACN. Mapping lives in the console;
-// the node copies its universe 1:1 onto the strip.
+// the node packs consecutive universes from its start uni/ch onto output 0.
 
 #if defined(__GNUC__)
 #define DMXREC_PACKED __attribute__((packed))

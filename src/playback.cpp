@@ -6,6 +6,7 @@
 #include "pixel_map.h"
 #include "play_cfg.h"
 #include "sd_info.h"
+#include "sync.h"
 
 #include <Arduino.h>
 #include <SD.h>
@@ -86,11 +87,15 @@ static uint16_t s_readSize = 0;
 static uint8_t s_readRgb[kPlayMaxPayload];
 
 static uint32_t sliceBytes() {
-  const PixelMapCfg &m = PixelMap::cfg();
-  const uint32_t n =
-      static_cast<uint32_t>(m.pixelCount) * m.channelsPerPixel;
+  uint32_t n = 0;
+  const uint8_t first = PixelMap::firstSegmentOfOutput(0);
+  const uint8_t nSeg = PixelMap::segmentCountOfOutput(0);
+  for (uint8_t i = 0; i < nSeg; ++i) {
+    n += PixelMap::channelCount(static_cast<uint8_t>(first + i));
+  }
   if (n == 0) {
-    return 0;
+    const PixelMapCfg &m = PixelMap::cfg();
+    n = static_cast<uint32_t>(m.pixelCount) * m.channelsPerPixel;
   }
   if (n > kPlayMaxPayload) {
     return kPlayMaxPayload;
@@ -98,23 +103,73 @@ static uint32_t sliceBytes() {
   return n;
 }
 
+static const PixelMapCfg &playMap() {
+  return PixelMap::segment(PixelMap::firstSegmentOfOutput(0));
+}
+
 static uint32_t dmxStartOff() {
-  const uint16_t ch = PixelMap::cfg().startChannel;
+  const uint16_t ch = playMap().startChannel;
   if (ch == 0) {
     return 0;
   }
   return static_cast<uint32_t>(ch - 1);
 }
 
-static bool frameForThisNode(uint32_t universe, uint16_t protocol) {
-  const PixelMapCfg &m = PixelMap::cfg();
+static uint32_t playStartUniverse(uint16_t protocol) {
+  const PixelMapCfg &m = playMap();
   if (protocol == kDmxrecProtoArtNet) {
-    return universe == m.startArtNetUniverse;
+    return m.startArtNetUniverse;
   }
   if (protocol == kDmxrecProtoSacn) {
-    return universe == m.startSacnUniverse;
+    return m.startSacnUniverse;
   }
-  return false;
+  return 0xFFFFFFFFu;
+}
+
+static bool frameForThisNode(uint32_t universe, uint16_t protocol) {
+  const uint32_t startUni = playStartUniverse(protocol);
+  if (startUni == 0xFFFFFFFFu) {
+    return false;
+  }
+  const uint32_t want = sliceBytes();
+  const uint32_t off = dmxStartOff();
+  if (want == 0) {
+    return false;
+  }
+  const uint32_t lastUni = startUni + ((off + want - 1) / kDmxrecDmxBytes);
+  return universe >= startUni && universe <= lastUni;
+}
+
+static bool s_asmActive = false;
+static uint32_t s_asmTs = 0;
+static uint32_t s_asmIndex = 0;
+static uint8_t s_asmRgb[kPlayMaxPayload];
+static bool s_pendingHave = false;
+static DmxrecFramePrefix s_pendingPrefix;
+static uint8_t s_pendingDmx[kDmxrecDmxBytes];
+static uint32_t s_pendingIndex = 0;
+
+static void clearAssembler() {
+  s_asmActive = false;
+  s_pendingHave = false;
+  memset(s_asmRgb, 0, sizeof(s_asmRgb));
+}
+
+static void copyUniIntoAsm(uint32_t universe, uint16_t protocol,
+                           const uint8_t *dmx, uint32_t want) {
+  const uint32_t startUni = playStartUniverse(protocol);
+  const uint32_t off = dmxStartOff();
+  if (startUni == 0xFFFFFFFFu || want == 0) {
+    return;
+  }
+  for (uint32_t i = 0; i < want; ++i) {
+    const uint32_t abs = off + i;
+    const uint32_t uni = startUni + (abs / kDmxrecDmxBytes);
+    const uint32_t slot = abs % kDmxrecDmxBytes;
+    if (uni == universe) {
+      s_asmRgb[i] = dmx[slot];
+    }
+  }
 }
 
 static char asciiLower(char c) {
@@ -269,51 +324,86 @@ static bool sdSeek(uint32_t off) {
   return ok;
 }
 
-static ReadResult readOneFrame() {
-  DmxrecFramePrefix prefix;
-  uint8_t dmx[kDmxrecDmxBytes];
-
-  if (!sdRead(&prefix, sizeof(prefix))) {
-    lockPlay();
-    const bool eof = s_frameIndex >= s_frameCount;
-    unlockPlay();
-    return eof ? ReadResult::Eof : ReadResult::Fail;
+static bool emitAssembler() {
+  if (!s_asmActive) {
+    return false;
   }
-  if (!sdRead(dmx, sizeof(dmx))) {
-    return ReadResult::Fail;
-  }
-
   lockPlay();
-  const uint32_t index = s_frameIndex;
-  const uint32_t frames = s_frameCount;
   const uint32_t want = s_payload;
-  const uint32_t off = s_dmxOff;
-  s_frameIndex = index + 1;
   unlockPlay();
-
-  if (index + 1 > frames) {
-    return ReadResult::Eof;
-  }
-
-  if (!frameForThisNode(prefix.universe, prefix.protocol)) {
-    return ReadResult::Skip;
-  }
-
-  uint32_t take = want;
-  if (off >= kDmxrecDmxBytes) {
-    take = 0;
-  } else if (off + take > kDmxrecDmxBytes) {
-    take = kDmxrecDmxBytes - off;
-  }
-
   memset(s_readRgb, 0, sizeof(s_readRgb));
-  if (take > 0) {
-    memcpy(s_readRgb, dmx + off, take);
-  }
+  memcpy(s_readRgb, s_asmRgb, want > kPlayMaxPayload ? kPlayMaxPayload : want);
   s_readSize = static_cast<uint16_t>(want);
-  s_readTUs = prefix.t_ms * 1000u;
-  s_readFrame = index;
-  return ReadResult::Ok;
+  s_readTUs = s_asmTs * 1000u;
+  s_readFrame = s_asmIndex;
+  s_asmActive = false;
+  return true;
+}
+
+static ReadResult readOneFrame() {
+  for (;;) {
+    DmxrecFramePrefix prefix;
+    uint8_t dmx[kDmxrecDmxBytes];
+    uint32_t index = 0;
+
+    if (s_pendingHave) {
+      prefix = s_pendingPrefix;
+      memcpy(dmx, s_pendingDmx, sizeof(dmx));
+      index = s_pendingIndex;
+      s_pendingHave = false;
+    } else {
+      if (!sdRead(&prefix, sizeof(prefix))) {
+        lockPlay();
+        const bool eof = s_frameIndex >= s_frameCount;
+        unlockPlay();
+        if (eof && emitAssembler()) {
+          return ReadResult::Ok;
+        }
+        return eof ? ReadResult::Eof : ReadResult::Fail;
+      }
+      if (!sdRead(dmx, sizeof(dmx))) {
+        return ReadResult::Fail;
+      }
+      lockPlay();
+      index = s_frameIndex;
+      const uint32_t frames = s_frameCount;
+      s_frameIndex = index + 1;
+      unlockPlay();
+      if (index + 1 > frames) {
+        if (emitAssembler()) {
+          return ReadResult::Ok;
+        }
+        return ReadResult::Eof;
+      }
+    }
+
+    if (s_asmActive && prefix.t_ms != s_asmTs) {
+      s_pendingHave = true;
+      s_pendingPrefix = prefix;
+      memcpy(s_pendingDmx, dmx, sizeof(dmx));
+      s_pendingIndex = index;
+      emitAssembler();
+      return ReadResult::Ok;
+    }
+
+    if (!frameForThisNode(prefix.universe, prefix.protocol)) {
+      if (s_asmActive) {
+        continue;
+      }
+      return ReadResult::Skip;
+    }
+
+    lockPlay();
+    const uint32_t want = s_payload;
+    unlockPlay();
+    if (!s_asmActive) {
+      memset(s_asmRgb, 0, sizeof(s_asmRgb));
+      s_asmActive = true;
+      s_asmTs = prefix.t_ms;
+      s_asmIndex = index;
+    }
+    copyUniIntoAsm(prefix.universe, prefix.protocol, dmx, want);
+  }
 }
 
 static bool ringFull() {
@@ -350,6 +440,7 @@ static bool wrapShow() {
   s_matchedPass = 0;
   const bool first = !s_loggedLoop;
   unlockPlay();
+  clearAssembler();
 
   if (matched == 0) {
     if (!s_loggedNoMatch) {
@@ -373,6 +464,7 @@ static bool applySeek() {
   const uint32_t frames = s_frameCount;
   s_seekKind = SeekKind::None;
   unlockPlay();
+  clearAssembler();
 
   if (kind == SeekKind::None) {
     return true;
@@ -616,6 +708,8 @@ static bool bindPath(const char *path) {
   s_landedReqMs = 0xFFFFFFFFu;
   s_landedReqFrame = 0xFFFFFFFFu;
   unlockPlay();
+  clearAssembler();
+  Sync::onPlayFile(s_path);
 
   LOG_V("play", "file=%s frames=%u payload=%u artnet=%u sacn=%u", s_path,
         static_cast<unsigned>(h.frame_count), static_cast<unsigned>(payload),
@@ -713,6 +807,8 @@ static void clearBind() {
   s_seekKind = SeekKind::None;
   resetRingLocked();
   unlockPlay();
+  clearAssembler();
+  Sync::onPlayFile("");
 }
 
 static void handleReload() {
@@ -729,6 +825,8 @@ static void handleReload() {
   s_seekKind = SeekKind::None;
   resetRingLocked();
   unlockPlay();
+  clearAssembler();
+  Sync::onPlayFile("");
   tryBindPlaylist();
 }
 
@@ -932,11 +1030,12 @@ void Playback::park() {
 }
 
 void Playback::play() {
-  start();
   lockPlay();
+  s_parked = false;
   s_playing = true;
   s_userPaused = false;
   unlockPlay();
+  start();
 }
 
 void Playback::pause() {

@@ -9,9 +9,14 @@ Platform is **pinned pioarduino** in [`platformio.ini`](platformio.ini) (`[esp32
 
 New boards follow README **Adding a board**. Do not copy the historical PDF starter (`qspi_opi`, 8MB partitions, SDMMC, huge rings).
 
+## Current envs
+
+- `[env:matrix]` — Waveshare ESP32-S3-Matrix (default)
+- `[env:c5]` — ESP32-C5-DevKitC-1-N8R4 (UART `Serial`, no CDC-on-boot)
+
 ## Next work (do not start unless asked)
 
-See README **Multi-board (queued)**: C6 DevKitC-1-N8, C5 DevKitC-1-N8R4, XIAO C5, dual-band scan, `NetIf`, P4 Ethernet, companion catalog harvest + Flash **Custom…**, P4+Wi-Fi coprocessor (ESP-Hosted), RFC 8910.
+See README **Multi-board (queued)**: C6 DevKitC-1-N8, XIAO C5, dual-band scan, `NetIf`, P4 Ethernet, companion catalog harvest + Flash **Custom…**, P4+Wi-Fi coprocessor (ESP-Hosted), RFC 8910.
 
 ## Artifacts vs SKUs
 
