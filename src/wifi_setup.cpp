@@ -22,6 +22,9 @@
 #include <SD.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#if CONFIG_IDF_TARGET_ESP32C5
+extern "C" void phy_bbpll_en_usb(bool en);
+#endif
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -1989,13 +1992,26 @@ static void pollConnect() {
 } // namespace
 
 void WifiSetup::begin() {
+#if CONFIG_IDF_TARGET_ESP32C5
+  phy_bbpll_en_usb(true);
+#endif
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP_STA);
+#if CONFIG_IDF_TARGET_ESP32C5
+  phy_bbpll_en_usb(true);
+#endif
   WiFi.setAutoReconnect(false);
   WiFi.setHostname(kApSsid);
   WiFi.onEvent(onWifiEvent);
 
   startAp();
+#if CONFIG_IDF_TARGET_ESP32C5
+  if (!WiFi.setBandMode(WIFI_BAND_MODE_2G_ONLY)) {
+    LOG_C("wifi", "2.4 GHz lock failed");
+  } else {
+    LOG_V("wifi", "band 2.4 only");
+  }
+#endif
 
   s_server.on("/", HTTP_GET, sendPage);
   s_server.on("/scan", HTTP_GET, handleScan);

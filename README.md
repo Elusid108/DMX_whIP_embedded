@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.24.0**
+Version: **0.24.1**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -124,7 +124,8 @@ Multi-board (queued — do not start unless asked)
 - [ ] Dual-band STA scan/connect (C5 / XIAO C5); SoftAP stays 2.4 GHz
 - [ ] `NetIf` so UDP/HTTP do not call `WiFi.*` directly
 - [ ] `[env:p4-eth]` Ethernet DHCP + portal/ArtPoll on LAN IP (confirm exact P4 SKU)
-- [ ] Companion: harvest pioarduino board presets; Flash **Custom…** (core + flash + PSRAM + USB + pins); map SKUs → artifact + NVS overlay; identify/flash not S3-only; NVS offset not hardcoded to 0x9000
+- [x] Companion identify / flash not S3-only — implemented (catalog chip must match the port; Custom / harvest still queued)
+- [ ] Companion: harvest pioarduino board presets; Flash **Custom…** (core + flash + PSRAM + USB + pins); map SKUs → artifact + NVS overlay; NVS offset not hardcoded to 0x9000
 - [ ] P4 + C6/C5/S3 combo (ESP-Hosted / `esp_wifi_remote`, SDIO/SPI). Ethernet-only P4 first
 - [ ] RFC 8910 captive portal (IDF 5 now; not implemented)
 
@@ -249,6 +250,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.24.1** — C5 SoftAP locked to 2.4 GHz; keep USB-JTAG PHY on through Wi-Fi start
 - **0.24.0** — `[env:c5]` ESP32-C5-DevKitC-1-N8R4 (GPIO 24 / 5×5, SD 10/7/6/2); Matrix brightness warn 128; Patch panel/overheat copy from `/status` `patch`
 - **0.23.0** — SD play packs consecutive universes onto output 0; cue v2 group lockstep; `/meta` sync sidecar; `/status` `play.sync`
 - **0.22.3** — Patch Save shows green Saved after the map reboot; portal poll resumes when HTTP drops

@@ -39,6 +39,8 @@ static void renderPacked(const uint8_t *d, uint16_t len) {
 }
 
 void setup() {
+  Serial.begin(115200);
+  Serial.setTxBufferSize(4096);
   Log::begin(115200, kLogLevelDefault);
   LOG_V("boot", "%s v%s", BoardProfile::id(), kFirmwareVersion);
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",

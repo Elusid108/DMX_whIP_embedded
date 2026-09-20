@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.24.0</title>
+<title>dmxwhip v0.24.1</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -233,7 +233,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.24.0</p>
+<p id="ver" class="readout">dmxwhip v0.24.1</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
