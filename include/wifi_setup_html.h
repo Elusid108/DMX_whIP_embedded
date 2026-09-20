@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.22.1</title>
+<title>dmxwhip v0.22.3</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -106,6 +106,12 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 .patchops button{width:auto;margin:0;padding:4px 8px;font-size:.75rem}
 .patchbody{display:none;padding:0 10px 10px}
 .patch.open .patchbody{display:block}
+.patchgrid{display:grid;grid-template-columns:1fr 1fr;gap:0 8px}
+.patchfield{min-width:0}
+.patchfield .lab{margin-top:6px}
+.patchgrid .span2{grid-column:1/-1}
+.patchtogs{display:flex;align-items:center;gap:12px;min-height:2.5rem}
+.patchtogs .tog{margin:0}
 #note{margin:6px 0 0;font-size:.85rem}
 #status,#ver{flex:0 0 auto;margin:6px 0 0;font-size:.85rem;color:var(--muted);min-height:1.2em}
 .ok{color:#86efac}
@@ -227,7 +233,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.22.1</p>
+<p id="ver" class="readout">dmxwhip v0.22.3</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -343,22 +349,77 @@ function segsFromStatus(s){
 function uniHint(proto){
   return proto==='sacn'?'sACN universe (1-based).':'Art-Net 0-based. Resolume “1.1” is often 0.1.';
 }
+function chPx(row){
+  return 3+(row.white?1:0)+(row.cct?1:0);
+}
+function dmxSpan(row){
+  const px=Math.max(1,row.count|0);
+  const startCh=Math.max(1,Math.min(512,row.ch|0));
+  const startUni=Math.max(0,row.uni|0);
+  const last=(startCh-1)+px*chPx(row)-1;
+  const endUni=startUni+Math.floor(last/512);
+  const endCh=(last%512)+1;
+  return startUni+'.'+startCh+'\u2013'+endUni+'.'+endCh;
+}
 function uniReadout(row){
-  const chPx=3+(row.white?1:0)+(row.cct?1:0);
-  const art=row.proto==='sacn'?Math.max(0,row.uni-1):row.uni;
-  const sacn=row.proto==='sacn'?row.uni:(row.uni+1);
-  return (row.proto==='sacn'?'sACN '+sacn:'Art-Net '+art)+' · ch '+row.ch+' · ch/px '+chPx;
+  return (row.proto==='sacn'?'sACN':'Art-Net')+' '+dmxSpan(row)+' \u00b7 '+chPx(row)+' ch/px';
+}
+function patchTitle(row,child,totals){
+  const px=child?row.count:(totals&&totals[row.data]!=null?totals[row.data]:row.count);
+  return 'GPIO '+row.data+' \u00b7 '+(row.chip||'').toUpperCase()+' \u00b7 '+px+' px \u00b7 '+dmxSpan(row);
+}
+function refreshPatchTitles(){
+  if(!patchList) return;
+  readPatchDom();
+  const totals=groupCounts(patch);
+  patchList.querySelectorAll('.patch').forEach(card=>{
+    const i=+card.dataset.i;
+    const row=patch[i];
+    if(!row) return;
+    const titleEl=card.querySelector('.patchhead b');
+    if(titleEl) titleEl.textContent=patchTitle(row,isChild(patch,i),totals);
+    const read=card.querySelector('.readout');
+    if(read) read.textContent=uniReadout(row);
+  });
 }
 function setTxt(id,v){const el=document.getElementById(id);if(el) el.textContent=v==null||v===''?'—':String(v);}
-let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0;
+let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0,mapSaveNoteTimer=0;
 let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,scanning=false;
+let patchSavePending=false;
 let playSrc='root',playPath='/',playListKey='',lastFiles=[],lastTitles=[],lastDirs=[];
 let playSel=new Set(['root\t/']),playAnchor='root\t/',playCollapsed={},playPaused=false,playNow='',titleEdit=null;
 let cfgSrc='root',cfgPath='/';
 let tab='live',setupScanned=false,lastName='dmxwhip';
 function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t||'';}
 function setNote(t,cls){noteEl.className=t?(cls||'err')+' on':'';noteEl.textContent=t||'';}
-function dropHint(){setNote('Page dropped. Rejoin dmxwhip and open http://4.3.2.1','err');}
+function patchSaveFlag(on){
+  try{ if(on) sessionStorage.setItem('patchSaved','1'); else sessionStorage.removeItem('patchSaved'); }catch(e){}
+}
+function patchSaveFlagOn(){
+  try{ return sessionStorage.getItem('patchSaved')==='1'; }catch(e){ return false; }
+}
+function markPatchSaving(){
+  patchSavePending=true;
+  patchSaveFlag(true);
+  setNote('Saved. Rebooting…','ok');
+}
+function finishPatchSave(){
+  if(!patchSavePending&&!patchSaveFlagOn()&&!(mapSave&&mapSave.textContent==='Rebooting…')) return;
+  patchSavePending=false;
+  patchSaveFlag(false);
+  if(mapSave){
+    mapSave.textContent='Save';
+    mapSave.disabled=!!(idBtn&&idBtn.disabled);
+  }
+  setNote('Saved.','ok');
+  clearTimeout(mapSaveNoteTimer);
+  mapSaveNoteTimer=setTimeout(()=>{ if(noteEl.textContent==='Saved.') setNote(''); },4000);
+}
+function dropHint(){
+  if(!patchSavePending&&!patchSaveFlagOn()) setNote('Page dropped. Rejoin dmxwhip and open http://4.3.2.1','err');
+  clearTimeout(pollTimer);
+  pollTimer=setTimeout(poll,1000);
+}
 function showTab(name){
   tab=name;
   viewLive.className=name==='live'?'on':'';
@@ -758,6 +819,7 @@ async function poll(){
   try{
     const s=await jget('/api/stats');
     if(noteEl.textContent.indexOf('Page dropped')===0) setNote('');
+    if(patchSavePending||patchSaveFlagOn()||(mapSave&&mapSave.textContent==='Rebooting…')) finishPatchSave();
     applyStats(s);
     showStatus(s);
     if(tab==='play'||tab==='setup') await fetchStatus();
@@ -855,7 +917,7 @@ function postMap(){
       const s=await r.json().catch(()=>({}));
       if(!r.ok){setNote(s.error||'Map save failed','err');return false;}
       mapDirty=false;
-      setNote('Saved. Rebooting…');
+      markPatchSaving();
       applyMeta(s);
       return true;
     });
@@ -912,8 +974,9 @@ function renderPatch(){
     const card=document.createElement('div');
     card.className='patch'+(child?' child':'')+(openSeg===i?' open':'');
     card.dataset.i=String(i);
-    const title='GPIO '+row.data+' · '+(row.chip||'').toUpperCase()+' · '+(child?row.count:totals[row.data])+' px';
+    const title=patchTitle(row,child,totals);
     const locked=child?' disabled':'';
+    const clocked=!!CLOCKED[row.chip];
     let ops='';
     if(child){
       const firstChild=g0+1;
@@ -927,28 +990,33 @@ function renderPatch(){
     }
     card.innerHTML=
       '<div class="patchhead"><b>'+escapeHtml(title)+'</b><div class="patchops">'+ops+
-      '</div></div><div class="patchbody">'+
-      '<label class="lab">Live protocol</label><select data-f="proto">'+
+      '</div></div><div class="patchbody"><div class="patchgrid">'+
+      '<div class="patchfield"><label class="lab">Protocol</label><select data-f="proto">'+
       '<option value="auto"'+(row.proto==='auto'?' selected':'')+'>Auto</option>'+
       '<option value="artnet"'+(row.proto==='artnet'?' selected':'')+'>Art-Net</option>'+
-      '<option value="sacn"'+(row.proto==='sacn'?' selected':'')+'>sACN</option></select>'+
-      '<label class="lab">IC type</label><select data-f="chip"'+locked+'>'+chipOpts(row.chip)+'</select>'+
-      '<label class="lab">Data GPIO</label><input data-f="data" type="number" min="0" max="'+patchCaps.gpio_max+'" value="'+row.data+'" inputmode="numeric"'+locked+'>'+
-      '<div class="clkrow'+(CLOCKED[row.chip]?' on':'')+'"><label class="lab">Clock GPIO</label>'+
+      '<option value="sacn"'+(row.proto==='sacn'?' selected':'')+'>sACN</option></select></div>'+
+      '<div class="patchfield"><label class="lab">IC</label><select data-f="chip"'+locked+'>'+chipOpts(row.chip)+'</select></div>'+
+      '<div class="patchfield"><label class="lab">Data GPIO</label>'+
+      '<input data-f="data" type="number" min="0" max="'+patchCaps.gpio_max+'" value="'+row.data+'" inputmode="numeric"'+locked+'></div>'+
+      '<div class="patchfield clkrow'+(clocked?' on':'')+'"><label class="lab">Clock GPIO</label>'+
       '<input data-f="clk" type="number" min="1" max="'+patchCaps.gpio_max+'" value="'+(row.clk||21)+'" inputmode="numeric"'+locked+'></div>'+
-      '<label class="lab">Pixel count</label><input data-f="count" type="number" min="1" max="'+patchCaps.max_px+'" value="'+row.count+'" inputmode="numeric">'+
-      '<p class="cntwarn'+(row.count!==64?' on':'')+'">This board’s panel is 64 pixels (8×8).</p>'+
-      '<label class="tog"><input data-f="white" type="checkbox"'+(row.white?' checked':'')+'> White channel</label>'+
-      '<label class="tog"><input data-f="cct" type="checkbox"'+(row.cct?' checked':'')+'> CCT channel</label>'+
-      '<label class="lab">Color order</label><select data-f="order">'+orderOpts(row.white,row.cct,row.order)+'</select>'+
-      '<label class="lab">Starting universe</label><input data-f="uni" type="number" min="0" max="32767" value="'+row.uni+'" inputmode="numeric">'+
-      '<p class="hint">'+uniHint(row.proto)+'</p>'+
-      '<label class="lab">Starting channel</label><input data-f="ch" type="number" min="1" max="512" value="'+row.ch+'" inputmode="numeric">'+
-      '<label class="lab">Brightness</label><div class="brirow">'+
+      '<div class="patchfield'+(clocked?' span2':'')+'"><label class="lab">Pixels</label>'+
+      '<input data-f="count" type="number" min="1" max="'+patchCaps.max_px+'" value="'+row.count+'" inputmode="numeric"></div>'+
+      '<p class="cntwarn span2'+(row.count!==64?' on':'')+'">This board’s panel is 64 pixels (8×8).</p>'+
+      '<div class="patchfield"><label class="lab">Channels</label><div class="patchtogs">'+
+      '<label class="tog"><input data-f="white" type="checkbox"'+(row.white?' checked':'')+'> White</label>'+
+      '<label class="tog"><input data-f="cct" type="checkbox"'+(row.cct?' checked':'')+'> CCT</label></div></div>'+
+      '<div class="patchfield"><label class="lab">Color order</label><select data-f="order">'+orderOpts(row.white,row.cct,row.order)+'</select></div>'+
+      '<div class="patchfield"><label class="lab">Start universe</label>'+
+      '<input data-f="uni" type="number" min="0" max="32767" value="'+row.uni+'" inputmode="numeric"></div>'+
+      '<div class="patchfield"><label class="lab">Start channel</label>'+
+      '<input data-f="ch" type="number" min="1" max="512" value="'+row.ch+'" inputmode="numeric"></div>'+
+      '<p class="hint span2">'+uniHint(row.proto)+'</p>'+
+      '<div class="patchfield span2"><label class="lab">Brightness</label><div class="brirow">'+
       '<input data-f="bri" type="range" min="0" max="255" value="'+row.bri+'">'+
-      '<input data-f="brinum" type="number" min="0" max="255" value="'+row.bri+'" inputmode="numeric"></div>'+
-      '<p class="briwarn'+(row.bri>64?' on':'')+'">This 8×8 can overheat above 64.</p>'+
-      '<p class="readout">'+escapeHtml(uniReadout(row))+'</p></div>';
+      '<input data-f="brinum" type="number" min="0" max="255" value="'+row.bri+'" inputmode="numeric"></div></div>'+
+      '<p class="briwarn span2'+(row.bri>64?' on':'')+'">This 8×8 can overheat above 64.</p>'+
+      '<p class="readout span2">'+escapeHtml(uniReadout(row))+'</p></div></div>';
     const head=card.querySelector('.patchhead');
     head.onclick=e=>{
       if(e.target.closest('.patchops')) return;
@@ -977,7 +1045,7 @@ function renderPatch(){
           if(range) range.value=String(v);
           if(num) num.value=String(v);
           const warn=card.querySelector('.briwarn');
-          if(warn) warn.className='briwarn'+(v>64?' on':'');
+          if(warn) warn.className='briwarn span2'+(v>64?' on':'');
           scheduleBri(v,i);
         };
         return;
@@ -992,7 +1060,13 @@ function renderPatch(){
         }
         if(f==='chip'){
           const clk=card.querySelector('.clkrow');
-          if(clk) clk.className='clkrow'+(CLOCKED[el.value]?' on':'');
+          if(clk) clk.className='patchfield clkrow'+(CLOCKED[el.value]?' on':'');
+          const cnt=card.querySelector('[data-f="count"]');
+          const cntField=cnt&&cnt.closest('.patchfield');
+          if(cntField){
+            if(CLOCKED[el.value]) cntField.classList.add('span2');
+            else cntField.classList.remove('span2');
+          }
         }
         if(f==='data'&&!child){
           readPatchDom();
@@ -1005,7 +1079,8 @@ function renderPatch(){
         }
         const warn=card.querySelector('.cntwarn');
         const cnt=card.querySelector('[data-f="count"]');
-        if(warn&&cnt) warn.className='cntwarn'+(parseInt(cnt.value,10)!==64?' on':'');
+        if(warn&&cnt) warn.className='cntwarn span2'+(parseInt(cnt.value,10)!==64?' on':'');
+        refreshPatchTitles();
       };
     });
     patchList.appendChild(card);
@@ -1155,6 +1230,7 @@ renderPatch();
     showStatus(s);
     if(s.ip) showTab('live');
     else showTab('setup');
+    if(patchSaveFlagOn()) finishPatchSave();
     poll();
   }catch(e){dropHint();}
 })();

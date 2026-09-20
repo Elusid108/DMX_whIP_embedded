@@ -1230,6 +1230,29 @@ static void releaseUploadLock() {
   }
 }
 
+static void ensureUploadParents(const char *path) {
+  if (!path || path[0] != '/') {
+    return;
+  }
+  char dir[kSdPathLen];
+  dir[0] = '\0';
+  const char *p = path + 1;
+  while (*p) {
+    const char *slash = strchr(p, '/');
+    if (!slash) {
+      break;
+    }
+    const size_t used = dir[0] ? strlen(dir) : 0;
+    const size_t seg = static_cast<size_t>(slash - p);
+    if (!seg || used + 1 + seg >= kSdPathLen) {
+      return;
+    }
+    snprintf(dir + used, kSdPathLen - used, "/%.*s", static_cast<int>(seg), p);
+    SD.mkdir(dir);
+    p = slash + 1;
+  }
+}
+
 static void handleUploadFile() {
   HTTPUpload &up = s_server.upload();
   if (up.status == UPLOAD_FILE_START) {
@@ -1260,6 +1283,7 @@ static void handleUploadFile() {
       return;
     }
     s_uploadLocked = true;
+    ensureUploadParents(s_uploadPath);
     s_uploadFile = SD.open(s_uploadPath, FILE_WRITE);
     if (!s_uploadFile) {
       releaseUploadLock();
