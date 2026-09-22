@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.26.1</title>
+<title>dmxwhip v0.27.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -18,7 +18,9 @@ body{display:flex;flex-direction:column;box-sizing:border-box;padding:10px 12px;
 body.editing #name{display:block}
 body.editing #nameView{display:none}
 #identify,#reboot{width:auto;min-width:7rem;margin:0}
-.livehead{display:flex;justify-content:center;margin:0 0 8px}
+.livehead{display:flex;justify-content:center;align-items:center;gap:8px;margin:0 0 8px}
+#toStream{display:none;width:auto;margin:0;padding:4px 12px;font-size:.8rem}
+#toStream.on{display:inline-block}
 .mode{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px solid var(--border);background:var(--chrome)}
 .mode i{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.4}
 .mode.live{color:var(--accent);border-color:#22d3ee66}
@@ -57,8 +59,6 @@ body.editing #nameView{display:none}
 .health p{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .health .hi{color:var(--text)}
 .readout{font-family:ui-monospace,monospace;font-variant-numeric:tabular-nums;font-size:11px;color:var(--muted);margin:6px 0 0;line-height:1.35;word-break:break-word}
-#liveLock{display:none;flex:0 0 auto;margin:0 0 8px;padding:14px 12px;background:#7f1d1d;color:#fecaca;font-weight:800;font-size:1.05rem;line-height:1.3;text-align:center;border-radius:8px}
-#liveLock.on{display:block}
 .patchbar{justify-content:space-between;align-items:center}
 .patchbar #mapAdd{margin-left:auto}
 .patchops button.icon{padding:4px 7px;font-size:1rem;line-height:1}
@@ -134,7 +134,6 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 <p id="note"></p>
 </div>
-<div id="liveLock">Live input — Playback and Patch are locked</div>
 <div class="tabs">
 <button class="on" id="tabLive" type="button">Live</button>
 <button id="tabPlay" type="button">Playback</button>
@@ -142,7 +141,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button id="tabSetup" type="button">Setup</button>
 </div>
 <div id="viewLive" class="on">
-<div class="livehead"><div class="mode" id="mode"><i></i><span id="modeLab">idle</span></div></div>
+<div class="livehead"><div class="mode" id="mode"><i></i><span id="modeLab">idle</span></div><button id="toStream" type="button">Stream</button></div>
 <div class="dash">
 <div class="tile">
 <div class="clab">Radio</div>
@@ -187,7 +186,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 </div>
 <div id="viewPlay">
-<p class="hint">Idle plays SD. Live Art-Net/sACN preempts.</p>
+<p class="hint">Idle plays SD. A live stream takes over. Play asks before overriding a stream.</p>
 <div id="plist"></div>
 <p class="readout" id="playnow"></p>
 <div class="row transport">
@@ -206,7 +205,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric"></div></div>
 </div>
 <div id="viewPixels">
-<p class="hint">Each row is a fixture. Same data GPIO chains under the parent (top of the group is first on the wire). Save writes the map. Brightness applies immediately.</p>
+<p class="hint">Each row is a fixture. Same data GPIO chains under the parent (top of the group is first on the wire). Save writes the map and applies it. Brightness applies immediately.</p>
 <div id="patchList"></div>
 <div class="row patchbar">
 <button class="pri" id="mapSave" type="button">Save</button>
@@ -254,7 +253,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.26.1</p>
+<p id="ver" class="readout">dmxwhip v0.27.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -262,7 +261,6 @@ const ssidEl=document.getElementById('ssid');
 const passEl=document.getElementById('pass');
 const statusEl=document.getElementById('status');
 const noteEl=document.getElementById('note');
-const liveLock=document.getElementById('liveLock');
 const savedRow=document.getElementById('savedrow');
 const savedLab=document.getElementById('savedlab');
 const verEl=document.getElementById('ver');
@@ -425,7 +423,7 @@ let patchSavePending=false;
 let playSrc='root',playPath='/',playListKey='',lastFiles=[],lastTitles=[],lastDirs=[];
 let playSel=new Set(['root\t/']),playAnchor='root\t/',playCollapsed={},playPaused=false,playNow='',titleEdit=null;
 let cfgSrc='root',cfgPath='/';
-let tab='live',setupScanned=false,lastName='dmxwhip';
+let tab='live',setupScanned=false,lastName='dmxwhip',streamLive=false,playHold=false;
 function setStatus(t,cls){statusEl.className=cls||'';statusEl.textContent=t||'';}
 function setNote(t,cls){noteEl.className=t?(cls||'err')+' on':'';noteEl.textContent=t||'';}
 function patchSaveFlag(on){
@@ -436,16 +434,17 @@ function patchSaveFlagOn(){
 }
 function markPatchSaving(){
   patchSavePending=true;
-  patchSaveFlag(true);
-  setNote('Saved. Rebooting…','ok');
+  setNote('Saved.','ok');
+  clearTimeout(mapSaveNoteTimer);
+  mapSaveNoteTimer=setTimeout(()=>{ if(noteEl.textContent==='Saved.') setNote(''); },4000);
 }
 function finishPatchSave(){
-  if(!patchSavePending&&!patchSaveFlagOn()&&!(mapSave&&mapSave.textContent==='Rebooting…')) return;
+  if(!patchSavePending&&!patchSaveFlagOn()) return;
   patchSavePending=false;
   patchSaveFlag(false);
   if(mapSave){
     mapSave.textContent='Save';
-    mapSave.disabled=!!(idBtn&&idBtn.disabled);
+    mapSave.disabled=false;
   }
   setNote('Saved.','ok');
   clearTimeout(mapSaveNoteTimer);
@@ -706,16 +705,21 @@ function applyChrome(s){
   if(s.ver) verEl.textContent='dmxwhip v'+s.ver;
   fillCreds(s);
   showName(s.name);
-  const mode=s.mode||(s.live?'live':(s.play&&s.play.now?'play':'idle'));
+  streamLive=!!s.live;
+  playHold=!!(s.play&&s.play.hold);
+  const mode=s.mode||(playHold?'play':(streamLive?'live':(s.play&&s.play.now?'play':'idle')));
   modeEl.className='mode '+mode;
   if(modeLab) modeLab.textContent=mode;
-  const live=!!s.live;
-  if(liveLock) liveLock.className=live?'on':'';
-  ['prev','play','pause','stop','next','del'].forEach(id=>{const el=document.getElementById(id);if(el) el.disabled=live;});
-  idBtn.disabled=live;
-  idBtn.title=live?'Unavailable while live':'';
-  if(mapSave) mapSave.disabled=live;
-  if(mapAdd) mapAdd.disabled=live;
+  const streamOwns=streamLive&&!playHold;
+  const toStream=document.getElementById('toStream');
+  if(toStream) toStream.className=playHold?'on':'';
+  idBtn.disabled=streamOwns;
+  idBtn.title=streamOwns?'Unavailable while live':'';
+  const delBtn=document.getElementById('del');
+  if(delBtn){
+    delBtn.disabled=streamOwns;
+    delBtn.title=streamOwns?'Unavailable while live':'';
+  }
   if(s.saved){savedRow.className='on';savedLab.textContent='saved '+s.saved+' (connects at boot)'+(s.ip?(' · STA '+s.ip):'');}
   else {savedRow.className='';savedLab.textContent='';}
   applyLive(s);
@@ -960,7 +964,7 @@ async function poll(){
   try{
     const s=await jget('/api/stats');
     if(noteEl.textContent.indexOf('Page dropped')===0) setNote('');
-    if(patchSavePending||patchSaveFlagOn()||(mapSave&&mapSave.textContent==='Rebooting…')) finishPatchSave();
+    if(patchSavePending||patchSaveFlagOn()) finishPatchSave();
     applyStats(s);
     showStatus(s);
     if(tab==='play'||tab==='setup') await fetchStatus();
@@ -1085,7 +1089,6 @@ function postMap(){
       const s=await r.json().catch(()=>({}));
       if(!r.ok){setNote(s.error||'Map save failed','err');return false;}
       mapDirty=false;
-      markPatchSaving();
       applyMeta(s);
       return true;
     });
@@ -1134,7 +1137,6 @@ function removeSeg(i){
 function renderPatch(){
   if(!patchList) return;
   const totals=groupCounts(patch);
-  const live=!!(idBtn&&idBtn.disabled);
   patchList.innerHTML='';
   patch.forEach((row,i)=>{
     const child=isChild(patch,i);
@@ -1200,10 +1202,8 @@ function renderPatch(){
         else if(a==='down') moveSeg(i,1);
         else if(a==='del') removeSeg(i);
       };
-      btn.disabled=live;
     });
     card.querySelectorAll('input,select').forEach(el=>{
-      el.disabled=live||el.disabled;
       const f=el.getAttribute('data-f');
       if(f==='bri'||f==='brinum'){
         el.oninput=()=>{
@@ -1253,7 +1253,7 @@ function renderPatch(){
     });
     patchList.appendChild(card);
   });
-  if(mapAdd) mapAdd.disabled=live||patch.length>=patchCaps.max_seg;
+  if(mapAdd) mapAdd.disabled=patch.length>=patchCaps.max_seg;
 }
 function savePatch(){
   mapSave.textContent='Saving…';
@@ -1262,16 +1262,16 @@ function savePatch(){
   if(mapDirty) jobs.push(postMap());
   if(liveDirty) jobs.push(postLive());
   Promise.all(jobs).then(results=>{
+    mapSave.textContent='Save';
+    mapSave.disabled=false;
     if(results.some(v=>v===true)){
-      mapSave.textContent='Rebooting…';
+      markPatchSaving();
       return;
     }
     if(!mapDirty&&!liveDirty) setNote('');
-    mapSave.textContent='Save';
-    mapSave.disabled=!!(idBtn&&idBtn.disabled);
   }).catch(e=>{
     mapSave.textContent='Save';
-    mapSave.disabled=!!(idBtn&&idBtn.disabled);
+    mapSave.disabled=false;
     dropHint();
   });
 }
@@ -1280,14 +1280,22 @@ function parsePlayN(){
   if(!/^\d+$/.test(t)) return 1;
   return Math.max(1,Math.min(99,parseInt(t,10)));
 }
+function wantsOverride(){return streamLive&&!playHold;}
+function confirmOverride(){
+  if(!wantsOverride()) return true;
+  return window.confirm('A live stream is in progress. Override it and play this recorded show?');
+}
 function postPlay(src,path){
+  if(!confirmOverride()) return Promise.resolve();
   const n=parsePlayN();
   foldernEl.value=String(n);
   playSrc=src||playSrc;
   playPath=path||playPath;
-  return postForm('/play',{
+  const fields={
     src:playSrc,path:playPath,file_loop:fileloopEl.value,folder_rep:folderrepEl.value,n:String(n)
-  }).then(async r=>{
+  };
+  if(wantsOverride()) fields.override='1';
+  return postForm('/play',fields).then(async r=>{
     if(!r.ok) throw new Error('http');
     playDirty=false;
     applyMeta(await r.json());
@@ -1363,11 +1371,15 @@ function applyPlayPost(r){return r.json().then(s=>{if(!r.ok) throw new Error('ht
 document.getElementById('play').onclick=()=>{
   const same=playSrc===cfgSrc&&(playSrc==='root'||playPath===cfgPath);
   if(same&&playPaused){
-    postForm('/play',{action:'resume'}).then(async r=>applyPlayPost(r)).catch(dropHint);
+    if(!confirmOverride()) return;
+    const fields={action:'resume'};
+    if(wantsOverride()) fields.override='1';
+    postForm('/play',fields).then(async r=>applyPlayPost(r)).catch(dropHint);
     return;
   }
   postPlay();
 };
+document.getElementById('toStream').onclick=()=>postForm('/play',{action:'live'}).then(async r=>applyPlayPost(r)).catch(dropHint);
 document.getElementById('pause').onclick=()=>postForm('/play',{action:'pause'}).then(async r=>applyPlayPost(r)).catch(dropHint);
 document.getElementById('stop').onclick=()=>postForm('/play',{src:'stop'}).then(async r=>applyPlayPost(r)).catch(dropHint);
 document.getElementById('prev').onclick=()=>{const t=adjacent(-1);if(t){playDirty=true;playSrc='file';playPath=t;playSel=new Set([rowKey('file',t)]);playAnchor=rowKey('file',t);markPlaySel();showPlayOpts();postPlay('file',t);}};

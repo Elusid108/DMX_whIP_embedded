@@ -17,10 +17,11 @@
 // is the cue, not local millis(). Late nodes snap to the tick. Underrun pauses
 // output and waits for the next cue — no invented frames.
 //
-// Default with no companion: auto-play when idle (lone Matrix). After a cue is
-// heard, follow the bus. After kCueHoldMs with no cue packets, return to
-// local auto-play. While following, a rolling show should keep sending Tick
-// (or repeated Play) so every node shares the same t_ms / frame index.
+// Default with no companion and no sync group: auto-play when idle. A grouped
+// clip has no elected master. Whoever launches Play is master and emits Tick
+// with show t_ms. Others follow that time (sliced files do not share a record
+// index). After kCueHoldMs with no cue packets, a grouped node listens again
+// and does not start its own copy. An ungrouped node returns to local auto-play.
 //
 // Cue packet — 16 bytes, little-endian, packed:
 //
@@ -111,6 +112,11 @@ public:
   static void noteLocalTrigger();
   static void noteLocalPause();
   static void noteAutoStart();
+  // Drop master/follow so a live stream can own the LEDs. Ignore cues until
+  // the stream goes quiet.
+  static void releaseToLive();
+  // Stop: ignore cues until the next local Play, even if no stream is up.
+  static void noteStopped();
   static bool waitingForMaster();
   static bool isMaster();
   static bool hasGroup();

@@ -54,6 +54,7 @@ static uint8_t s_passLeft = 0;
 static bool s_hasFile = false;
 static volatile bool s_run = false;
 static volatile bool s_parked = false;
+static volatile bool s_hold = false;
 static volatile bool s_userPaused = false;
 static bool s_playing = true;
 static bool s_loop = true;
@@ -80,6 +81,16 @@ static uint32_t s_seekMs = 0;
 static uint32_t s_seekFrame = 0;
 static uint32_t s_landedReqMs = 0xFFFFFFFFu;
 static uint32_t s_landedReqFrame = 0xFFFFFFFFu;
+static volatile bool s_armCueSeek = false;
+static uint32_t s_armCueMs = 0;
+
+static void setHoldFlag(bool on) {
+  if (s_hold == on) {
+    return;
+  }
+  s_hold = on;
+  LOG_V("play", on ? "hold" : "hold off");
+}
 
 static uint32_t s_readTUs = 0;
 static uint32_t s_readFrame = 0;
@@ -456,6 +467,34 @@ static bool wrapShow() {
   return sdSeek(kDmxrecHeaderBytes);
 }
 
+static bool readPrefixAt(uint32_t index, DmxrecFramePrefix &prefix) {
+  if (!sdSeek(dmxrecFrameOffset(index))) {
+    return false;
+  }
+  return sdRead(&prefix, sizeof(prefix));
+}
+
+// First record whose t_ms is at or after want. Records are fixed size, so
+// this is a handful of reads instead of a walk from the start of the show.
+static bool binaryLandMs(uint32_t wantMs, uint32_t frames, uint32_t &land) {
+  uint32_t lo = 0;
+  uint32_t hi = frames;
+  while (lo < hi) {
+    const uint32_t mid = lo + ((hi - lo) / 2);
+    DmxrecFramePrefix prefix;
+    if (!readPrefixAt(mid, prefix)) {
+      return false;
+    }
+    if (prefix.t_ms < wantMs) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  land = (lo >= frames) ? (frames - 1) : lo;
+  return true;
+}
+
 static bool applySeek() {
   lockPlay();
   const SeekKind kind = s_seekKind;
@@ -497,11 +536,10 @@ static bool applySeek() {
       unlockPlay();
       return false;
     }
-    uint32_t lastOwn = 0xFFFFFFFFu;
-    land = 0xFFFFFFFFu;
-    for (uint32_t idx = 0; idx < frames; ++idx) {
-      DmxrecFramePrefix prefix;
-      if (!sdRead(&prefix, sizeof(prefix))) {
+    uint32_t want = wantMs;
+    const uint32_t from = s_frameIndex;
+    for (uint8_t pass = 0; pass < 3; ++pass) {
+      if (!binaryLandMs(want, frames, land)) {
         lockPlay();
         s_seekKind = kind;
         s_seekMs = wantMs;
@@ -509,24 +547,18 @@ static bool applySeek() {
         unlockPlay();
         return false;
       }
-      if (frameForThisNode(prefix.universe, prefix.protocol)) {
-        lastOwn = idx;
-        if (prefix.t_ms >= wantMs) {
-          land = idx;
-          break;
-        }
+      if (!Sync::cueFollow() || !Sync::cueHasTime()) {
+        break;
       }
-      if (!sdSeek(s_off + kDmxrecDmxBytes)) {
-        lockPlay();
-        s_seekKind = kind;
-        s_seekMs = wantMs;
-        s_seekFrame = wantFrame;
-        unlockPlay();
-        return false;
+      const uint32_t latest = Sync::cueTargetMs();
+      if (latest == want) {
+        break;
       }
+      want = latest;
     }
-    if (land == 0xFFFFFFFFu) {
-      land = (lastOwn == 0xFFFFFFFFu) ? 0 : lastOwn;
+    if (from + 8 < land || land + 8 < from) {
+      LOG_V("play", "catch t_ms=%u frame=%u", static_cast<unsigned>(want),
+            static_cast<unsigned>(land));
     }
   }
 
@@ -566,6 +598,7 @@ static void exhaustPlaylist() {
   s_frameCount = 0;
   resetRingLocked();
   unlockPlay();
+  setHoldFlag(false);
   LOG_V("play", "done (black)");
 }
 
@@ -710,6 +743,11 @@ static bool bindPath(const char *path) {
   unlockPlay();
   clearAssembler();
   Sync::onPlayFile(s_path);
+  if (s_armCueSeek) {
+    const uint32_t ms = s_armCueMs;
+    s_armCueSeek = false;
+    Playback::seekMs(ms);
+  }
 
   LOG_V("play", "file=%s frames=%u payload=%u artnet=%u sacn=%u", s_path,
         static_cast<unsigned>(h.frame_count), static_cast<unsigned>(payload),
@@ -1012,6 +1050,7 @@ void Playback::stop() {
   lockPlay();
   const bool was = s_run;
   s_run = false;
+  s_playing = false;
   s_userPaused = false;
   unlockPlay();
   if (was) {
@@ -1026,7 +1065,33 @@ void Playback::park() {
   s_parked = true;
   s_userPaused = false;
   unlockPlay();
+  setHoldFlag(false);
   LOG_V("play", "park");
+}
+
+bool Playback::hold() { return s_hold; }
+
+void Playback::setHold(bool on) { setHoldFlag(on); }
+
+void Playback::cueFile(const char *path, uint32_t t_ms) {
+  if (!path || !path[0]) {
+    return;
+  }
+  setHoldFlag(true);
+  lockPlay();
+  const bool same = s_hasFile && !s_reload && strcmp(s_path, path) == 0;
+  unlockPlay();
+  if (same) {
+    seekMs(t_ms);
+    play();
+    return;
+  }
+  s_armCueMs = t_ms;
+  s_armCueSeek = true;
+  PlayCfg::set(PlaySrc::File, path, PlayCfg::fileLoop(), PlayCfg::folderRep(),
+               PlayCfg::folderN(), true);
+  reload();
+  play();
 }
 
 void Playback::play() {

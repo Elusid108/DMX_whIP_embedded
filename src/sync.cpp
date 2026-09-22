@@ -1,9 +1,10 @@
 #include "sync.h"
 
 #include "live_cfg.h"
+#include "live_input.h"
 #include "log.h"
-#include "node_id.h"
 #include "playback.h"
+#include "sd_info.h"
 
 #include <Arduino.h>
 #include <SD.h>
@@ -59,7 +60,12 @@ static char s_memberMac[kSyncMaxMembers][kSyncMacLen];
 static bool s_master = false;
 static bool s_waitMaster = false;
 static bool s_pendingLocal = false;
-static uint32_t s_waitMs = 0;
+static bool s_releaseLive = false;
+static bool s_releaseSticky = false;
+static uint32_t s_pendingHash = 0;
+static bool s_cueBind = false;
+static uint32_t s_missHash = 0;
+static uint32_t s_missMs = 0;
 static uint32_t s_lastEmitMs = 0;
 static uint8_t s_lastEmitOp = 0;
 
@@ -73,89 +79,6 @@ static uint32_t hashGroup(const char *s) {
     h *= 16777619u;
   }
   return h;
-}
-
-static int nameCmp(const char *a, const char *b) {
-  const char *pa = a ? a : "";
-  const char *pb = b ? b : "";
-  while (*pa && *pb) {
-    if (*pa >= '0' && *pa <= '9' && *pb >= '0' && *pb <= '9') {
-      long na = 0;
-      long nb = 0;
-      while (*pa >= '0' && *pa <= '9') {
-        na = na * 10 + (*pa - '0');
-        pa++;
-      }
-      while (*pb >= '0' && *pb <= '9') {
-        nb = nb * 10 + (*pb - '0');
-        pb++;
-      }
-      if (na != nb) {
-        return na < nb ? -1 : 1;
-      }
-      continue;
-    }
-    char ca = *pa++;
-    char cb = *pb++;
-    if (ca >= 'A' && ca <= 'Z') {
-      ca = static_cast<char>(ca + 32);
-    }
-    if (cb >= 'A' && cb <= 'Z') {
-      cb = static_cast<char>(cb + 32);
-    }
-    if (ca != cb) {
-      return ca < cb ? -1 : 1;
-    }
-  }
-  if (*pa) {
-    return 1;
-  }
-  if (*pb) {
-    return -1;
-  }
-  return 0;
-}
-
-static bool macEq(const char *a, const char *b) {
-  if (!a || !b || !a[0] || !b[0]) {
-    return false;
-  }
-  size_t i = 0;
-  size_t j = 0;
-  while (a[i] && b[j]) {
-    char ca = a[i++];
-    char cb = b[j++];
-    if (ca == ':' || ca == '-') {
-      if (a[i]) {
-        ca = a[i++];
-      }
-    }
-    if (cb == ':' || cb == '-') {
-      if (b[j]) {
-        cb = b[j++];
-      }
-    }
-    if (ca >= 'A' && ca <= 'Z') {
-      ca = static_cast<char>(ca + 32);
-    }
-    if (cb >= 'A' && cb <= 'Z') {
-      cb = static_cast<char>(cb + 32);
-    }
-    if (ca != cb) {
-      return false;
-    }
-  }
-  return a[i] == 0 && b[j] == 0;
-}
-
-static void localMac(char *out, size_t n) {
-  if (!out || n < 18) {
-    return;
-  }
-  uint8_t mac[6] = {};
-  WiFi.macAddress(mac);
-  snprintf(out, n, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
-           mac[3], mac[4], mac[5]);
 }
 
 static bool sidecarPath(const char *dmx, char *out, size_t n) {
@@ -259,26 +182,90 @@ static void clearGroup() {
   s_waitMaster = false;
 }
 
-static bool weAreElected() {
-  if (s_memberN == 0) {
+static bool sidecarGroupHash(const char *dmx, uint32_t &outHash) {
+  char side[kSdPathLen];
+  if (!sidecarPath(dmx, side, sizeof(side))) {
+    return false;
+  }
+  if (!SD.exists(side)) {
+    return false;
+  }
+  if (!SdInfo::lock(400)) {
+    return false;
+  }
+  File f = SD.open(side, FILE_READ);
+  if (!f) {
+    SdInfo::unlock();
+    return false;
+  }
+  char buf[768];
+  const int n = f.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
+  f.close();
+  SdInfo::unlock();
+  if (n <= 0) {
+    return false;
+  }
+  buf[n] = '\0';
+  char group[kSyncGroupLen];
+  if (!extractJsonString(buf, "group", group, sizeof(group))) {
+    return false;
+  }
+  outHash = hashGroup(group);
+  return outHash != 0;
+}
+
+static bool findGroupFile(uint32_t want, char *out, size_t outLen) {
+  const uint8_t listed = SdInfo::fileCount();
+  for (uint8_t i = 0; i < listed; ++i) {
+    uint32_t h = 0;
+    const char *path = SdInfo::fileAt(i);
+    if (!sidecarGroupHash(path, h) || h != want) {
+      continue;
+    }
+    snprintf(out, outLen, "%s", path);
     return true;
   }
-  char mac[kSyncMacLen];
-  localMac(mac, sizeof(mac));
-  const char *mine = NodeId::longName();
-  int best = 0;
-  for (uint8_t i = 1; i < s_memberN; ++i) {
-    const int c = nameCmp(s_memberName[i], s_memberName[best]);
-    if (c < 0 || (c == 0 && nameCmp(s_memberMac[i], s_memberMac[best]) < 0)) {
-      best = i;
-    }
+  if (listed > 0) {
+    return false;
   }
-  if (nameCmp(s_memberName[best], mine) == 0) {
-    if (!s_memberMac[best][0] || macEq(s_memberMac[best], mac)) {
-      return true;
+  static char scan[kSdMaxPlayFiles][kSdPathLen];
+  uint8_t n = 0;
+  if (!SdInfo::collectPlaylist("/", true, scan, kSdMaxPlayFiles, &n)) {
+    return false;
+  }
+  for (uint8_t i = 0; i < n; ++i) {
+    uint32_t h = 0;
+    if (!sidecarGroupHash(scan[i], h) || h != want) {
+      continue;
     }
+    snprintf(out, outLen, "%s", scan[i]);
+    return true;
   }
   return false;
+}
+
+static bool ensureCueFile(uint32_t groupHash, uint32_t t_ms) {
+  if (groupHash == 0) {
+    return true;
+  }
+  if (groupHash == s_groupHash || groupHash == s_pendingHash || s_cueBind) {
+    return true;
+  }
+  const uint32_t now = millis();
+  if (s_missHash == groupHash && s_missMs != 0 && now - s_missMs < 1000) {
+    return false;
+  }
+  char path[kSdPathLen];
+  if (!findGroupFile(groupHash, path, sizeof(path))) {
+    s_missHash = groupHash;
+    s_missMs = now;
+    return false;
+  }
+  s_missHash = 0;
+  s_pendingHash = groupHash;
+  s_cueBind = true;
+  Playback::cueFile(path, t_ms);
+  return true;
 }
 
 static bool ownPacket(const IPAddress &from) {
@@ -341,11 +328,12 @@ static bool joinMcast() {
 }
 
 static void enterFollow() {
+  Playback::setHold(true);
+  Playback::setLoop(false);
   if (s_follow) {
     return;
   }
   s_follow = true;
-  Playback::setLoop(false);
   if (!s_loggedFollow) {
     s_loggedFollow = true;
     LOG_V("sync", "cue follow (bus)");
@@ -363,6 +351,15 @@ static void leaveFollow() {
   s_cuePulse = false;
   s_lastSnapMs = 0xFFFFFFFFu;
   s_lastSnapFrame = 0xFFFFFFFFu;
+  Playback::setHold(false);
+  if (s_group[0]) {
+    s_master = false;
+    s_waitMaster = true;
+    Playback::pause();
+    LOG_V("sync", "cue silent → listen");
+    s_loggedFollow = false;
+    return;
+  }
   Playback::setLoop(true);
   Playback::play();
   LOG_V("sync", "cue silent → local auto-play");
@@ -513,6 +510,9 @@ static void emitNow(uint8_t op) {
 }
 
 static void onCue(const CuePacket &p) {
+  if (s_releaseLive) {
+    return;
+  }
   s_cueMs = millis();
   s_master = false;
   s_waitMaster = false;
@@ -592,8 +592,12 @@ static void parseCue(int n, const IPAddress &from) {
       return;
     }
     memcpy(&group, s_pkt + 16, 4);
-    if (s_group[0] && group != s_groupHash) {
-      return;
+    uint32_t t_ms = 0;
+    memcpy(&t_ms, s_pkt + 8, 4);
+    if (group != s_groupHash && group != s_pendingHash) {
+      if (!ensureCueFile(group, t_ms)) {
+        return;
+      }
     }
   } else if (ver == kCueVersion) {
     if (s_group[0]) {
@@ -654,11 +658,13 @@ void Sync::service() {
     s_liveFence = false;
     LOG_V("sync", "live free-run (no ArtSync/E1.31)");
   }
-  if (s_waitMaster && (now - s_waitMs >= kCueHoldMs)) {
-    LOG_V("sync", "cue wait timeout → master");
-    becomeMaster();
-    Playback::play();
-    emitNow(kCueOpPlay);
+  if (s_releaseLive && !s_releaseSticky && !LiveInput::active()) {
+    s_releaseLive = false;
+    if (s_group[0]) {
+      s_master = false;
+      s_waitMaster = true;
+      LOG_V("sync", "release ended (stream quiet)");
+    }
   }
   if (s_follow && (s_cueMs == 0 || now - s_cueMs >= kCueHoldMs)) {
     leaveFollow();
@@ -741,6 +747,8 @@ void Sync::onPlayFile(const char *path) {
       s_master = true;
     }
     s_pendingLocal = false;
+    s_pendingHash = 0;
+    s_cueBind = false;
     return;
   }
   char side[64];
@@ -749,6 +757,8 @@ void Sync::onPlayFile(const char *path) {
       s_master = true;
     }
     s_pendingLocal = false;
+    s_pendingHash = 0;
+    s_cueBind = false;
     return;
   }
   if (!SD.exists(side)) {
@@ -756,6 +766,8 @@ void Sync::onPlayFile(const char *path) {
       s_master = true;
     }
     s_pendingLocal = false;
+    s_pendingHash = 0;
+    s_cueBind = false;
     return;
   }
   File f = SD.open(side, FILE_READ);
@@ -764,6 +776,8 @@ void Sync::onPlayFile(const char *path) {
       s_master = true;
     }
     s_pendingLocal = false;
+    s_pendingHash = 0;
+    s_cueBind = false;
     return;
   }
   char buf[768];
@@ -774,6 +788,8 @@ void Sync::onPlayFile(const char *path) {
       s_master = true;
     }
     s_pendingLocal = false;
+    s_pendingHash = 0;
+    s_cueBind = false;
     return;
   }
   buf[n] = '\0';
@@ -784,11 +800,14 @@ void Sync::onPlayFile(const char *path) {
   if (!s_group[0] || s_memberN < 2) {
     s_group[0] = '\0';
     s_groupHash = 0;
+    s_pendingHash = 0;
     s_memberN = 0;
     if (keepMaster) {
       s_master = true;
     }
     s_pendingLocal = false;
+    s_pendingHash = 0;
+    s_cueBind = false;
     return;
   }
   s_groupHash = hashGroup(s_group);
@@ -796,25 +815,51 @@ void Sync::onPlayFile(const char *path) {
     s_pendingLocal = false;
     s_master = true;
     s_waitMaster = false;
+    s_pendingHash = s_groupHash;
+    s_cueBind = false;
     LOG_V("sync", "group %s local master", s_group);
     return;
   }
-  if (weAreElected()) {
-    s_master = true;
-    s_waitMaster = false;
-    LOG_V("sync", "group %s master", s_group);
-  } else {
-    s_master = false;
-    s_waitMaster = true;
-    s_waitMs = millis();
-    LOG_V("sync", "group %s wait", s_group);
-  }
+  s_master = false;
+  s_waitMaster = true;
+  s_pendingHash = s_groupHash;
+  s_cueBind = false;
+  LOG_V("sync", "group %s listen", s_group);
 }
 
 void Sync::noteLocalTrigger() {
+  s_releaseLive = false;
+  s_releaseSticky = false;
   s_pendingLocal = true;
   becomeMaster();
   emitNow(kCueOpPlay);
+}
+
+void Sync::releaseToLive() {
+  s_releaseLive = true;
+  s_releaseSticky = false;
+  s_follow = false;
+  s_master = false;
+  s_waitMaster = false;
+  s_cuePlay = false;
+  s_cuePulse = false;
+  s_loggedFollow = false;
+  Playback::setHold(false);
+  Playback::setLoop(true);
+  LOG_V("sync", "release to live");
+}
+
+void Sync::noteStopped() {
+  s_releaseLive = true;
+  s_releaseSticky = true;
+  s_follow = false;
+  s_master = false;
+  s_waitMaster = false;
+  s_cuePlay = false;
+  s_cuePulse = false;
+  s_loggedFollow = false;
+  Playback::setLoop(true);
+  LOG_V("sync", "stop");
 }
 
 void Sync::noteLocalPause() {

@@ -35,6 +35,15 @@ public:
   static void setLoop(bool on);
   static void reload();
 
+  // Playback hold: the file wins over a live stream until Stop, the Live
+  // page Stream action, or the playlist has no next file.
+  static bool hold();
+  static void setHold(bool on);
+
+  // Bind path when it is not the current file, then seek to show t_ms.
+  // Does not take cue-bus master.
+  static void cueFile(const char *path, uint32_t t_ms);
+
   static bool hasFile();
   static bool parked();
   static bool userPaused();

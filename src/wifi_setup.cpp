@@ -519,6 +519,9 @@ static void startScan(WifiBandPref pref) {
 }
 
 static const char *modeName() {
+  if (Playback::hold()) {
+    return "play";
+  }
   if (LiveInput::active()) {
     return "live";
   }
@@ -760,6 +763,8 @@ static void sendStatus(int code) {
   jsonEscape(out, String(Playback::parked() ? "" : Playback::path()));
   out += ",\"paused\":";
   out += Playback::userPaused() ? "true" : "false";
+  out += ",\"hold\":";
+  out += Playback::hold() ? "true" : "false";
   out += ",\"files\":[";
   for (uint8_t i = 0; i < SdInfo::fileCount(); ++i) {
     if (i) {
@@ -958,6 +963,8 @@ static void sendStats() {
   out += Playback::parked() ? "true" : "false";
   out += ",\"paused\":";
   out += Playback::userPaused() ? "true" : "false";
+  out += ",\"hold\":";
+  out += Playback::hold() ? "true" : "false";
   out += ",\"underrun\":";
   out += Playback::underrun() ? "true" : "false";
   out += ",\"frame\":";
@@ -975,7 +982,7 @@ static void handleStatus() { sendStatus(200); }
 static void handleStats() { sendStats(); }
 
 static void handleIdentify() {
-  if (LiveInput::active()) {
+  if (LiveInput::active() && !Playback::hold()) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
@@ -1000,6 +1007,12 @@ static void handleIdentify() {
 static void armReboot() {
   s_rebootAt = millis() + kRebootDelayMs;
   LOG_V("wifi", "reboot armed");
+}
+
+static void applyMapNow() {
+  LedBus::requestApply();
+  LiveInput::applyCfg();
+  LOG_V("map", "applied");
 }
 
 // Live-ok: a wedged show stream is when a remote restart is most useful.
@@ -1213,17 +1226,13 @@ static bool handleMapAll() {
 }
 
 static void handleMap() {
-  if (LiveInput::active()) {
-    sendJson(503, "{\"error\":\"live\"}");
-    return;
-  }
   if (s_server.hasArg("n")) {
     if (!handleMapAll()) {
       sendJson(400, "{\"error\":\"bad map\"}");
       return;
     }
     sendStatus(200);
-    armReboot();
+    applyMapNow();
     return;
   }
   const PixelMapCfg &cur = PixelMap::cfg();
@@ -1355,7 +1364,7 @@ static void handleMap() {
     return;
   }
   sendStatus(200);
-  armReboot();
+  applyMapNow();
 }
 
 static void handleLive() {
@@ -2084,16 +2093,31 @@ static void handleOrder() {
   sendStatus(200);
 }
 
+static bool argOverride() {
+  const String o = s_server.arg("override");
+  return o == "1" || o == "yes" || o == "true";
+}
+
 static void handlePlay() {
-  if (LiveInput::active()) {
+  const String srcArg = s_server.arg("src");
+  const String actionArg = s_server.arg("action");
+  const bool release = srcArg == "stop" || actionArg == "stop" ||
+                       srcArg == "live" || actionArg == "live";
+  if (LiveInput::active() && !Playback::hold() && !argOverride() && !release) {
     sendJson(503, "{\"error\":\"live\"}");
     return;
   }
-  const String srcArg = s_server.arg("src");
-  const String actionArg = s_server.arg("action");
+  if (srcArg == "live" || actionArg == "live") {
+    Playback::setHold(false);
+    if (LiveInput::active()) {
+      Sync::releaseToLive();
+    }
+    sendStatus(200);
+    return;
+  }
   if (srcArg == "stop" || actionArg == "stop") {
     Playback::park();
-    Sync::noteLocalPause();
+    Sync::noteStopped();
     sendStatus(200);
     return;
   }
@@ -2104,6 +2128,9 @@ static void handlePlay() {
     return;
   }
   if (srcArg == "resume" || actionArg == "resume") {
+    if (argOverride()) {
+      Playback::setHold(true);
+    }
     Playback::userResume();
     Sync::noteLocalTrigger();
     sendStatus(200);
@@ -2159,7 +2186,13 @@ static void handlePlay() {
     n = static_cast<uint8_t>(v);
   }
 
+  if (argOverride()) {
+    Playback::setHold(true);
+  }
   if (!PlayCfg::set(src, pathArg.c_str(), fileLoop, folderRep, n, true)) {
+    if (argOverride()) {
+      Playback::setHold(false);
+    }
     sendJson(400, "{\"error\":\"bad play\"}");
     return;
   }

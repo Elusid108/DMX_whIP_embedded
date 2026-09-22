@@ -71,7 +71,7 @@ void loop() {
   LiveInput::service();
   Sync::service();
 
-  const bool live = LiveInput::active();
+  const bool live = LiveInput::active() && !Playback::hold();
   if (live) {
     Identify::cancel();
     if (Playback::running()) {
