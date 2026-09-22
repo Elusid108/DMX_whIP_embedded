@@ -20,5 +20,6 @@ public:
   static const char *fileLoopName();
   static const char *folderRepName();
   static bool set(PlaySrc src, const char *path, PlayFileLoop fileLoop,
-                  PlayFolderRep folderRep, uint8_t n, bool save);
+                  PlayFolderRep folderRep, uint8_t n, bool save,
+                  bool reload = true);
 };

@@ -1073,7 +1073,7 @@ bool Playback::hold() { return s_hold; }
 
 void Playback::setHold(bool on) { setHoldFlag(on); }
 
-void Playback::cueFile(const char *path, uint32_t t_ms) {
+void Playback::cueFile(const char *path, uint32_t t_ms, bool savePlaylist) {
   if (!path || !path[0]) {
     return;
   }
@@ -1089,7 +1089,14 @@ void Playback::cueFile(const char *path, uint32_t t_ms) {
   s_armCueMs = t_ms;
   s_armCueSeek = true;
   PlayCfg::set(PlaySrc::File, path, PlayCfg::fileLoop(), PlayCfg::folderRep(),
-               PlayCfg::folderN(), true);
+               PlayCfg::folderN(), savePlaylist);
+  reload();
+  play();
+}
+
+void Playback::resumeAt(uint32_t t_ms) {
+  s_armCueMs = t_ms;
+  s_armCueSeek = true;
   reload();
   play();
 }

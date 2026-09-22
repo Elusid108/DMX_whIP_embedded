@@ -146,7 +146,7 @@ const char *PlayCfg::folderRepName() {
 }
 
 bool PlayCfg::set(PlaySrc src, const char *path, PlayFileLoop fileLoop,
-                  PlayFolderRep folderRep, uint8_t n, bool save) {
+                  PlayFolderRep folderRep, uint8_t n, bool save, bool reload) {
   if (n < 1 || n > kNMax) {
     return false;
   }
@@ -172,7 +172,9 @@ bool PlayCfg::set(PlaySrc src, const char *path, PlayFileLoop fileLoop,
   if (changed) {
     LOG_V("play", "cfg src=%s path=%s file_loop=%s folder_rep=%s n=%u",
           srcName(), s_path, fileLoopName(), folderRepName(), s_n);
-    Playback::reload();
+    if (reload) {
+      Playback::reload();
+    }
   }
   return true;
 }

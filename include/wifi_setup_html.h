@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.27.0</title>
+<title>dmxwhip v0.28.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -249,11 +249,14 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 <label class="lab" for="park">Hide AP if connected</label>
 <select id="park"><option value="yes" selected>Yes</option><option value="no">No</option></select>
+<label class="lab" for="takeover">Sync takeover</label>
+<select id="takeover"><option value="yes" selected>Yes</option><option value="no">No</option></select>
+<p class="hint">Yes joins a split clip launched on another node, then returns here. No stays on this show.</p>
 <div class="row">
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.27.0</p>
+<p id="ver" class="readout">dmxwhip v0.28.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -272,6 +275,7 @@ const playnowEl=document.getElementById('playnow');
 const fpsEl=document.getElementById('fps');
 const bufEl=document.getElementById('buf');
 const parkEl=document.getElementById('park');
+const takeoverEl=document.getElementById('takeover');
 const bandEl=document.getElementById('band');
 const bandRow=document.getElementById('bandrow');
 const setupHint=document.getElementById('setupHint');
@@ -659,6 +663,7 @@ function applyLive(s){
   if(typeof s.fps==='number') fpsEl.value=String(s.fps);
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
   if(s.park) parkEl.value=s.park;
+  if(takeoverEl&&s.takeover) takeoverEl.value=s.takeover;
 }
 function linkLabel(v){
   if(v==='5g') return '5 GHz';
@@ -1021,7 +1026,7 @@ function postBand(){
     .catch(()=>{bandDirty=false;dropHint();});
 }
 function postLive(){
-  return postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value})
+  return postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value,takeover:takeoverEl?takeoverEl.value:'yes'})
     .then(async r=>{if(!r.ok) throw new Error('http');liveDirty=false;applyMeta(await r.json());})
     .catch(dropHint);
 }
@@ -1337,6 +1342,7 @@ function endEdit(save){
 fpsEl.onchange=markSetupDirty;
 bufEl.onchange=markSetupDirty;
 parkEl.onchange=markSetupDirty;
+if(takeoverEl) takeoverEl.onchange=markSetupDirty;
 if(bandEl) bandEl.onchange=()=>{
   markSetupDirty();
   renderNets();

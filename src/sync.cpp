@@ -3,6 +3,7 @@
 #include "live_cfg.h"
 #include "live_input.h"
 #include "log.h"
+#include "play_cfg.h"
 #include "playback.h"
 #include "sd_info.h"
 
@@ -62,6 +63,26 @@ static bool s_waitMaster = false;
 static bool s_pendingLocal = false;
 static bool s_releaseLive = false;
 static bool s_releaseSticky = false;
+
+struct ShowSnap {
+  bool valid;
+  bool hadFile;
+  bool hold;
+  bool parked;
+  PlaySrc src;
+  PlayFileLoop fileLoop;
+  PlayFolderRep folderRep;
+  uint8_t n;
+  uint32_t t_ms;
+  uint32_t groupHash;
+  char path[kSdPathLen];
+};
+
+static ShowSnap s_snap = {};
+static bool s_takeoverOn = false;
+static uint32_t s_takeoverHash = 0;
+static bool s_restoring = false;
+static uint32_t s_restoreMs = 0;
 static uint32_t s_pendingHash = 0;
 static bool s_cueBind = false;
 static uint32_t s_missHash = 0;
@@ -244,12 +265,82 @@ static bool findGroupFile(uint32_t want, char *out, size_t outLen) {
   return false;
 }
 
+static void clearSnap() {
+  s_snap.valid = false;
+  s_takeoverOn = false;
+  s_takeoverHash = 0;
+}
+
+static void captureSnap() {
+  if (s_takeoverOn) {
+    return;
+  }
+  s_snap.src = PlayCfg::src();
+  s_snap.fileLoop = PlayCfg::fileLoop();
+  s_snap.folderRep = PlayCfg::folderRep();
+  s_snap.n = PlayCfg::folderN();
+  snprintf(s_snap.path, sizeof(s_snap.path), "%s", PlayCfg::path());
+  s_snap.hold = Playback::hold();
+  s_snap.parked = Playback::parked();
+  s_snap.hadFile = Playback::hasFile() && !Playback::parked();
+  uint32_t t_us = 0;
+  uint32_t frame = 0;
+  if (!Playback::peekFrame(t_us, frame)) {
+    t_us = Playback::tUs();
+  }
+  s_snap.t_ms = t_us / 1000u;
+  s_snap.groupHash = s_groupHash;
+  s_snap.valid = true;
+  s_takeoverOn = true;
+  LOG_V("sync", "takeover from %s t_ms=%u", s_snap.path,
+        static_cast<unsigned>(s_snap.t_ms));
+}
+
+static void restoreSnap() {
+  if (!s_snap.valid) {
+    clearSnap();
+    return;
+  }
+  const ShowSnap snap = s_snap;
+  clearSnap();
+  s_restoring = true;
+  s_restoreMs = millis();
+  LOG_V("sync", "takeover return %s t_ms=%u", snap.path,
+        static_cast<unsigned>(snap.t_ms));
+  PlayCfg::set(snap.src, snap.path, snap.fileLoop, snap.folderRep, snap.n,
+               false, false);
+  if (!snap.hold && LiveInput::active()) {
+    Playback::setHold(false);
+    Playback::reload();
+    Playback::pause();
+    return;
+  }
+  if (snap.parked || !snap.hadFile) {
+    Playback::setHold(false);
+    if (snap.parked) {
+      s_restoring = false;
+      Playback::park();
+    } else {
+      Playback::setLoop(true);
+      Playback::reload();
+      Playback::play();
+    }
+    return;
+  }
+  Playback::setHold(snap.hold);
+  Playback::setLoop(true);
+  Playback::resumeAt(snap.t_ms);
+}
+
 static bool ensureCueFile(uint32_t groupHash, uint32_t t_ms) {
   if (groupHash == 0) {
     return true;
   }
   if (groupHash == s_groupHash || groupHash == s_pendingHash || s_cueBind) {
     return true;
+  }
+  if (!LiveCfg::takeover() && !s_takeoverOn) {
+    return false;
   }
   const uint32_t now = millis();
   if (s_missHash == groupHash && s_missMs != 0 && now - s_missMs < 1000) {
@@ -261,10 +352,16 @@ static bool ensureCueFile(uint32_t groupHash, uint32_t t_ms) {
     s_missMs = now;
     return false;
   }
+  if (Playback::hasFile() && !Playback::parked() &&
+      strcmp(Playback::path(), path) == 0) {
+    return true;
+  }
   s_missHash = 0;
+  captureSnap();
+  s_takeoverHash = groupHash;
   s_pendingHash = groupHash;
   s_cueBind = true;
-  Playback::cueFile(path, t_ms);
+  Playback::cueFile(path, t_ms, false);
   return true;
 }
 
@@ -352,6 +449,11 @@ static void leaveFollow() {
   s_lastSnapMs = 0xFFFFFFFFu;
   s_lastSnapFrame = 0xFFFFFFFFu;
   Playback::setHold(false);
+  if (s_takeoverOn) {
+    restoreSnap();
+    s_loggedFollow = false;
+    return;
+  }
   if (s_group[0]) {
     s_master = false;
     s_waitMaster = true;
@@ -576,7 +678,7 @@ static void onCue(const CuePacket &p) {
 }
 
 static void parseCue(int n, const IPAddress &from) {
-  if (ownPacket(from)) {
+  if (s_restoring || s_releaseLive || ownPacket(from)) {
     return;
   }
   if (n < static_cast<int>(kCuePktLen)) {
@@ -594,7 +696,14 @@ static void parseCue(int n, const IPAddress &from) {
     memcpy(&group, s_pkt + 16, 4);
     uint32_t t_ms = 0;
     memcpy(&t_ms, s_pkt + 8, 4);
+    if (s_takeoverOn && s_snap.valid && s_snap.groupHash != 0 &&
+        group == s_snap.groupHash) {
+      return;
+    }
     if (group != s_groupHash && group != s_pendingHash) {
+      if (!LiveCfg::takeover() && !s_takeoverOn) {
+        return;
+      }
       if (!ensureCueFile(group, t_ms)) {
         return;
       }
@@ -665,6 +774,9 @@ void Sync::service() {
       s_waitMaster = true;
       LOG_V("sync", "release ended (stream quiet)");
     }
+  }
+  if (s_restoring && s_restoreMs != 0 && now - s_restoreMs >= 2000) {
+    s_restoring = false;
   }
   if (s_follow && (s_cueMs == 0 || now - s_cueMs >= kCueHoldMs)) {
     leaveFollow();
@@ -740,6 +852,14 @@ uint32_t Sync::cueTargetMs() { return s_targetMs; }
 uint32_t Sync::cueTargetFrame() { return s_targetFrame; }
 
 void Sync::onPlayFile(const char *path) {
+  struct ClearRestore {
+    bool arm;
+    ~ClearRestore() {
+      if (arm) {
+        s_restoring = false;
+      }
+    }
+  } clearRestore{path != nullptr && path[0] != '\0'};
   const bool keepMaster = s_pendingLocal;
   clearGroup();
   if (!path || !path[0]) {
@@ -828,6 +948,7 @@ void Sync::onPlayFile(const char *path) {
 }
 
 void Sync::noteLocalTrigger() {
+  clearSnap();
   s_releaseLive = false;
   s_releaseSticky = false;
   s_pendingLocal = true;
@@ -836,6 +957,7 @@ void Sync::noteLocalTrigger() {
 }
 
 void Sync::releaseToLive() {
+  clearSnap();
   s_releaseLive = true;
   s_releaseSticky = false;
   s_follow = false;
@@ -850,6 +972,7 @@ void Sync::releaseToLive() {
 }
 
 void Sync::noteStopped() {
+  clearSnap();
   s_releaseLive = true;
   s_releaseSticky = true;
   s_follow = false;

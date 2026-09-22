@@ -745,6 +745,8 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(LiveCfg::buf());
   out += ",\"park\":";
   jsonEscape(out, String(LiveCfg::parkName()));
+  out += ",\"takeover\":";
+  jsonEscape(out, String(LiveCfg::takeoverName()));
   out += ',';
   appendWifiBand(out);
   out += ",\"live\":";
@@ -935,6 +937,8 @@ static void sendStats() {
   out += static_cast<unsigned>(LiveCfg::buf());
   out += ",\"park\":";
   jsonEscape(out, String(LiveCfg::parkName()));
+  out += ",\"takeover\":";
+  jsonEscape(out, String(LiveCfg::takeoverName()));
   out += ',';
   appendWifiBand(out);
   out += ",\"live\":";
@@ -1417,7 +1421,20 @@ static void handleLive() {
     }
   }
 
-  if (!LiveCfg::set(proto, fps, buf, park, true)) {
+  bool takeover = LiveCfg::takeover();
+  if (s_server.hasArg("takeover")) {
+    const String takeArg = s_server.arg("takeover");
+    if (takeArg == "yes") {
+      takeover = true;
+    } else if (takeArg == "no") {
+      takeover = false;
+    } else {
+      sendJson(400, "{\"error\":\"bad takeover\"}");
+      return;
+    }
+  }
+
+  if (!LiveCfg::set(proto, fps, buf, park, takeover, true)) {
     sendJson(400, "{\"error\":\"bad live\"}");
     return;
   }

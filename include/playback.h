@@ -41,8 +41,11 @@ public:
   static void setHold(bool on);
 
   // Bind path when it is not the current file, then seek to show t_ms.
-  // Does not take cue-bus master.
-  static void cueFile(const char *path, uint32_t t_ms);
+  // Does not take cue-bus master. savePlaylist false leaves NVS unchanged.
+  static void cueFile(const char *path, uint32_t t_ms, bool savePlaylist = true);
+
+  // Rebind the current playlist and seek to show t_ms.
+  static void resumeAt(uint32_t t_ms);
 
   static bool hasFile();
   static bool parked();
