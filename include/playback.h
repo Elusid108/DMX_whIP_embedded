@@ -47,6 +47,15 @@ public:
   // Rebind the current playlist and seek to show t_ms.
   static void resumeAt(uint32_t t_ms);
 
+  // True while a reload is waiting for the play task.
+  static bool reloadPending();
+
+  // Move an in-flight cue seek onto the newest show t_ms, or seek now.
+  static void nudgeCue(uint32_t t_ms);
+
+  // True when t_ms falls inside the frames already queued.
+  static bool cueQueued(uint32_t t_ms);
+
   static bool hasFile();
   static bool parked();
   static bool userPaused();

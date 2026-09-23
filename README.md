@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.28.0**
+Version: **0.29.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -170,7 +170,7 @@ Multi-device sync
 - [x] Live lock: ArtSync and/or E1.31 synchronization PDUs + existing buf 0–3
 - [x] Playback lock: multicast (or companion PC) cue bus — play / pause / seek / frame index; late node resyncs to the tick, does not free-run on `millis()`
 - [x] Group sync: whoever launches is master; followers binary-seek show `t_ms` and join mid-show, including a late boot — implemented (not verified)
-- [x] Sync takeover Yes/No (default Yes): a foreign split clip borrows this node, then the previous show resumes when that group's cues stop — implemented (not verified)
+- [x] Sync takeover Yes/No (default Yes): a foreign split clip borrows this node on the live frame, including after Stop or Stream, then the previous show resumes when that group's cues stop — implemented (not verified)
 
 Companion PC (sibling repo `DMX_whIP_companion`, not this tree)
 
@@ -189,7 +189,7 @@ The companion discovers and locates nodes over the **selected NIC**. Contract:
 - **POST `/name`** — form `long` (required, 1–63), optional `short` (1–17; else truncated `long`). Persists NVS; next ArtPollReply uses the names. Available while live. Response is full `/status`.
 - **POST `/rename`** — form `from` + `to` (absolute `.dmx`, same path rules as `/upload`). Idle-only. 404 missing, 409 exists. Updates the NVS file playlist path if it matched `from`. Moves a sibling sidecar if present.
 - **POST `/meta`** — form `path` (absolute `.dmx`) + `name` (display title, max 48). Optional additive `sync_group` (string) and `sync_members` (JSON array of `{n,m}` long name + MAC). Idle-only. Writes sibling `{basename}.json` as `{ name, sync?: { group, members } }`. Empty name without a group removes the sidecar. 404 missing. Response is full `/status`.
-- **Playback cue bus** — UDP 4777, multicast `239.255.77.77`. v1 is 16 bytes (`WHIP` + play/pause/seek/tick + `t_ms`). v2 appends a 4-byte group hash. Portal or companion `POST /play` on a node makes that node master. There is no name election. Other grouped nodes listen and do not start their own copy from time 0. A cue whose group is not the loaded file binds the on-card `.dmx` with that sidecar group, then binary-seeks to show `t_ms` (sliced files do not share a record index). **Sync takeover** Yes (default) remembers the current show in RAM only, joins that clip, and restores the previous playlist when the borrowed group's cues stop (Stop, Stream, or a real end — not a loop back to time 0). A second foreign clip switches the borrowed file and keeps the first snapshot. Play, Stop, or Stream on this node drops the snapshot. No ignores a foreign group. Same-group ticks still follow either way. A node that boots later does the same on the next Tick. After ~4 s with no cue, a grouped node listens again and does not become master. An ungrouped node returns to local auto-play. Sync is show-relative `t_ms`.
+- **Playback cue bus** — UDP 4777, multicast `239.255.77.77`. v1 is 16 bytes (`WHIP` + play/pause/seek/tick + `t_ms`). v2 appends a 4-byte group hash. Portal or companion `POST /play` on a node makes that node master. There is no name election. Play is sent after the new file is bound, three times, with the show `t_ms` of the frame about to be shown. Other grouped nodes listen and do not start their own copy from time 0. A cue whose group is not the loaded file binds the on-card `.dmx` with that sidecar group, then binary-seeks to show `t_ms` (sliced files do not share a record index). Followers seek when that time is outside the frames already queued, and show it from the queue when it is already there. **Sync takeover** Yes (default) remembers the current show in RAM only, joins that clip on the live frame even after Stop or Stream, and restores the previous playlist when the borrowed group's cues stop (a real end — not a loop back to time 0). A second foreign clip switches the borrowed file and keeps the first snapshot. Play, Stop, or Stream on this node drops the snapshot. No ignores a foreign group. Same-group ticks still follow either way. A node that boots later does the same on the next Tick. After ~4 s with no cue, a grouped node listens again and does not become master. An ungrouped node returns to local auto-play. Sync is show-relative `t_ms`.
 - **POST `/delete`** — repeated form `path` (absolute `.dmx`). Idle-only. Removes each file and its sidecar. 404 missing. If the NVS file playlist was deleted, falls back to root and parks. Response is full `/status`.
 - **GET `/file`** — query `path=/foo.dmx`. Idle-only. Streams the file (`streamFile`); no full-file RAM buffer. 404 missing.
 - **POST `/order`** — repeated form `path` in the desired order. Two-phase rename to `/01_basename.dmx`, `/02_…` (strips an existing `NN_` prefix). Idle-only. Moves sibling sidecars. Response is full `/status`.
@@ -256,6 +256,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.29.0** — A grouped launch with Sync takeover on starts every other node on the live frame, including after Stop or Stream. Followers correct when the cue time is outside the frames already queued.
 - **0.28.0** — Setup Sync takeover (default Yes). Yes joins a split clip launched on another node without saving the playlist, then returns to the previous show when that group's cues stop. No stays on this node's show.
 - **0.27.0** — Playback and Patch stay editable during a stream; Patch Save applies in place. Portal confirm can override a stream (`play.hold`); Stream or end-of-playlist returns to it. Group playback follows whoever pressed Play and seeks to that show time
 - **0.26.1** — Connect/boot honor Setup Band: 2.4 stays on 2.4, 5 GHz stays on 5 GHz (no 2.4 fallback), Auto prefers 5 GHz when both twins exist

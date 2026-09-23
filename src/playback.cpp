@@ -1101,6 +1101,40 @@ void Playback::resumeAt(uint32_t t_ms) {
   play();
 }
 
+bool Playback::reloadPending() {
+  lockPlay();
+  const bool on = s_reload;
+  unlockPlay();
+  return on;
+}
+
+void Playback::nudgeCue(uint32_t t_ms) {
+  lockPlay();
+  const bool arming = s_armCueSeek || s_reload || !s_hasFile;
+  if (arming) {
+    s_armCueMs = t_ms;
+    s_armCueSeek = true;
+    unlockPlay();
+    return;
+  }
+  unlockPlay();
+  seekMs(t_ms);
+}
+
+bool Playback::cueQueued(uint32_t t_ms) {
+  lockPlay();
+  if (s_count == 0) {
+    unlockPlay();
+    return false;
+  }
+  const uint32_t oldest = s_ring[s_tail].t_us / 1000u;
+  const uint8_t newestI =
+      static_cast<uint8_t>((s_head + kPlayRingSlots - 1) % kPlayRingSlots);
+  const uint32_t newest = s_ring[newestI].t_us / 1000u;
+  unlockPlay();
+  return t_ms >= oldest && t_ms <= newest;
+}
+
 void Playback::play() {
   lockPlay();
   s_parked = false;
@@ -1296,6 +1330,8 @@ bool Playback::catchTick(uint8_t *rgb, size_t n, uint32_t t_ms, uint32_t frame,
 bool Playback::seekMs(uint32_t t_ms) {
   lockPlay();
   if (!s_hasFile) {
+    s_armCueMs = t_ms;
+    s_armCueSeek = true;
     unlockPlay();
     return false;
   }
@@ -1303,9 +1339,19 @@ bool Playback::seekMs(uint32_t t_ms) {
     unlockPlay();
     return true;
   }
-  if (s_seekKind == SeekKind::None && s_landedReqMs == t_ms) {
+  if (s_count == 0 && s_seekKind == SeekKind::None && s_landedReqMs == t_ms) {
     unlockPlay();
     return true;
+  }
+  if (s_count > 0) {
+    const uint32_t oldest = s_ring[s_tail].t_us / 1000u;
+    const uint8_t newestI =
+        static_cast<uint8_t>((s_head + kPlayRingSlots - 1) % kPlayRingSlots);
+    const uint32_t newest = s_ring[newestI].t_us / 1000u;
+    if (t_ms >= oldest && t_ms <= newest) {
+      unlockPlay();
+      return true;
+    }
   }
   s_seekKind = SeekKind::TimeMs;
   s_seekMs = t_ms;

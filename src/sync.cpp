@@ -15,9 +15,8 @@
 
 namespace {
 
-static constexpr uint32_t kCueSnapUs = 80000;
-static constexpr uint32_t kCueSnapMs = 80;
 static constexpr uint32_t kCueJoinRetryMs = 2000;
+static constexpr uint32_t kPlayBurstGapMs = 4;
 static constexpr size_t kCueMaxPkt = 32;
 
 static WiFiUDP s_udp;
@@ -89,6 +88,9 @@ static uint32_t s_missHash = 0;
 static uint32_t s_missMs = 0;
 static uint32_t s_lastEmitMs = 0;
 static uint8_t s_lastEmitOp = 0;
+static bool s_armMasterPlay = false;
+static uint8_t s_playBurstLeft = 0;
+static uint32_t s_playBurstMs = 0;
 
 static uint32_t hashGroup(const char *s) {
   uint32_t h = 2166136261u;
@@ -332,18 +334,23 @@ static void restoreSnap() {
   Playback::resumeAt(snap.t_ms);
 }
 
-static bool ensureCueFile(uint32_t groupHash, uint32_t t_ms) {
+static bool ensureCueFile(uint32_t groupHash, uint32_t t_ms, bool fromPlay) {
   if (groupHash == 0) {
     return true;
   }
-  if (groupHash == s_groupHash || groupHash == s_pendingHash || s_cueBind) {
+  if (groupHash == s_groupHash) {
+    return true;
+  }
+  if (s_cueBind && groupHash == s_pendingHash) {
+    Playback::nudgeCue(t_ms);
     return true;
   }
   if (!LiveCfg::takeover() && !s_takeoverOn) {
     return false;
   }
   const uint32_t now = millis();
-  if (s_missHash == groupHash && s_missMs != 0 && now - s_missMs < 1000) {
+  if (!fromPlay && s_missHash == groupHash && s_missMs != 0 &&
+      now - s_missMs < 1000) {
     return false;
   }
   char path[kSdPathLen];
@@ -483,60 +490,25 @@ static void applyPosition(uint8_t flags, uint32_t t_ms, uint32_t frame,
   }
 
   bool seek = forceSeek;
-  const uint8_t queued = Playback::available();
-  if (!seek && queued > 0) {
+  if (!seek && s_hasTime) {
+    seek = !Playback::cueQueued(s_targetMs);
+  } else if (!seek && s_hasFrame) {
     uint32_t t_us = 0;
     uint32_t curFrame = 0;
-    if (Playback::peekFrame(t_us, curFrame)) {
-      if (s_hasTime) {
-        const uint32_t target_us = s_targetMs * 1000u;
-        if (t_us + kCueSnapUs < target_us || target_us + kCueSnapUs < t_us) {
-          seek = true;
-        }
-      } else if (s_hasFrame) {
-        const uint32_t a = curFrame;
-        const uint32_t b = s_targetFrame;
-        const uint32_t d = a > b ? a - b : b - a;
-        if (d > 4) {
-          seek = true;
-        }
-      }
-    }
-  } else if (!seek && queued == 0) {
-    if (s_hasTime) {
-      if (s_lastSnapMs == 0xFFFFFFFFu) {
-        seek = true;
-      } else {
-        const uint32_t a = s_targetMs;
-        const uint32_t b = s_lastSnapMs;
-        const uint32_t d = a > b ? a - b : b - a;
-        if (d > kCueSnapMs) {
-          seek = true;
-        }
-      }
-    } else if (s_hasFrame) {
-      if (s_lastSnapFrame == 0xFFFFFFFFu) {
-        seek = true;
-      } else {
-        const uint32_t a = s_targetFrame;
-        const uint32_t b = s_lastSnapFrame;
-        const uint32_t d = a > b ? a - b : b - a;
-        if (d > 4) {
-          seek = true;
-        }
-      }
+    if (!Playback::peekFrame(t_us, curFrame) || curFrame != s_targetFrame) {
+      seek = true;
     }
   }
 
   if (!seek) {
     return;
   }
-  if (s_hasFrame && !s_hasTime) {
+  if (s_hasTime) {
+    Playback::nudgeCue(s_targetMs);
+    s_lastSnapMs = s_targetMs;
+  } else if (s_hasFrame) {
     Playback::seekFrame(s_targetFrame);
     s_lastSnapFrame = s_targetFrame;
-  } else if (s_hasTime) {
-    Playback::seekMs(s_targetMs);
-    s_lastSnapMs = s_targetMs;
   }
 }
 
@@ -611,6 +583,12 @@ static void emitNow(uint8_t op) {
   emitCue(op, has, has, t_ms, frame);
 }
 
+static void startPlayBurst() {
+  emitNow(kCueOpPlay);
+  s_playBurstLeft = 2;
+  s_playBurstMs = millis();
+}
+
 static void onCue(const CuePacket &p) {
   if (s_releaseLive) {
     return;
@@ -628,7 +606,7 @@ static void onCue(const CuePacket &p) {
   case kCueOpPlay: {
     const bool rising = first || !s_cuePlay;
     s_cuePlay = true;
-    applyPosition(p.flags, p.t_ms, p.frame, rising);
+    applyPosition(p.flags, p.t_ms, p.frame, true);
     Playback::play();
     if (hasPos) {
       s_cuePulse = true;
@@ -678,7 +656,7 @@ static void onCue(const CuePacket &p) {
 }
 
 static void parseCue(int n, const IPAddress &from) {
-  if (s_restoring || s_releaseLive || ownPacket(from)) {
+  if (s_restoring || ownPacket(from)) {
     return;
   }
   if (n < static_cast<int>(kCuePktLen)) {
@@ -696,19 +674,34 @@ static void parseCue(int n, const IPAddress &from) {
     memcpy(&group, s_pkt + 16, 4);
     uint32_t t_ms = 0;
     memcpy(&t_ms, s_pkt + 8, 4);
+    const bool foreign = group != s_groupHash && group != s_pendingHash;
+    const uint8_t op = s_pkt[5];
+    if (s_releaseLive) {
+      const bool join = LiveCfg::takeover() && foreign &&
+                        (op == kCueOpPlay || op == kCueOpTick);
+      if (!join) {
+        return;
+      }
+      s_releaseLive = false;
+      s_releaseSticky = false;
+      LOG_V("sync", "takeover joins over stop");
+    }
     if (s_takeoverOn && s_snap.valid && s_snap.groupHash != 0 &&
         group == s_snap.groupHash) {
       return;
     }
-    if (group != s_groupHash && group != s_pendingHash) {
+    if (foreign) {
       if (!LiveCfg::takeover() && !s_takeoverOn) {
         return;
       }
-      if (!ensureCueFile(group, t_ms)) {
+      if (!ensureCueFile(group, t_ms, op == kCueOpPlay)) {
         return;
       }
     }
   } else if (ver == kCueVersion) {
+    if (s_releaseLive) {
+      return;
+    }
     if (s_group[0]) {
       return;
     }
@@ -781,7 +774,23 @@ void Sync::service() {
   if (s_follow && (s_cueMs == 0 || now - s_cueMs >= kCueHoldMs)) {
     leaveFollow();
   }
-  if (s_master && !s_follow && Playback::playing()) {
+  if (s_armMasterPlay && !s_group[0] && !Playback::reloadPending() &&
+      Playback::hasFile()) {
+    s_armMasterPlay = false;
+  }
+  if (s_armMasterPlay && s_group[0] && Playback::available() > 0) {
+    s_armMasterPlay = false;
+    startPlayBurst();
+    LOG_V("sync", "launch play t_ms queued");
+  }
+  if (s_playBurstLeft != 0 &&
+      (s_playBurstMs == 0 || now - s_playBurstMs >= kPlayBurstGapMs)) {
+    emitNow(kCueOpPlay);
+    s_playBurstLeft = static_cast<uint8_t>(s_playBurstLeft - 1);
+    s_playBurstMs = now;
+  }
+  if (s_master && !s_follow && Playback::playing() && s_playBurstLeft == 0 &&
+      !s_armMasterPlay) {
     const uint32_t gap = LiveCfg::showIntervalMs();
     if (s_lastEmitMs == 0 || now - s_lastEmitMs >= gap) {
       emitNow(kCueOpTick);
@@ -851,6 +860,14 @@ uint32_t Sync::cueTargetMs() { return s_targetMs; }
 
 uint32_t Sync::cueTargetFrame() { return s_targetFrame; }
 
+static void dropMasterArm() {
+  if (!s_armMasterPlay) {
+    return;
+  }
+  s_armMasterPlay = false;
+  s_playBurstLeft = 0;
+}
+
 void Sync::onPlayFile(const char *path) {
   struct ClearRestore {
     bool arm;
@@ -860,15 +877,17 @@ void Sync::onPlayFile(const char *path) {
       }
     }
   } clearRestore{path != nullptr && path[0] != '\0'};
-  const bool keepMaster = s_pendingLocal;
+  const bool keepMaster = s_pendingLocal || s_armMasterPlay;
   clearGroup();
   if (!path || !path[0]) {
     if (keepMaster) {
       s_master = true;
     }
-    s_pendingLocal = false;
-    s_pendingHash = 0;
-    s_cueBind = false;
+    if (!s_armMasterPlay) {
+      s_pendingLocal = false;
+      s_pendingHash = 0;
+      s_cueBind = false;
+    }
     return;
   }
   char side[64];
@@ -876,6 +895,7 @@ void Sync::onPlayFile(const char *path) {
     if (keepMaster) {
       s_master = true;
     }
+    dropMasterArm();
     s_pendingLocal = false;
     s_pendingHash = 0;
     s_cueBind = false;
@@ -885,6 +905,7 @@ void Sync::onPlayFile(const char *path) {
     if (keepMaster) {
       s_master = true;
     }
+    dropMasterArm();
     s_pendingLocal = false;
     s_pendingHash = 0;
     s_cueBind = false;
@@ -895,6 +916,7 @@ void Sync::onPlayFile(const char *path) {
     if (keepMaster) {
       s_master = true;
     }
+    dropMasterArm();
     s_pendingLocal = false;
     s_pendingHash = 0;
     s_cueBind = false;
@@ -907,6 +929,7 @@ void Sync::onPlayFile(const char *path) {
     if (keepMaster) {
       s_master = true;
     }
+    dropMasterArm();
     s_pendingLocal = false;
     s_pendingHash = 0;
     s_cueBind = false;
@@ -925,6 +948,7 @@ void Sync::onPlayFile(const char *path) {
     if (keepMaster) {
       s_master = true;
     }
+    dropMasterArm();
     s_pendingLocal = false;
     s_pendingHash = 0;
     s_cueBind = false;
@@ -953,7 +977,13 @@ void Sync::noteLocalTrigger() {
   s_releaseSticky = false;
   s_pendingLocal = true;
   becomeMaster();
-  emitNow(kCueOpPlay);
+  if (Playback::reloadPending()) {
+    s_armMasterPlay = true;
+    s_playBurstLeft = 0;
+    return;
+  }
+  s_armMasterPlay = false;
+  startPlayBurst();
 }
 
 void Sync::releaseToLive() {
@@ -992,6 +1022,9 @@ void Sync::noteLocalPause() {
 }
 
 void Sync::noteAutoStart() {
+  if (s_armMasterPlay) {
+    return;
+  }
   if (!s_group[0]) {
     return;
   }

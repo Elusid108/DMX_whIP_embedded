@@ -115,7 +115,8 @@ public:
   // Drop master/follow so a live stream can own the LEDs. Ignore cues until
   // the stream goes quiet.
   static void releaseToLive();
-  // Stop: ignore cues until the next local Play, even if no stream is up.
+  // Stop: ignore same-group cues until the next local Play. Takeover Yes
+  // still joins a different group's launch.
   static void noteStopped();
   static bool waitingForMaster();
   static bool isMaster();
