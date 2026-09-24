@@ -19,7 +19,21 @@ public:
   static const char *srcName();
   static const char *fileLoopName();
   static const char *folderRepName();
+  // save true also stores this selection as the startup playlist. save false
+  // changes the session only (Play / next / prev).
   static bool set(PlaySrc src, const char *path, PlayFileLoop fileLoop,
                   PlayFolderRep folderRep, uint8_t n, bool save,
                   bool reload = true);
+
+  // Startup playlist (NVS). Does not change the session or reload playback.
+  static PlaySrc bootSrc();
+  static const char *bootPath();
+  static PlayFileLoop bootFileLoop();
+  static PlayFolderRep bootFolderRep();
+  static uint8_t bootFolderN();
+  static const char *bootSrcName();
+  static const char *bootFileLoopName();
+  static const char *bootFolderRepName();
+  static bool setStartup(PlaySrc src, const char *path, PlayFileLoop fileLoop,
+                         PlayFolderRep folderRep, uint8_t n);
 };

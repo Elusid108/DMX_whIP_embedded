@@ -491,7 +491,7 @@ static void applyPosition(uint8_t flags, uint32_t t_ms, uint32_t frame,
 
   bool seek = forceSeek;
   if (!seek && s_hasTime) {
-    seek = !Playback::cueQueued(s_targetMs);
+    seek = Playback::cueNeedsSeek(s_targetMs);
   } else if (!seek && s_hasFrame) {
     uint32_t t_us = 0;
     uint32_t curFrame = 0;

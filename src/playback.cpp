@@ -21,6 +21,7 @@ namespace {
 
 static constexpr uint32_t kSdLockForever = 0xFFFFFFFFu;
 static constexpr uint32_t kPlayUnderrunLogMs = 5000;
+static constexpr uint32_t kCueSeekSlackMs = 200;
 static constexpr uint32_t kPlayDiscoverMs = 1000;
 static constexpr uint32_t kPlayTaskStack = 8192;
 static constexpr UBaseType_t kPlayTaskPrio = 1;
@@ -77,6 +78,7 @@ static uint32_t s_payload = 0;
 static uint32_t s_dmxOff = 0;
 
 static SeekKind s_seekKind = SeekKind::None;
+static volatile bool s_seekBusy = false;
 static uint32_t s_seekMs = 0;
 static uint32_t s_seekFrame = 0;
 static uint32_t s_landedReqMs = 0xFFFFFFFFu;
@@ -495,6 +497,13 @@ static bool binaryLandMs(uint32_t wantMs, uint32_t frames, uint32_t &land) {
   return true;
 }
 
+static bool nearMs(uint32_t a, uint32_t b) {
+  if (a >= b) {
+    return (a - b) <= kCueSeekSlackMs;
+  }
+  return (b - a) <= kCueSeekSlackMs;
+}
+
 static bool applySeek() {
   lockPlay();
   const SeekKind kind = s_seekKind;
@@ -503,11 +512,15 @@ static bool applySeek() {
   const uint32_t frames = s_frameCount;
   s_seekKind = SeekKind::None;
   unlockPlay();
-  clearAssembler();
-
   if (kind == SeekKind::None) {
     return true;
   }
+  s_seekBusy = true;
+  struct BusyGuard {
+    ~BusyGuard() { s_seekBusy = false; }
+  } busyGuard;
+  clearAssembler();
+
   if (frames == 0) {
     return false;
   }
@@ -522,6 +535,7 @@ static bool applySeek() {
   }
 
   uint32_t land = 0;
+  uint32_t want = wantMs;
   if (kind == SeekKind::Frame) {
     land = wantFrame;
     if (land >= frames) {
@@ -536,7 +550,6 @@ static bool applySeek() {
       unlockPlay();
       return false;
     }
-    uint32_t want = wantMs;
     const uint32_t from = s_frameIndex;
     for (uint8_t pass = 0; pass < 3; ++pass) {
       if (!binaryLandMs(want, frames, land)) {
@@ -577,7 +590,7 @@ static bool applySeek() {
   s_off = off;
   s_matchedPass = 0;
   if (kind == SeekKind::TimeMs) {
-    s_landedReqMs = wantMs;
+    s_landedReqMs = want;
     s_landedReqFrame = 0xFFFFFFFFu;
   } else {
     s_landedReqFrame = land;
@@ -1121,6 +1134,44 @@ void Playback::nudgeCue(uint32_t t_ms) {
   seekMs(t_ms);
 }
 
+bool Playback::cueNeedsSeek(uint32_t t_ms) {
+  lockPlay();
+  const bool arming = s_armCueSeek || s_reload || !s_hasFile;
+  if (arming) {
+    unlockPlay();
+    return true;
+  }
+  if (s_seekBusy || s_seekKind == SeekKind::TimeMs) {
+    unlockPlay();
+    return false;
+  }
+  if (s_count > 0) {
+    const uint32_t oldest = s_ring[s_tail].t_us / 1000u;
+    const uint8_t newestI =
+        static_cast<uint8_t>((s_head + kPlayRingSlots - 1) % kPlayRingSlots);
+    const uint32_t newest = s_ring[newestI].t_us / 1000u;
+    unlockPlay();
+    if (t_ms < oldest) {
+      return !nearMs(t_ms, oldest);
+    }
+    if (t_ms > newest) {
+      return !nearMs(t_ms, newest);
+    }
+    return false;
+  }
+  const uint32_t landed = s_landedReqMs;
+  const uint32_t shown = s_tUs / 1000u;
+  const bool haveShown = landed != 0xFFFFFFFFu || s_tUs != 0 || s_matchedPass > 0;
+  unlockPlay();
+  if (landed != 0xFFFFFFFFu && nearMs(t_ms, landed)) {
+    return false;
+  }
+  if (haveShown && nearMs(t_ms, shown)) {
+    return false;
+  }
+  return true;
+}
+
 bool Playback::cueQueued(uint32_t t_ms) {
   lockPlay();
   if (s_count == 0) {
@@ -1336,6 +1387,10 @@ bool Playback::seekMs(uint32_t t_ms) {
     return false;
   }
   if (s_seekKind == SeekKind::TimeMs && s_seekMs == t_ms) {
+    unlockPlay();
+    return true;
+  }
+  if (s_seekBusy && nearMs(t_ms, s_seekMs)) {
     unlockPlay();
     return true;
   }

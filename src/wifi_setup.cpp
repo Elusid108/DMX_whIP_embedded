@@ -761,7 +761,17 @@ static void sendStatus(int code) {
   jsonEscape(out, String(PlayCfg::folderRepName()));
   out += ",\"n\":";
   out += static_cast<unsigned>(PlayCfg::folderN());
-  out += ",\"now\":";
+  out += ",\"boot\":{\"src\":";
+  jsonEscape(out, String(PlayCfg::bootSrcName()));
+  out += ",\"path\":";
+  jsonEscape(out, String(PlayCfg::bootPath()));
+  out += ",\"file_loop\":";
+  jsonEscape(out, String(PlayCfg::bootFileLoopName()));
+  out += ",\"folder_rep\":";
+  jsonEscape(out, String(PlayCfg::bootFolderRepName()));
+  out += ",\"n\":";
+  out += static_cast<unsigned>(PlayCfg::bootFolderN());
+  out += "},\"now\":";
   jsonEscape(out, String(Playback::parked() ? "" : Playback::path()));
   out += ",\"paused\":";
   out += Playback::userPaused() ? "true" : "false";
@@ -1629,11 +1639,16 @@ static void remapPlayPath(const char *from, const char *to) {
   if (!from || !to || strcmp(from, to) == 0) {
     return;
   }
+  if (PlayCfg::bootSrc() == PlaySrc::File &&
+      strcmp(PlayCfg::bootPath(), from) == 0) {
+    PlayCfg::setStartup(PlaySrc::File, to, PlayCfg::bootFileLoop(),
+                        PlayCfg::bootFolderRep(), PlayCfg::bootFolderN());
+  }
   if (PlayCfg::src() != PlaySrc::File || strcmp(PlayCfg::path(), from) != 0) {
     return;
   }
   PlayCfg::set(PlaySrc::File, to, PlayCfg::fileLoop(), PlayCfg::folderRep(),
-               PlayCfg::folderN(), true);
+               PlayCfg::folderN(), false);
 }
 
 static void resetUploadState() {
@@ -1943,10 +1958,15 @@ static void handleDelete() {
     }
   }
   bool hitPlaylist = false;
+  bool hitStartup = false;
   for (uint8_t i = 0; i < n; ++i) {
     if (PlayCfg::src() == PlaySrc::File &&
         strcmp(PlayCfg::path(), paths[i]) == 0) {
       hitPlaylist = true;
+    }
+    if (PlayCfg::bootSrc() == PlaySrc::File &&
+        strcmp(PlayCfg::bootPath(), paths[i]) == 0) {
+      hitStartup = true;
     }
     if (!SD.remove(paths[i])) {
       SdInfo::unlock();
@@ -1957,9 +1977,13 @@ static void handleDelete() {
   }
   SdInfo::unlock();
   SdInfo::refreshTree();
+  if (hitStartup) {
+    PlayCfg::setStartup(PlaySrc::Root, "/", PlayCfg::bootFileLoop(),
+                        PlayCfg::bootFolderRep(), PlayCfg::bootFolderN());
+  }
   if (hitPlaylist) {
     PlayCfg::set(PlaySrc::Root, "/", PlayCfg::fileLoop(), PlayCfg::folderRep(),
-                 PlayCfg::folderN(), true);
+                 PlayCfg::folderN(), false);
     Playback::park();
   }
   LOG_V("http", "delete n=%u", static_cast<unsigned>(n));
@@ -2115,9 +2139,78 @@ static bool argOverride() {
   return o == "1" || o == "yes" || o == "true";
 }
 
+static bool readPlayForm(PlaySrc &src, String &path, PlayFileLoop &fileLoop,
+                         PlayFolderRep &folderRep, uint8_t &n) {
+  const String srcArg = s_server.arg("src");
+  src = PlayCfg::src();
+  if (srcArg == "root") {
+    src = PlaySrc::Root;
+  } else if (srcArg == "file") {
+    src = PlaySrc::File;
+  } else if (srcArg == "folder") {
+    src = PlaySrc::Folder;
+  } else if (srcArg.length()) {
+    sendJson(400, "{\"error\":\"bad src\"}");
+    return false;
+  }
+
+  path = s_server.hasArg("path") ? s_server.arg("path") : String(PlayCfg::path());
+
+  fileLoop = PlayCfg::fileLoop();
+  const String flpArg = s_server.arg("file_loop");
+  if (flpArg == "one") {
+    fileLoop = PlayFileLoop::One;
+  } else if (flpArg == "all") {
+    fileLoop = PlayFileLoop::All;
+  } else if (flpArg.length()) {
+    sendJson(400, "{\"error\":\"bad file_loop\"}");
+    return false;
+  }
+
+  folderRep = PlayCfg::folderRep();
+  const String frpArg = s_server.arg("folder_rep");
+  if (frpArg == "forever") {
+    folderRep = PlayFolderRep::Forever;
+  } else if (frpArg == "count") {
+    folderRep = PlayFolderRep::Count;
+  } else if (frpArg.length()) {
+    sendJson(400, "{\"error\":\"bad folder_rep\"}");
+    return false;
+  }
+
+  n = PlayCfg::folderN();
+  if (s_server.hasArg("n")) {
+    const String nArg = s_server.arg("n");
+    char *end = nullptr;
+    const long v = strtol(nArg.c_str(), &end, 10);
+    if (end == nArg.c_str() || *end != '\0' || v < 1 || v > 99) {
+      sendJson(400, "{\"error\":\"bad n\"}");
+      return false;
+    }
+    n = static_cast<uint8_t>(v);
+  }
+  return true;
+}
+
 static void handlePlay() {
   const String srcArg = s_server.arg("src");
   const String actionArg = s_server.arg("action");
+  if (actionArg == "startup") {
+    PlaySrc src = PlaySrc::Root;
+    String path;
+    PlayFileLoop fileLoop = PlayFileLoop::All;
+    PlayFolderRep folderRep = PlayFolderRep::Forever;
+    uint8_t n = 1;
+    if (!readPlayForm(src, path, fileLoop, folderRep, n)) {
+      return;
+    }
+    if (!PlayCfg::setStartup(src, path.c_str(), fileLoop, folderRep, n)) {
+      sendJson(400, "{\"error\":\"bad play\"}");
+      return;
+    }
+    sendStatus(200);
+    return;
+  }
   const bool release = srcArg == "stop" || actionArg == "stop" ||
                        srcArg == "live" || actionArg == "live";
   if (LiveInput::active() && !Playback::hold() && !argOverride() && !release) {
@@ -2154,59 +2247,19 @@ static void handlePlay() {
     return;
   }
 
-  PlaySrc src = PlayCfg::src();
-  if (srcArg == "root") {
-    src = PlaySrc::Root;
-  } else if (srcArg == "file") {
-    src = PlaySrc::File;
-  } else if (srcArg == "folder") {
-    src = PlaySrc::Folder;
-  } else if (srcArg.length()) {
-    sendJson(400, "{\"error\":\"bad src\"}");
+  PlaySrc src = PlaySrc::Root;
+  String pathArg;
+  PlayFileLoop fileLoop = PlayFileLoop::All;
+  PlayFolderRep folderRep = PlayFolderRep::Forever;
+  uint8_t n = 1;
+  if (!readPlayForm(src, pathArg, fileLoop, folderRep, n)) {
     return;
-  }
-
-  const String pathArg = s_server.hasArg("path") ? s_server.arg("path")
-                                                 : String(PlayCfg::path());
-
-  PlayFileLoop fileLoop = PlayCfg::fileLoop();
-  const String flpArg = s_server.arg("file_loop");
-  if (flpArg == "one") {
-    fileLoop = PlayFileLoop::One;
-  } else if (flpArg == "all") {
-    fileLoop = PlayFileLoop::All;
-  } else if (flpArg.length()) {
-    sendJson(400, "{\"error\":\"bad file_loop\"}");
-    return;
-  }
-
-  PlayFolderRep folderRep = PlayCfg::folderRep();
-  const String frpArg = s_server.arg("folder_rep");
-  if (frpArg == "forever") {
-    folderRep = PlayFolderRep::Forever;
-  } else if (frpArg == "count") {
-    folderRep = PlayFolderRep::Count;
-  } else if (frpArg.length()) {
-    sendJson(400, "{\"error\":\"bad folder_rep\"}");
-    return;
-  }
-
-  uint8_t n = PlayCfg::folderN();
-  if (s_server.hasArg("n")) {
-    const String nArg = s_server.arg("n");
-    char *end = nullptr;
-    const long v = strtol(nArg.c_str(), &end, 10);
-    if (end == nArg.c_str() || *end != '\0' || v < 1 || v > 99) {
-      sendJson(400, "{\"error\":\"bad n\"}");
-      return;
-    }
-    n = static_cast<uint8_t>(v);
   }
 
   if (argOverride()) {
     Playback::setHold(true);
   }
-  if (!PlayCfg::set(src, pathArg.c_str(), fileLoop, folderRep, n, true)) {
+  if (!PlayCfg::set(src, pathArg.c_str(), fileLoop, folderRep, n, false, false)) {
     if (argOverride()) {
       Playback::setHold(false);
     }

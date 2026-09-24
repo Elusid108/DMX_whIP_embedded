@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.29.0</title>
+<title>dmxwhip v0.30.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -77,6 +77,7 @@ body.editing #nameView{display:none}
 .net.now,.playrow.now{border-color:#86efac66}
 .playrow .playname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .playrow .playfile{flex:0 1 auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
+.playrow .playboot{flex:0 0 auto;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)}
 .playrow .chev{width:1.15rem;flex:0 0 auto;padding:0;margin:0;border:0;background:transparent;color:var(--muted);font-size:.7rem;line-height:1}
 .playrow input{flex:1;min-width:0;width:auto;padding:2px 6px;margin:0;font-size:.85rem}
 .transport{justify-content:center;align-items:center}
@@ -186,7 +187,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 </div>
 <div id="viewPlay">
-<p class="hint">Idle plays SD. A live stream takes over. Play asks before overriding a stream.</p>
+<p class="hint">Idle plays the startup clip. A live stream takes over. Play asks before overriding a stream.</p>
 <div id="plist"></div>
 <p class="readout" id="playnow"></p>
 <div class="row transport">
@@ -203,6 +204,8 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <select id="folderrep"><option value="forever">Forever</option><option value="count">Set times</option></select>
 <div id="foldernrow"><label class="lab" for="foldern">Times</label>
 <input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric"></div></div>
+<p class="readout" id="bootnow"></p>
+<div class="row"><button id="setStartup" type="button">Set startup</button></div>
 </div>
 <div id="viewPixels">
 <p class="hint">Each row is a fixture. Same data GPIO chains under the parent (top of the group is first on the wire). Save writes the map and applies it. Brightness applies immediately.</p>
@@ -256,7 +259,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.29.0</p>
+<p id="ver" class="readout">dmxwhip v0.30.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -272,6 +275,7 @@ const nameEl=document.getElementById('name');
 const modeEl=document.getElementById('mode');
 const modeLab=document.getElementById('modeLab');
 const playnowEl=document.getElementById('playnow');
+const bootnowEl=document.getElementById('bootnow');
 const fpsEl=document.getElementById('fps');
 const bufEl=document.getElementById('buf');
 const parkEl=document.getElementById('park');
@@ -424,7 +428,7 @@ let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0,mapSaveNoteTimer=0;
 let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,bandDirty=false,scanning=false;
 let lastNets=[],credsFilled=false,liveSsid='',liveLink='',selBssid='',selCh=0;
 let patchSavePending=false;
-let playSrc='root',playPath='/',playListKey='',lastFiles=[],lastTitles=[],lastDirs=[];
+let playSrc='root',playPath='/',bootSrc='root',bootPath='/',playListKey='',lastFiles=[],lastTitles=[],lastDirs=[];
 let playSel=new Set(['root\t/']),playAnchor='root\t/',playCollapsed={},playPaused=false,playNow='',titleEdit=null;
 let cfgSrc='root',cfgPath='/';
 let tab='live',setupScanned=false,lastName='dmxwhip',streamLive=false,playHold=false;
@@ -527,7 +531,17 @@ function markPlaySel(){
     const key=rowKey(el.dataset.src,el.dataset.path);
     const on=playSel.has(key);
     const now=el.dataset.src==='file'&&playNow&&el.dataset.path===playNow;
-    el.className='playrow'+(on?' sel':'')+(now?' now':'');
+    const boot=el.dataset.src===bootSrc&&(bootSrc==='root'||el.dataset.path===bootPath);
+    el.className='playrow'+(on?' sel':'')+(now?' now':'')+(boot?' boot':'');
+    let badge=el.querySelector('.playboot');
+    if(boot){
+      if(!badge){
+        badge=document.createElement('span');
+        badge.className='playboot';
+        badge.textContent='Startup';
+        el.appendChild(badge);
+      }
+    }else if(badge) badge.remove();
   }
 }
 function beginTitleEdit(el,path){
@@ -637,13 +651,21 @@ function renderPlayList(p){
   if(titleEdit) return;
   paintPlayList();
 }
+function startupLabel(){
+  if(bootSrc==='file') return fileTitle(bootPath);
+  if(bootSrc==='folder') return fileBase(bootPath)||bootPath;
+  return 'All looks';
+}
 function applyPlay(s){
   const p=s.play;
-  if(!p){playnowEl.textContent='Now stopped';playNow='';playPaused=false;return;}
+  if(!p){playnowEl.textContent='Now stopped';playNow='';playPaused=false;if(bootnowEl) bootnowEl.textContent='Startup All looks';return;}
   playNow=p.now||'';
   playPaused=!!p.paused;
   cfgSrc=p.src||'root';
   cfgPath=p.path||'/';
+  const b=p.boot||{};
+  bootSrc=b.src||p.src||'root';
+  bootPath=b.path||(bootSrc==='root'?'/':(p.path||'/'));
   if(!playDirty){
     playSrc=p.src||'root';
     playPath=p.path||'/';
@@ -655,6 +677,7 @@ function applyPlay(s){
   }
   showPlayOpts();
   renderPlayList(p);
+  if(bootnowEl) bootnowEl.textContent='Startup '+startupLabel();
   if(playPaused&&p.now) playnowEl.textContent='Paused '+fileTitle(p.now);
   else playnowEl.textContent=p.now?'Now '+fileTitle(p.now):'Now stopped';
 }
@@ -1384,6 +1407,17 @@ document.getElementById('play').onclick=()=>{
     return;
   }
   postPlay();
+};
+document.getElementById('setStartup').onclick=()=>{
+  const n=parsePlayN();
+  foldernEl.value=String(n);
+  postForm('/play',{
+    action:'startup',src:playSrc,path:playPath,
+    file_loop:fileloopEl.value,folder_rep:folderrepEl.value,n:String(n)
+  }).then(async r=>{
+    if(!r.ok) throw new Error('http');
+    applyMeta(await r.json());
+  }).catch(dropHint);
 };
 document.getElementById('toStream').onclick=()=>postForm('/play',{action:'live'}).then(async r=>applyPlayPost(r)).catch(dropHint);
 document.getElementById('pause').onclick=()=>postForm('/play',{action:'pause'}).then(async r=>applyPlayPost(r)).catch(dropHint);

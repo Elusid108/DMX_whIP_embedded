@@ -56,6 +56,11 @@ public:
   // True when t_ms falls inside the frames already queued.
   static bool cueQueued(uint32_t t_ms);
 
+  // True when a tick should binary-seek. False when the reader is already
+  // near t_ms or a seek is in progress. Play and Seek skip this and call
+  // nudgeCue directly.
+  static bool cueNeedsSeek(uint32_t t_ms);
+
   static bool hasFile();
   static bool parked();
   static bool userPaused();
