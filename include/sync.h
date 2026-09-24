@@ -110,6 +110,9 @@ public:
 
   static void onPlayFile(const char *path);
   static void noteLocalTrigger();
+  // Folder or playlist advanced into a file on this node. A grouped clip
+  // conducts; a cue takeover or a return to the previous show does not.
+  static void notePlaylistAdvance();
   static void noteLocalPause();
   static void noteAutoStart();
   // Drop master/follow so a live stream can own the LEDs. Ignore cues until

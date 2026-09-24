@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.30.0</title>
+<title>dmxwhip v0.30.2</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -259,7 +259,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.30.0</p>
+<p id="ver" class="readout">dmxwhip v0.30.2</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');

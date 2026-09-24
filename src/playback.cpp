@@ -682,6 +682,7 @@ static bool advancePlaylist() {
     const uint8_t idx = static_cast<uint8_t>((i + k) % n);
     if (bindIndex(idx)) {
       LOG_V("play", "next %s", s_path);
+      Sync::notePlaylistAdvance();
       return true;
     }
   }
@@ -1147,15 +1148,11 @@ bool Playback::cueNeedsSeek(uint32_t t_ms) {
   }
   if (s_count > 0) {
     const uint32_t oldest = s_ring[s_tail].t_us / 1000u;
-    const uint8_t newestI =
-        static_cast<uint8_t>((s_head + kPlayRingSlots - 1) % kPlayRingSlots);
-    const uint32_t newest = s_ring[newestI].t_us / 1000u;
     unlockPlay();
+    // A tick ahead of the queue must not wipe it. The reader catches up.
+    // Rewind (loop back to 0) still seeks.
     if (t_ms < oldest) {
       return !nearMs(t_ms, oldest);
-    }
-    if (t_ms > newest) {
-      return !nearMs(t_ms, newest);
     }
     return false;
   }
@@ -1163,13 +1160,16 @@ bool Playback::cueNeedsSeek(uint32_t t_ms) {
   const uint32_t shown = s_tUs / 1000u;
   const bool haveShown = landed != 0xFFFFFFFFu || s_tUs != 0 || s_matchedPass > 0;
   unlockPlay();
-  if (landed != 0xFFFFFFFFu && nearMs(t_ms, landed)) {
-    return false;
+  if (landed != 0xFFFFFFFFu && t_ms < landed && !nearMs(t_ms, landed)) {
+    return true;
   }
-  if (haveShown && nearMs(t_ms, shown)) {
-    return false;
+  if (haveShown && t_ms < shown && !nearMs(t_ms, shown)) {
+    return true;
   }
-  return true;
+  if (landed == 0xFFFFFFFFu && !haveShown) {
+    return true;
+  }
+  return false;
 }
 
 bool Playback::cueQueued(uint32_t t_ms) {

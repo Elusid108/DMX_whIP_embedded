@@ -971,6 +971,31 @@ void Sync::onPlayFile(const char *path) {
   LOG_V("sync", "group %s listen", s_group);
 }
 
+void Sync::notePlaylistAdvance() {
+  if (s_follow || s_takeoverOn || s_restoring) {
+    return;
+  }
+  if (!s_group[0] || s_memberN < 2) {
+    return;
+  }
+  clearSnap();
+  s_releaseLive = false;
+  s_releaseSticky = false;
+  s_pendingLocal = false;
+  s_master = true;
+  s_waitMaster = false;
+  s_pendingHash = s_groupHash;
+  s_cueBind = false;
+  LOG_V("sync", "group %s local master", s_group);
+  if (Playback::available() > 0) {
+    s_armMasterPlay = false;
+    startPlayBurst();
+    return;
+  }
+  s_armMasterPlay = true;
+  s_playBurstLeft = 0;
+}
+
 void Sync::noteLocalTrigger() {
   clearSnap();
   s_releaseLive = false;

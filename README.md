@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.30.0**
+Version: **0.30.2**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -256,6 +256,8 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.30.2** — A folder that reaches a grouped clip conducts the other nodes, then they return to the show they were on when that clip ends. Removed the temporary sync debug lines
+- **0.30.1** — Grouped followers seek once to join a show, then keep reading forward. A tick that is only ahead of the frames already read no longer restarts the SD search
 - **0.30.0** — Playback **Set startup** saves the boot file or folder (`play.boot`, `POST /play` `action=startup`). Play no longer changes that playlist. Grouped followers seek on play/seek and on a large time gap, and keep reading forward across ticks
 - **0.29.0** — A grouped launch with Sync takeover on starts every other node on the live frame, including after Stop or Stream. Followers correct when the cue time is outside the frames already queued.
 - **0.28.0** — Setup Sync takeover (default Yes). Yes joins a split clip launched on another node without saving the playlist, then returns to the previous show when that group's cues stop. No stays on this node's show.
