@@ -771,6 +771,9 @@ static bool bindPath(const char *path) {
 }
 
 static bool tryBindPlaylist() {
+  if (PlayCfg::src() == PlaySrc::None) {
+    return false;
+  }
   if (!SdInfo::ok() || s_exhausted) {
     return false;
   }

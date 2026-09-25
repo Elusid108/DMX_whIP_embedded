@@ -52,7 +52,7 @@ static bool fill(Sel &dst, PlaySrc src, const char *path, PlayFileLoop fileLoop,
     return false;
   }
   const char *usePath = path;
-  if (src == PlaySrc::Root) {
+  if (src == PlaySrc::Root || src == PlaySrc::None) {
     usePath = "/";
   } else if (!validPath(usePath)) {
     return false;
@@ -71,6 +71,8 @@ static const char *srcNameOf(PlaySrc src) {
     return "file";
   case PlaySrc::Folder:
     return "folder";
+  case PlaySrc::None:
+    return "none";
   case PlaySrc::Root:
   default:
     return "root";
@@ -96,7 +98,8 @@ static void loadNvs() {
   }
   PlaySrc src = PlaySrc::Root;
   const uint8_t srcRaw = prefs.getUChar("src", 0);
-  if (srcRaw <= static_cast<uint8_t>(PlaySrc::Folder)) {
+  if (srcRaw == static_cast<uint8_t>(PlaySrc::None) ||
+      srcRaw <= static_cast<uint8_t>(PlaySrc::Folder)) {
     src = static_cast<PlaySrc>(srcRaw);
   }
   char path[kSdPathLen] = {};

@@ -422,14 +422,13 @@ static void startAp() {
 #if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
   setRadioBand(WIFI_BAND_MODE_2G_ONLY);
 #endif
-  WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAPConfig(kApIp, kApIp, kApMask)) {
-    LOG_C("ap", "softAPConfig failed");
-  }
   if (!WiFi.softAP(kApSsid, kApPass)) {
     LOG_C("ap", "softAP failed");
     s_apFailMs = millis();
     return;
+  }
+  if (!WiFi.softAPConfig(kApIp, kApIp, kApMask)) {
+    LOG_C("ap", "softAPConfig failed");
   }
   s_apFailMs = 0;
   s_dns.setTTL(0);
@@ -450,7 +449,7 @@ static void stopAp() {
     return;
   }
   s_dns.stop();
-  WiFi.softAPdisconnect(false);
+  WiFi.softAPdisconnect(true);
   s_apUp = false;
   LOG_V("ap", "down (sta)");
 }
@@ -2196,6 +2195,15 @@ static void handlePlay() {
   const String srcArg = s_server.arg("src");
   const String actionArg = s_server.arg("action");
   if (actionArg == "startup") {
+    if (srcArg == "none") {
+      if (!PlayCfg::setStartup(PlaySrc::None, "/", PlayFileLoop::All,
+                               PlayFolderRep::Forever, 1)) {
+        sendJson(400, "{\"error\":\"bad play\"}");
+        return;
+      }
+      sendStatus(200);
+      return;
+    }
     PlaySrc src = PlaySrc::Root;
     String path;
     PlayFileLoop fileLoop = PlayFileLoop::All;
@@ -2571,7 +2579,7 @@ void WifiSetup::begin() {
   phy_bbpll_en_usb(true);
 #endif
   WiFi.persistent(false);
-  WiFi.mode(WIFI_AP_STA);
+  WiFi.mode(WIFI_STA);
 #if CONFIG_IDF_TARGET_ESP32C5
   phy_bbpll_en_usb(true);
 #endif

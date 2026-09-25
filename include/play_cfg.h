@@ -4,7 +4,7 @@
 
 #include "sd_info.h"
 
-enum class PlaySrc : uint8_t { Root = 0, File = 1, Folder = 2 };
+enum class PlaySrc : uint8_t { Root = 0, File = 1, Folder = 2, None = 3 };
 enum class PlayFileLoop : uint8_t { One = 0, All = 1 };
 enum class PlayFolderRep : uint8_t { Forever = 0, Count = 1 };
 

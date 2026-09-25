@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.30.2</title>
+<title>dmxwhip v0.31.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -187,7 +187,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 </div>
 <div id="viewPlay">
-<p class="hint">Idle plays the startup clip. A live stream takes over. Play asks before overriding a stream.</p>
+<p class="hint">Idle plays the startup clip, if one is set. A live stream takes over. Play asks before overriding a stream.</p>
 <div id="plist"></div>
 <p class="readout" id="playnow"></p>
 <div class="row transport">
@@ -205,7 +205,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div id="foldernrow"><label class="lab" for="foldern">Times</label>
 <input id="foldern" type="number" min="1" max="99" value="1" inputmode="numeric"></div></div>
 <p class="readout" id="bootnow"></p>
-<div class="row"><button id="setStartup" type="button">Set startup</button></div>
+<div class="row"><button id="setStartup" type="button">Set startup</button><button id="clearStartup" type="button">Clear startup</button></div>
 </div>
 <div id="viewPixels">
 <p class="hint">Each row is a fixture. Same data GPIO chains under the parent (top of the group is first on the wire). Save writes the map and applies it. Brightness applies immediately.</p>
@@ -259,7 +259,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.30.2</p>
+<p id="ver" class="readout">dmxwhip v0.31.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -652,6 +652,7 @@ function renderPlayList(p){
   paintPlayList();
 }
 function startupLabel(){
+  if(bootSrc==='none') return 'none';
   if(bootSrc==='file') return fileTitle(bootPath);
   if(bootSrc==='folder') return fileBase(bootPath)||bootPath;
   return 'All looks';
@@ -1415,6 +1416,12 @@ document.getElementById('setStartup').onclick=()=>{
     action:'startup',src:playSrc,path:playPath,
     file_loop:fileloopEl.value,folder_rep:folderrepEl.value,n:String(n)
   }).then(async r=>{
+    if(!r.ok) throw new Error('http');
+    applyMeta(await r.json());
+  }).catch(dropHint);
+};
+document.getElementById('clearStartup').onclick=()=>{
+  postForm('/play',{action:'startup',src:'none'}).then(async r=>{
     if(!r.ok) throw new Error('http');
     applyMeta(await r.json());
   }).catch(dropHint);
