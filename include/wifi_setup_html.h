@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.31.0</title>
+<title>dmxwhip v0.32.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -77,7 +77,8 @@ body.editing #nameView{display:none}
 .net.now,.playrow.now{border-color:#86efac66}
 .playrow .playname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .playrow .playfile{flex:0 1 auto;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,monospace;font-size:11px;color:var(--muted)}
-.playrow .playboot{flex:0 0 auto;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)}
+.playrow .playboot,.playrow .playrole{flex:0 0 auto;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--accent)}
+.playrow .playmark{flex:0 0 auto;font-size:10px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
 .playrow .chev{width:1.15rem;flex:0 0 auto;padding:0;margin:0;border:0;background:transparent;color:var(--muted);font-size:.7rem;line-height:1}
 .playrow input{flex:1;min-width:0;width:auto;padding:2px 6px;margin:0;font-size:.85rem}
 .transport{justify-content:center;align-items:center}
@@ -255,11 +256,14 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="takeover">Sync takeover</label>
 <select id="takeover"><option value="yes" selected>Yes</option><option value="no">No</option></select>
 <p class="hint">Yes joins a split clip launched on another node, then returns here. No stays on this show.</p>
+<label class="lab" for="unisync">Uni-Sync</label>
+<select id="unisync"><option value="no" selected>No</option><option value="yes">Yes</option></select>
+<p class="hint">Yes plays a copied clip together when another node launches it. No ignores those copies and does not send them.</p>
 <div class="row">
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.31.0</p>
+<p id="ver" class="readout">dmxwhip v0.32.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -280,6 +284,7 @@ const fpsEl=document.getElementById('fps');
 const bufEl=document.getElementById('buf');
 const parkEl=document.getElementById('park');
 const takeoverEl=document.getElementById('takeover');
+const unisyncEl=document.getElementById('unisync');
 const bandEl=document.getElementById('band');
 const bandRow=document.getElementById('bandrow');
 const setupHint=document.getElementById('setupHint');
@@ -428,7 +433,7 @@ let pollTimer=0,briTimer=0,liveTimer=0,mapTimer=0,mapSaveNoteTimer=0;
 let briDirty=false,liveDirty=false,playDirty=false,nameDirty=false,mapDirty=false,bandDirty=false,scanning=false;
 let lastNets=[],credsFilled=false,liveSsid='',liveLink='',selBssid='',selCh=0;
 let patchSavePending=false;
-let playSrc='root',playPath='/',bootSrc='root',bootPath='/',playListKey='',lastFiles=[],lastTitles=[],lastDirs=[];
+let playSrc='root',playPath='/',bootSrc='root',bootPath='/',playListKey='',lastFiles=[],lastTitles=[],lastMarks=[],lastDirs=[],syncMaster=false,syncFollow=false;
 let playSel=new Set(['root\t/']),playAnchor='root\t/',playCollapsed={},playPaused=false,playNow='',titleEdit=null;
 let cfgSrc='root',cfgPath='/';
 let tab='live',setupScanned=false,lastName='dmxwhip',streamLive=false,playHold=false;
@@ -628,7 +633,16 @@ function paintPlayList(){
         paintPlayList();
       };
     }else if(r.src==='file'){
-      d.innerHTML='<span class="playname">'+escapeHtml(fileTitle(r.path))+'</span><span class="playfile">'+escapeHtml(fileBase(r.path))+'</span>';
+      const mi=lastFiles.indexOf(r.path);
+      const mk=(mi>=0&&lastMarks[mi])||'';
+      let badges='';
+      if(mk==='split') badges+='<span class="playmark">Split</span>';
+      else if(mk==='uni') badges+='<span class="playmark">Copy</span>';
+      if(playNow&&r.path===playNow){
+        if(syncFollow) badges+='<span class="playrole">Slave</span>';
+        else if(syncMaster) badges+='<span class="playrole">Master</span>';
+      }
+      d.innerHTML='<span class="playname">'+escapeHtml(fileTitle(r.path))+'</span><span class="playfile">'+escapeHtml(fileBase(r.path))+'</span>'+badges;
     }else{
       d.innerHTML='<span class="playname">All looks</span>';
     }
@@ -647,6 +661,7 @@ function renderPlayList(p){
   lastFiles=p.files||[];
   lastDirs=p.dirs||[];
   lastTitles=p.titles||[];
+  lastMarks=p.marks||[];
   playListKey=lastFiles.join('\n')+'|'+lastDirs.join('\n')+'|'+lastTitles.join('\n');
   if(titleEdit) return;
   paintPlayList();
@@ -664,6 +679,9 @@ function applyPlay(s){
   playPaused=!!p.paused;
   cfgSrc=p.src||'root';
   cfgPath=p.path||'/';
+  const sy=p.sync||{};
+  syncMaster=!!sy.master;
+  syncFollow=!!sy.follow;
   const b=p.boot||{};
   bootSrc=b.src||p.src||'root';
   bootPath=b.path||(bootSrc==='root'?'/':(p.path||'/'));
@@ -688,6 +706,7 @@ function applyLive(s){
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
   if(s.park) parkEl.value=s.park;
   if(takeoverEl&&s.takeover) takeoverEl.value=s.takeover;
+  if(unisyncEl&&s.unisync) unisyncEl.value=s.unisync;
 }
 function linkLabel(v){
   if(v==='5g') return '5 GHz';
@@ -1050,7 +1069,7 @@ function postBand(){
     .catch(()=>{bandDirty=false;dropHint();});
 }
 function postLive(){
-  return postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value,takeover:takeoverEl?takeoverEl.value:'yes'})
+  return postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value,takeover:takeoverEl?takeoverEl.value:'yes',unisync:unisyncEl?unisyncEl.value:'no'})
     .then(async r=>{if(!r.ok) throw new Error('http');liveDirty=false;applyMeta(await r.json());})
     .catch(dropHint);
 }
@@ -1367,6 +1386,7 @@ fpsEl.onchange=markSetupDirty;
 bufEl.onchange=markSetupDirty;
 parkEl.onchange=markSetupDirty;
 if(takeoverEl) takeoverEl.onchange=markSetupDirty;
+if(unisyncEl) unisyncEl.onchange=markSetupDirty;
 if(bandEl) bandEl.onchange=()=>{
   markSetupDirty();
   renderNets();

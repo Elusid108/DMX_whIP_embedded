@@ -12,10 +12,12 @@ public:
   static uint8_t buf();
   static bool park();
   static bool takeover();
+  static bool uniSync();
   static uint32_t showIntervalMs();
   static const char *protoName();
   static const char *parkName();
   static const char *takeoverName();
+  static const char *uniSyncName();
   static bool set(LiveProto proto, uint8_t fps, uint8_t buf, bool park,
-                  bool takeover, bool save);
+                  bool takeover, bool uniSync, bool save);
 };

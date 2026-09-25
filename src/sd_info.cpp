@@ -35,6 +35,7 @@ static uint8_t s_nFiles = 0;
 static uint8_t s_nDirs = 0;
 static char s_files[kSdMaxListFiles][kSdPathLen];
 static char s_titles[kSdMaxListFiles][kSdTitleLen];
+static uint8_t s_marks[kSdMaxListFiles];
 static char s_dirs[kSdMaxListDirs][kSdPathLen];
 
 static char s_pend[kSdMaxListDirs + 1][kSdPathLen];
@@ -332,9 +333,10 @@ static bool extractJsonString(const char *buf, const char *key, char *out,
 static void loadTitlesLocked() {
   for (uint8_t i = 0; i < kSdMaxListFiles; ++i) {
     s_titles[i][0] = '\0';
+    s_marks[i] = 0;
   }
   char side[kSdPathLen];
-  char buf[512];
+  char buf[768];
   for (uint8_t i = 0; i < s_nFiles; ++i) {
     if (!sidecarPath(s_files[i], side, sizeof(side))) {
       continue;
@@ -350,6 +352,17 @@ static void loadTitlesLocked() {
     }
     buf[n] = '\0';
     extractJsonString(buf, "name", s_titles[i], kSdTitleLen);
+    char group[40];
+    if (!extractJsonString(buf, "group", group, sizeof(group))) {
+      continue;
+    }
+    char kind[8];
+    if (extractJsonString(buf, "kind", kind, sizeof(kind)) &&
+        strcmp(kind, "uni") == 0) {
+      s_marks[i] = 2;
+    } else {
+      s_marks[i] = 1;
+    }
   }
 }
 
@@ -358,6 +371,7 @@ static void clearTree() {
   s_nDirs = 0;
   for (uint8_t i = 0; i < kSdMaxListFiles; ++i) {
     s_titles[i][0] = '\0';
+    s_marks[i] = 0;
   }
 }
 
@@ -617,6 +631,19 @@ const char *SdInfo::fileAt(uint8_t i) {
 
 const char *SdInfo::titleAt(uint8_t i) {
   return i < s_nFiles ? s_titles[i] : "";
+}
+
+const char *SdInfo::markAt(uint8_t i) {
+  if (i >= s_nFiles) {
+    return "";
+  }
+  if (s_marks[i] == 2) {
+    return "uni";
+  }
+  if (s_marks[i] == 1) {
+    return "split";
+  }
+  return "";
 }
 
 uint8_t SdInfo::dirCount() { return s_nDirs; }

@@ -17,6 +17,7 @@ static uint8_t s_fps = kFpsDefault;
 static uint8_t s_buf = kBufDefault;
 static bool s_park = true;
 static bool s_takeover = true;
+static bool s_uni = false;
 static bool s_loaded = false;
 
 static bool validFps(uint8_t fps) {
@@ -46,6 +47,7 @@ static void loadNvs() {
   }
   s_park = prefs.getUChar("park", 1) != 0;
   s_takeover = prefs.getUChar("take", 1) != 0;
+  s_uni = prefs.getUChar("uni", 0) != 0;
   prefs.end();
 }
 
@@ -60,6 +62,7 @@ static void saveNvs() {
   prefs.putUChar("buf", s_buf);
   prefs.putUChar("park", s_park ? 1 : 0);
   prefs.putUChar("take", s_takeover ? 1 : 0);
+  prefs.putUChar("uni", s_uni ? 1 : 0);
   prefs.end();
 }
 
@@ -67,8 +70,8 @@ static void saveNvs() {
 
 void LiveCfg::begin() {
   loadNvs();
-  LOG_V("live", "cfg proto=%s fps=%u buf=%u park=%s takeover=%s", protoName(),
-        s_fps, s_buf, parkName(), takeoverName());
+  LOG_V("live", "cfg proto=%s fps=%u buf=%u park=%s takeover=%s unisync=%s",
+        protoName(), s_fps, s_buf, parkName(), takeoverName(), uniSyncName());
 }
 
 LiveProto LiveCfg::proto() {
@@ -94,6 +97,11 @@ bool LiveCfg::park() {
 bool LiveCfg::takeover() {
   loadNvs();
   return s_takeover;
+}
+
+bool LiveCfg::uniSync() {
+  loadNvs();
+  return s_uni;
 }
 
 uint32_t LiveCfg::showIntervalMs() {
@@ -124,8 +132,13 @@ const char *LiveCfg::takeoverName() {
   return s_takeover ? "yes" : "no";
 }
 
+const char *LiveCfg::uniSyncName() {
+  loadNvs();
+  return s_uni ? "yes" : "no";
+}
+
 bool LiveCfg::set(LiveProto proto, uint8_t fps, uint8_t buf, bool park,
-                  bool takeover, bool save) {
+                  bool takeover, bool uniSync, bool save) {
   if (!validFps(fps) || buf > 3) {
     return false;
   }
@@ -133,12 +146,13 @@ bool LiveCfg::set(LiveProto proto, uint8_t fps, uint8_t buf, bool park,
   const bool protoChanged = proto != s_proto;
   const bool liveChanged =
       protoChanged || fps != s_fps || buf != s_buf || park != s_park;
-  const bool changed = liveChanged || takeover != s_takeover;
+  const bool changed = liveChanged || takeover != s_takeover || uniSync != s_uni;
   s_proto = proto;
   s_fps = fps;
   s_buf = buf;
   s_park = park;
   s_takeover = takeover;
+  s_uni = uniSync;
   if (save) {
     saveNvs();
   }
@@ -146,8 +160,8 @@ bool LiveCfg::set(LiveProto proto, uint8_t fps, uint8_t buf, bool park,
     PixelMap::setAllProtos(static_cast<SegProto>(proto), save);
   }
   if (changed) {
-    LOG_V("live", "cfg proto=%s fps=%u buf=%u park=%s takeover=%s", protoName(),
-          s_fps, s_buf, parkName(), takeoverName());
+    LOG_V("live", "cfg proto=%s fps=%u buf=%u park=%s takeover=%s unisync=%s",
+          protoName(), s_fps, s_buf, parkName(), takeoverName(), uniSyncName());
   }
   if (liveChanged) {
     LiveInput::applyCfg();

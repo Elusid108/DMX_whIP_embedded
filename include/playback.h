@@ -34,6 +34,8 @@ public:
   static void userResume();
   static void setLoop(bool on);
   static void reload();
+  // Master heard a slave leave the show. This file loops: park. Otherwise next.
+  static void releaseFromSync();
 
   // Playback hold: the file wins over a live stream until Stop, the Live
   // page Stream action, or the playlist has no next file.

@@ -34,7 +34,8 @@
 //   8       4     t_ms    show-relative milliseconds (DMXREC t_ms)
 //   12      4     frame   0-based DMXREC file record index
 //
-// Opcodes: Play=1 Pause=2 Seek=3 Tick=4.
+// Opcodes: Play=1 Pause=2 Seek=3 Tick=4 Release=5.
+// kCueFlagUni marks a copied clip (Uni-Sync). Split cues leave that bit clear.
 // Play/Seek/Tick with time or frame set the target; Play also rolls transport;
 // Pause freezes (optional time/frame still seeks). Tick is a silent metronome.
 
@@ -57,9 +58,11 @@ static constexpr uint8_t kCueOpPlay = 1;
 static constexpr uint8_t kCueOpPause = 2;
 static constexpr uint8_t kCueOpSeek = 3;
 static constexpr uint8_t kCueOpTick = 4;
+static constexpr uint8_t kCueOpRelease = 5;
 
 static constexpr uint8_t kCueFlagHasTime = 1u << 0;
 static constexpr uint8_t kCueFlagHasFrame = 1u << 1;
+static constexpr uint8_t kCueFlagUni = 1u << 2;
 
 static constexpr uint32_t kLiveSyncHoldMs = 2000;
 static constexpr uint32_t kCueHoldMs = 4000;
@@ -110,6 +113,8 @@ public:
 
   static void onPlayFile(const char *path);
   static void noteLocalTrigger();
+  // This board is following. Tell the group to leave. Local show restores.
+  static void noteSlaveLeave();
   // Folder or playlist advanced into a file on this node. A grouped clip
   // conducts; a cue takeover or a return to the previous show does not.
   static void notePlaylistAdvance();

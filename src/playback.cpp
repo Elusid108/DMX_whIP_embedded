@@ -63,6 +63,7 @@ static bool s_underrun = false;
 static bool s_begun = false;
 static bool s_exhausted = false;
 static bool s_reload = false;
+static volatile bool s_syncRelease = false;
 static bool s_loggedNoFile = false;
 static bool s_loggedLoop = false;
 static bool s_loggedNoMatch = false;
@@ -902,6 +903,21 @@ static void playbackTask(void *) {
       continue;
     }
 
+    lockPlay();
+    const bool syncRelease = s_syncRelease;
+    if (syncRelease) {
+      s_syncRelease = false;
+    }
+    unlockPlay();
+    if (syncRelease) {
+      if (PlayCfg::fileLoop() == PlayFileLoop::One) {
+        Playback::park();
+      } else if (!advancePlaylist()) {
+        Playback::park();
+      }
+      continue;
+    }
+
     if (!run || !has) {
       closeFile();
       vTaskDelay(pdMS_TO_TICKS(50));
@@ -1228,6 +1244,12 @@ void Playback::userResume() {
 void Playback::setLoop(bool on) {
   lockPlay();
   s_loop = on;
+  unlockPlay();
+}
+
+void Playback::releaseFromSync() {
+  lockPlay();
+  s_syncRelease = true;
   unlockPlay();
 }
 

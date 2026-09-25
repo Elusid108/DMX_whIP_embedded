@@ -35,6 +35,8 @@ public:
   static uint8_t fileCount();
   static const char *fileAt(uint8_t i);
   static const char *titleAt(uint8_t i);
+  // "" , "split", or "uni". Parallel to fileAt. Missing kind on a group is split.
+  static const char *markAt(uint8_t i);
   static uint8_t dirCount();
   static const char *dirAt(uint8_t i);
 

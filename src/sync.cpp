@@ -53,6 +53,7 @@ static constexpr uint32_t kSyncMacLen = 18;
 static constexpr uint32_t kSyncGroupLen = 40;
 
 static char s_group[kSyncGroupLen];
+static bool s_groupUni = false;
 static uint32_t s_groupHash = 0;
 static uint8_t s_memberN = 0;
 static char s_memberName[kSyncMaxMembers][kSyncNameLen];
@@ -200,6 +201,7 @@ static void parseMembers(const char *buf) {
 static void clearGroup() {
   s_group[0] = '\0';
   s_groupHash = 0;
+  s_groupUni = false;
   s_memberN = 0;
   s_master = false;
   s_waitMaster = false;
@@ -522,6 +524,8 @@ static const char *opName(uint8_t op) {
     return "seek";
   case kCueOpTick:
     return "tick";
+  case kCueOpRelease:
+    return "release";
   default:
     return "op";
   }
@@ -557,6 +561,9 @@ static void emitCue(uint8_t op, bool hasTime, bool hasFrame, uint32_t t_ms,
   }
   if (hasFrame) {
     flags |= kCueFlagHasFrame;
+  }
+  if (s_groupUni) {
+    flags |= kCueFlagUni;
   }
   pkt[6] = flags;
   memcpy(pkt + 8, &t_ms, 4);
@@ -665,6 +672,11 @@ static void parseCue(int n, const IPAddress &from) {
   if (!magicOk(s_pkt)) {
     return;
   }
+  const uint8_t opEarly = s_pkt[5];
+  const bool uniPkt = (s_pkt[6] & kCueFlagUni) != 0;
+  if (uniPkt && !LiveCfg::uniSync() && opEarly != kCueOpRelease) {
+    return;
+  }
   const uint8_t ver = s_pkt[4];
   uint32_t group = 0;
   if (ver == kCueVersion2) {
@@ -676,6 +688,23 @@ static void parseCue(int n, const IPAddress &from) {
     memcpy(&t_ms, s_pkt + 8, 4);
     const bool foreign = group != s_groupHash && group != s_pendingHash;
     const uint8_t op = s_pkt[5];
+    if (op == kCueOpRelease) {
+      if (group != s_groupHash && group != s_pendingHash) {
+        return;
+      }
+      if (s_master && !s_follow) {
+        s_master = false;
+        s_waitMaster = false;
+        s_playBurstLeft = 0;
+        s_armMasterPlay = false;
+        Playback::releaseFromSync();
+        LOG_V("sync", "release master");
+      } else if (s_follow || s_takeoverOn) {
+        leaveFollow();
+        LOG_V("sync", "release follow");
+      }
+      return;
+    }
     if (s_releaseLive) {
       const bool join = LiveCfg::takeover() && foreign &&
                         (op == kCueOpPlay || op == kCueOpTick);
@@ -940,9 +969,14 @@ void Sync::onPlayFile(const char *path) {
     s_group[0] = '\0';
   }
   parseMembers(buf);
-  if (!s_group[0] || s_memberN < 2) {
+  char kind[8] = {};
+  if (extractJsonString(buf, "kind", kind, sizeof(kind))) {
+    s_groupUni = strcmp(kind, "uni") == 0;
+  }
+  if (!s_group[0] || s_memberN < 2 || (s_groupUni && !LiveCfg::uniSync())) {
     s_group[0] = '\0';
     s_groupHash = 0;
+    s_groupUni = false;
     s_pendingHash = 0;
     s_memberN = 0;
     if (keepMaster) {
@@ -994,6 +1028,15 @@ void Sync::notePlaylistAdvance() {
   }
   s_armMasterPlay = true;
   s_playBurstLeft = 0;
+}
+
+void Sync::noteSlaveLeave() {
+  if (!s_follow) {
+    return;
+  }
+  emitCue(kCueOpRelease, false, false, 0, 0);
+  leaveFollow();
+  LOG_V("sync", "slave leave");
 }
 
 void Sync::noteLocalTrigger() {

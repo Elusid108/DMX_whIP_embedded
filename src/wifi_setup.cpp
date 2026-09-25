@@ -746,6 +746,8 @@ static void sendStatus(int code) {
   jsonEscape(out, String(LiveCfg::parkName()));
   out += ",\"takeover\":";
   jsonEscape(out, String(LiveCfg::takeoverName()));
+  out += ",\"unisync\":";
+  jsonEscape(out, String(LiveCfg::uniSyncName()));
   out += ',';
   appendWifiBand(out);
   out += ",\"live\":";
@@ -789,6 +791,13 @@ static void sendStatus(int code) {
       out += ',';
     }
     jsonEscape(out, String(SdInfo::titleAt(i)));
+  }
+  out += "],\"marks\":[";
+  for (uint8_t i = 0; i < SdInfo::fileCount(); ++i) {
+    if (i) {
+      out += ',';
+    }
+    jsonEscape(out, String(SdInfo::markAt(i)));
   }
   out += "],\"dirs\":[";
   for (uint8_t i = 0; i < SdInfo::dirCount(); ++i) {
@@ -948,6 +957,8 @@ static void sendStats() {
   jsonEscape(out, String(LiveCfg::parkName()));
   out += ",\"takeover\":";
   jsonEscape(out, String(LiveCfg::takeoverName()));
+  out += ",\"unisync\":";
+  jsonEscape(out, String(LiveCfg::uniSyncName()));
   out += ',';
   appendWifiBand(out);
   out += ",\"live\":";
@@ -1443,7 +1454,20 @@ static void handleLive() {
     }
   }
 
-  if (!LiveCfg::set(proto, fps, buf, park, takeover, true)) {
+  bool uniSync = LiveCfg::uniSync();
+  if (s_server.hasArg("unisync")) {
+    const String uniArg = s_server.arg("unisync");
+    if (uniArg == "yes") {
+      uniSync = true;
+    } else if (uniArg == "no") {
+      uniSync = false;
+    } else {
+      sendJson(400, "{\"error\":\"bad unisync\"}");
+      return;
+    }
+  }
+
+  if (!LiveCfg::set(proto, fps, buf, park, takeover, uniSync, true)) {
     sendJson(400, "{\"error\":\"bad live\"}");
     return;
   }
@@ -1537,13 +1561,15 @@ static void jsonWriteEscaped(File &f, const char *s) {
 }
 
 static bool writeSidecarName(const char *dmx, const char *name,
-                             const char *group, const char *members) {
+                             const char *group, const char *members,
+                             const char *kind) {
   char side[kSdPathLen];
   if (!sidecarPath(dmx, side, sizeof(side))) {
     return false;
   }
   char keepGroup[40] = {};
   char keepMembers[512] = {};
+  char keepKind[8] = {};
   if ((!group || !group[0]) && SD.exists(side)) {
     File in = SD.open(side, FILE_READ);
     if (in) {
@@ -1576,11 +1602,30 @@ static bool writeSidecarName(const char *dmx, const char *name,
             keepMembers[e - b + 1] = '\0';
           }
         }
+        const char *k = strstr(buf, "\"kind\"");
+        if (k) {
+          const char *q = strchr(k + 6, '"');
+          if (q) {
+            q = strchr(q + 1, '"');
+            if (q) {
+              q++;
+              size_t i = 0;
+              while (*q && *q != '"' && i + 1 < sizeof(keepKind)) {
+                keepKind[i++] = *q++;
+              }
+              keepKind[i] = '\0';
+            }
+          }
+        }
       }
     }
   }
   const char *useGroup = (group && group[0]) ? group : keepGroup;
   const char *useMembers = (members && members[0]) ? members : keepMembers;
+  const char *useKind = (kind && kind[0]) ? kind : keepKind;
+  if (useKind[0] && strcmp(useKind, "uni") != 0 && strcmp(useKind, "split") != 0) {
+    useKind = "";
+  }
   if ((!name || !name[0]) && !useGroup[0]) {
     if (SD.exists(side)) {
       SD.remove(side);
@@ -1602,6 +1647,11 @@ static bool writeSidecarName(const char *dmx, const char *name,
     jsonWriteEscaped(f, useGroup);
     f.print("\",\"members\":");
     f.print(useMembers[0] ? useMembers : "[]");
+    if (useKind[0]) {
+      f.print(",\"kind\":\"");
+      jsonWriteEscaped(f, useKind);
+      f.print("\"");
+    }
     f.print("}");
   }
   f.print("}\n");
@@ -1878,6 +1928,7 @@ static void handleMeta() {
   sanitizeTitle(s_server.arg("name").c_str(), title, sizeof(title));
   const String groupArg = s_server.arg("sync_group");
   const String membersArg = s_server.arg("sync_members");
+  const String kindArg = s_server.arg("sync_kind");
   if (!SdInfo::lock(2000)) {
     sendJson(503, "{\"error\":\"busy\"}");
     return;
@@ -1888,7 +1939,7 @@ static void handleMeta() {
     return;
   }
   const bool ok = writeSidecarName(path.c_str(), title, groupArg.c_str(),
-                                   membersArg.c_str());
+                                   membersArg.c_str(), kindArg.c_str());
   SdInfo::unlock();
   if (!ok) {
     sendJson(500, "{\"error\":\"meta failed\"}");
@@ -2262,6 +2313,16 @@ static void handlePlay() {
   uint8_t n = 1;
   if (!readPlayForm(src, pathArg, fileLoop, folderRep, n)) {
     return;
+  }
+
+  if (Sync::cueFollow()) {
+    const bool sameFile = src == PlaySrc::File && Playback::path()[0] &&
+                          strcmp(Playback::path(), pathArg.c_str()) == 0;
+    if (!sameFile) {
+      Sync::noteSlaveLeave();
+      sendStatus(200);
+      return;
+    }
   }
 
   if (argOverride()) {
