@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.33.0</title>
+<title>dmxwhip v0.34.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -67,11 +67,12 @@ body.editing #nameView{display:none}
 .tabs button.on{color:var(--accent);border-bottom-color:var(--accent)}
 #viewLive,#viewPlay,#viewPixels,#viewSetup{flex:1 1 auto;min-height:0;display:none;flex-direction:column}
 #viewLive.on,#viewPlay.on,#viewPixels.on,#viewSetup.on{display:flex}
-#viewPixels{overflow-y:auto;-webkit-overflow-scrolling:touch}
+#viewPixels,#viewSetup{overflow-y:auto;-webkit-overflow-scrolling:touch}
 #viewLive{overflow:hidden}
 .lab{display:block;margin:8px 0 2px;font-size:10px;font-weight:500;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 .mod{margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
 #list,#plist{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:6px;margin:6px 0;padding:3px;background:var(--bg)}
+#list{flex:1 1 8rem;min-height:8rem}
 .net,.playrow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;margin:3px;background:var(--chrome);border:1px solid var(--border);border-radius:6px;cursor:pointer;user-select:none;-webkit-user-select:none}
 .net.sel,.playrow.sel{border-color:#22d3ee66;box-shadow:inset 2px 0 0 var(--accent)}
 .net.now,.playrow.now{border-color:#86efac66}
@@ -98,11 +99,15 @@ button{background:var(--chrome);border:1px solid var(--border);margin:6px 0 0;fo
 button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 #savedrow,#fileopts,#folderopts,#foldernrow,#note{display:none}
 #savedrow.on,#fileopts.on,#folderopts.on,#foldernrow.on,#note.on{display:block}
-.clkrow,.briwarn,.cntwarn{display:none}
-.clkrow.on,.briwarn.on,.cntwarn.on{display:block}
+.clkrow,.briwarn{display:none}
+.clkrow.on,.briwarn.on{display:block}
 .tog{display:flex;align-items:center;gap:8px;margin:8px 0 0}
 .tog input{width:auto;margin:0}
-.briwarn,.cntwarn{color:#f59e0b;font-size:.8rem;margin:4px 0 0}
+.briwarn{color:#f59e0b;font-size:.8rem;margin:4px 0 0}
+.testrow{display:flex;gap:6px;padding:0 10px 8px}
+.testrow button{flex:1;margin:0;padding:8px 4px;font-size:.75rem}
+.testrow button.on{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.testrow button:disabled{opacity:.4}
 #patchList{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .patch{border:1px solid var(--border);border-radius:8px;margin:0 0 8px;background:var(--chrome)}
 .patch.child{margin-left:14px;border-left:2px solid var(--accent)}
@@ -263,7 +268,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.33.0</p>
+<p id="ver" class="readout">dmxwhip v0.34.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -323,6 +328,9 @@ let patchCaps={max_out:8,max_seg:24,max_px:1024,gpio_max:48,panel_w:8,panel_h:8,
 let patch=[defaultSeg()];
 let openSeg=0;
 let patchKey='';
+let testModes=[];
+let testHold=0;
+let ledsOwned=false;
 function chipOpts(sel){
   let h='<optgroup label="Clockless">';
   CHIP_CLK.forEach(c=>{h+='<option value="'+c[0]+'"'+(sel===c[0]?' selected':'')+'>'+c[1]+'</option>';});
@@ -341,6 +349,11 @@ function parentOf(rows,i){
   return i;
 }
 function isChild(rows,i){return parentOf(rows,i)!==i;}
+function outputIndex(rows,i){
+  let n=0;
+  for(let k=0;k<i;k++) if(!isChild(rows,k)) n++;
+  return n;
+}
 function groupBounds(rows,i){
   const pin=rows[i].data;
   let a=i,b=i;
@@ -361,12 +374,6 @@ function unusedGpio(rows){
   for(let i=0;i<=max;i++) if(!used.has(i)) return i;
   return start;
 }
-function panelLabel(){
-  const n=patchCaps.panel_px,w=patchCaps.panel_w,h=patchCaps.panel_h;
-  if(w&&h) return n+' pixels ('+w+'×'+h+')';
-  return n+' pixels';
-}
-function cntWarnOn(count){return !!patchCaps.panel_px&&parseInt(count,10)!==patchCaps.panel_px;}
 function briWarnOn(v){return patchCaps.bri_warn>0&&v>patchCaps.bri_warn;}
 function briWarnText(){return 'This '+patchCaps.panel_w+'×'+patchCaps.panel_h+' can overheat above '+patchCaps.bri_warn+'.';}
 function segsFromStatus(s){
@@ -759,6 +766,8 @@ function applyChrome(s){
   modeEl.className='mode '+mode;
   if(modeLab) modeLab.textContent=mode;
   const streamOwns=streamLive&&!playHold;
+  ledsOwned=streamOwns;
+  document.querySelectorAll('.testrow button').forEach(b=>{b.disabled=ledsOwned;});
   const toStream=document.getElementById('toStream');
   if(toStream) toStream.className=playHold?'on':'';
   idBtn.disabled=streamOwns;
@@ -796,6 +805,19 @@ function applyPixels(s){
       renderPatch();
     }
   }
+  applyTests(s);
+}
+function applyTests(s){
+  if(!Array.isArray(s.outputs)) return;
+  if(Date.now()<testHold) return;
+  const next=s.outputs.map(o=>(o.test&&o.test!=='off')?o.test:'');
+  let same=next.length===testModes.length;
+  if(same){
+    for(let i=0;i<next.length;i++) if((testModes[i]||'')!==next[i]) same=false;
+  }
+  if(same) return;
+  testModes=next;
+  if(!mapDirty) renderPatch();
 }
 function applyStats(s){
   applyChrome(s);
@@ -1206,9 +1228,13 @@ function renderPatch(){
       ops+='<button type="button" data-a="seg">+</button>';
       if(patch.length>1) ops+='<button class="icon" type="button" data-a="del" aria-label="Delete">🗑</button>';
     }
+    const outIdx=child?-1:outputIndex(patch,i);
+    const testMode=outIdx>=0?(testModes[outIdx]||''):'';
+    const testBtn=(mode,label)=>'<button type="button" data-test="'+mode+'"'+(testMode===mode?' class="on"':'')+(ledsOwned?' disabled':'')+'>'+label+'</button>';
+    const testRow=child?'':'<div class="testrow">'+testBtn('rainbow','Rainbow')+testBtn('cycle','Cycle')+testBtn('ends','Ends')+'</div>';
     card.innerHTML=
       '<div class="patchhead"><b>'+escapeHtml(title)+'</b><div class="patchops">'+ops+
-      '</div></div><div class="patchbody"><div class="patchgrid">'+
+      '</div></div>'+testRow+'<div class="patchbody"><div class="patchgrid">'+
       '<div class="patchfield"><label class="lab">Protocol</label><select data-f="proto">'+
       '<option value="auto"'+(row.proto==='auto'?' selected':'')+'>Auto</option>'+
       '<option value="artnet"'+(row.proto==='artnet'?' selected':'')+'>Art-Net</option>'+
@@ -1220,7 +1246,6 @@ function renderPatch(){
       '<input data-f="clk" type="number" min="0" max="'+patchCaps.gpio_max+'" value="'+(row.clk==null?0:row.clk)+'" inputmode="numeric"'+locked+'></div>'+
       '<div class="patchfield'+(clocked?' span2':'')+'"><label class="lab">Pixels</label>'+
       '<input data-f="count" type="number" min="1" max="'+patchCaps.max_px+'" value="'+row.count+'" inputmode="numeric"></div>'+
-      '<p class="cntwarn span2'+(cntWarnOn(row.count)?' on':'')+'">This board’s panel is '+panelLabel()+'.</p>'+
       '<div class="patchfield"><label class="lab">Channels</label><div class="patchtogs">'+
       '<label class="tog"><input data-f="white" type="checkbox"'+(row.white?' checked':'')+'> White</label>'+
       '<label class="tog"><input data-f="cct" type="checkbox"'+(row.cct?' checked':'')+'> CCT</label></div></div>'+
@@ -1249,6 +1274,24 @@ function renderPatch(){
         else if(a==='up') moveSeg(i,-1);
         else if(a==='down') moveSeg(i,1);
         else if(a==='del') removeSeg(i);
+      };
+    });
+    card.querySelectorAll('.testrow button').forEach(btn=>{
+      btn.onclick=e=>{
+        e.stopPropagation();
+        if(ledsOwned||outIdx<0) return;
+        const mode=btn.dataset.test;
+        const cur=testModes[outIdx]||'';
+        const next=cur===mode?'off':mode;
+        testHold=Date.now()+2000;
+        readPatchDom();
+        postForm('/test',{i:String(outIdx),mode:next}).then(r=>{
+          if(r.status===503){ testHold=0; setNote('Unavailable while live','err'); return; }
+          if(!r.ok) throw new Error('http');
+          testModes[outIdx]=next==='off'?'':next;
+          testHold=Date.now()+2000;
+          renderPatch();
+        }).catch(()=>{ testHold=0; dropHint(); });
       };
     });
     card.querySelectorAll('input,select').forEach(el=>{
@@ -1293,9 +1336,6 @@ function renderPatch(){
           const hint=card.querySelector('.hint');
           if(hint) hint.textContent=uniHint(el.value);
         }
-        const warn=card.querySelector('.cntwarn');
-        const cnt=card.querySelector('[data-f="count"]');
-        if(warn&&cnt) warn.className='cntwarn span2'+(cntWarnOn(cnt.value)?' on':'');
         refreshPatchTitles();
       };
     });

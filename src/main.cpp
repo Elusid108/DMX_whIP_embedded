@@ -6,6 +6,7 @@
 #include "board_profile.h"
 #include "identify.h"
 #include "led_bus.h"
+#include "led_test.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
 #include "live_input.h"
@@ -74,12 +75,17 @@ void loop() {
   const bool live = LiveInput::active() && !Playback::hold();
   if (live) {
     Identify::cancel();
+    LedTest::cancel();
     if (Playback::running()) {
       LOG_V("main", "live preempts play");
       s_livePreemptedPlay = true;
     }
     Playback::stop();
   } else if (Identify::active()) {
+    if (Playback::playing()) {
+      Playback::pause();
+    }
+  } else if (LedTest::active()) {
     if (Playback::playing()) {
       Playback::pause();
     }
@@ -149,6 +155,8 @@ void loop() {
     }
   } else if (Identify::active()) {
     Identify::render(now);
+  } else if (LedTest::active()) {
+    LedTest::render(now);
   } else if (Playback::hasFile() && !Playback::userPaused()) {
     if (Sync::cueFollow()) {
       if (cuePulse && Sync::cuePlaying() &&

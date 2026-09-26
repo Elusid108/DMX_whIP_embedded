@@ -4,6 +4,7 @@
 #include "board_types.h"
 #include "identify.h"
 #include "led_bus.h"
+#include "led_test.h"
 #include "led_ctrl.h"
 #include "live_cfg.h"
 #include "live_input.h"
@@ -634,7 +635,9 @@ static void appendOutputs(String &out) {
     jsonEscape(out, String(PixelMap::chipsetName(m.chipset)));
     out += ",\"count\":";
     out += static_cast<unsigned>(PixelMap::outputPixelCount(o));
-    out += ",\"segs\":[";
+    out += ",\"test\":\"";
+    out += LedTest::modeName(o);
+    out += "\",\"segs\":[";
     bool first = true;
     for (uint8_t i = 0; i < nSeg; ++i) {
       if (PixelMap::outputOfSegment(i) != o) {
@@ -1028,6 +1031,64 @@ static void handleIdentify() {
   sendJson(200, out);
 }
 
+static LedTestMode testModeFromArg(const String &mode) {
+  if (mode == "off") {
+    return LedTestMode::Off;
+  }
+  if (mode == "rainbow") {
+    return LedTestMode::Rainbow;
+  }
+  if (mode == "cycle") {
+    return LedTestMode::Cycle;
+  }
+  if (mode == "ends") {
+    return LedTestMode::Ends;
+  }
+  return LedTestMode::Off;
+}
+
+static void handleTest() {
+  if (LiveInput::active() && !Playback::hold()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  if (!s_server.hasArg("i") || !s_server.hasArg("mode")) {
+    sendJson(400, "{\"error\":\"bad test\"}");
+    return;
+  }
+  const String iarg = s_server.arg("i");
+  char *end = nullptr;
+  const long idx = strtol(iarg.c_str(), &end, 10);
+  if (end == iarg.c_str() || *end != '\0' || idx < 0 ||
+      idx >= PixelMap::outputCount() || idx >= kPatchMaxOutputs) {
+    sendJson(400, "{\"error\":\"bad i\"}");
+    return;
+  }
+  const String modeArg = s_server.arg("mode");
+  if (modeArg != "off" && modeArg != "rainbow" && modeArg != "cycle" &&
+      modeArg != "ends") {
+    sendJson(400, "{\"error\":\"bad mode\"}");
+    return;
+  }
+  const LedTestMode mode = testModeFromArg(modeArg);
+  if (mode != LedTestMode::Off) {
+    Identify::cancel();
+  }
+  if (!LedTest::set(static_cast<uint8_t>(idx), mode)) {
+    sendJson(400, "{\"error\":\"bad i\"}");
+    return;
+  }
+  if (LedTest::active() && Playback::playing()) {
+    Playback::pause();
+  }
+  String out = "{\"ok\":true,\"i\":";
+  out += static_cast<unsigned>(idx);
+  out += ",\"mode\":\"";
+  out += LedTest::modeName(static_cast<uint8_t>(idx));
+  out += "\"}";
+  sendJson(200, out);
+}
+
 static void armReboot() {
   s_rebootAt = millis() + kRebootDelayMs;
   LOG_V("wifi", "reboot armed");
@@ -1036,6 +1097,7 @@ static void armReboot() {
 static void applyMapNow() {
   LedBus::requestApply();
   LiveInput::applyCfg();
+  LedTest::cancel();
   LOG_V("map", "applied");
 }
 
@@ -2662,6 +2724,7 @@ void WifiSetup::begin() {
   s_server.on("/pins", HTTP_POST, handlePins);
   s_server.on("/map", HTTP_POST, handleMap);
   s_server.on("/identify", HTTP_POST, handleIdentify);
+  s_server.on("/test", HTTP_POST, handleTest);
   s_server.on("/reboot", HTTP_POST, handleReboot);
   s_server.on("/live", HTTP_POST, handleLive);
   s_server.on("/play", HTTP_POST, handlePlay);
