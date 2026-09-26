@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.32.0</title>
+<title>dmxwhip v0.33.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -263,7 +263,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.32.0</p>
+<p id="ver" class="readout">dmxwhip v0.33.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -1217,7 +1217,7 @@ function renderPatch(){
       '<div class="patchfield"><label class="lab">Data GPIO</label>'+
       '<input data-f="data" type="number" min="0" max="'+patchCaps.gpio_max+'" value="'+row.data+'" inputmode="numeric"'+locked+'></div>'+
       '<div class="patchfield clkrow'+(clocked?' on':'')+'"><label class="lab">Clock GPIO</label>'+
-      '<input data-f="clk" type="number" min="1" max="'+patchCaps.gpio_max+'" value="'+(row.clk||21)+'" inputmode="numeric"'+locked+'></div>'+
+      '<input data-f="clk" type="number" min="0" max="'+patchCaps.gpio_max+'" value="'+(row.clk==null?0:row.clk)+'" inputmode="numeric"'+locked+'></div>'+
       '<div class="patchfield'+(clocked?' span2':'')+'"><label class="lab">Pixels</label>'+
       '<input data-f="count" type="number" min="1" max="'+patchCaps.max_px+'" value="'+row.count+'" inputmode="numeric"></div>'+
       '<p class="cntwarn span2'+(cntWarnOn(row.count)?' on':'')+'">This board’s panel is '+panelLabel()+'.</p>'+

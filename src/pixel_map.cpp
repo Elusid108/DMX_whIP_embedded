@@ -854,7 +854,7 @@ bool PixelMap::validClockGpio(uint8_t pin, uint8_t dataGpio, bool required) {
   if (!required) {
     return pin == kClockGpioNone || (pin != dataGpio && validDataGpio(pin));
   }
-  return pin != kClockGpioNone && pin != dataGpio && validDataGpio(pin);
+  return pin != dataGpio && validDataGpio(pin);
 }
 
 bool PixelMap::wantsArtNet(uint16_t uni) {

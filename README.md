@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.32.0**
+Version: **0.33.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -25,6 +25,13 @@ Prove the **pipeline** here with 64 pixels. Retarget with **Adding a board**. Sh
 - microSD: **SPI** CS 10, MOSI 7, CLK 6, MISO 2 (3.3 V module only)
 - Caps: 2 outputs (C5 has 2 RMT TX channels), 24 segments, 1024 total pixels, 16 live universe slots. Reserved: USB 13/14, flash/PSRAM 15–22. Dual-band Wi-Fi: Setup Band default 2.4 GHz (Auto / 5 GHz optional).
 
+## Seeed XIAO ESP32-C5 (`[env:xiao-c5]`)
+
+- MCU: ESP32-C5 — **8MB flash, 8MB PSRAM**, 48 MHz crystal, native USB CDC (`seeed_xiao_esp32c5`). Not the DevKit image. Flash **DIO at 40 MHz**. QIO (what the board json asks for) makes the ROM report `Invalid image block: 0xffffffff` and reset before the app, so there is no SoftAP and no ArtPoll.
+- LED default: WS2812B data GPIO **1** (silk D0), clock GPIO **0** (silk D1) when the IC needs a clock. Count **64**, GRB, brightness **10/255**, no overheat banner. No onboard panel.
+- microSD SPI: CS **12** (D7), SCK **8** (D8), MISO **9** (D9), MOSI **10** (D10). 3.3 V only.
+- Same C5 caps (2 outputs, 24 segments, 1024 pixels). Reserved: USB 13/14, flash/PSRAM 15–22. Upload: `pio run -e xiao-c5 -t upload` on that board’s COM port.
+
 ## Adding a board
 
 This section is the starter. Platform is pinned **pioarduino** in the common `[esp32]` section of [`platformio.ini`](platformio.ini) (Arduino 3.3.x / IDF 5.5.x). Official PlatformIO `espressif32` does not support C5 / C6 / P4.
@@ -40,7 +47,7 @@ This section is the starter. Platform is pinned **pioarduino** in the common `[e
 - Waveshare ESP32-S3-Matrix — `[env:matrix]` (default)
 - ESP32-C5-DevKitC-1-N8R4 — `[env:c5]`
 - Next: ESP32-C6-DevKitC-1-N8 (8MB flash, no PSRAM)
-- Seeed XIAO ESP32-C5 (dual-band, tiny pinout; likely no onboard SD)
+- Seeed XIAO ESP32-C5 — `[env:xiao-c5]` (data 1, clock 0, SD 12/8/9/10)
 - ESP32-P4-POE-ETH — Waveshare P4 PoE ETH family until the exact SKU is confirmed. [ESP32-P4-WIFI6-POE-ETH](https://www.waveshare.com/wiki/ESP32-P4-WIFI6-POE-ETH) is P4 + onboard C6-MINI-1 (SDIO ESP-Hosted) + IP101 10/100 + PoE header. First P4 bring-up is **Ethernet-only**; hosted Wi-Fi is later.
 
 ### Wide catalog and Custom (companion, later)
@@ -57,7 +64,7 @@ ESP-Hosted / `esp_wifi_remote` over SDIO or SPI. If the PoE ETH board is WIFI6-P
 
 ## Flash and serial
 
-Matrix upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e matrix -t upload`. Serial window: `ESP32 COM3` via [`scripts/serial-monitor.ps1`](scripts/serial-monitor.ps1). Details are in [`.cursor/rules/esp32-matrix.mdc`](.cursor/rules/esp32-matrix.mdc). C5 uses `pio run -e c5 -t upload` on its own COM port (UART USB); do not use the Matrix COM3 handshake.
+Matrix upload: hold **BOOT**, tap **RESET**, release **BOOT**, then `pio run -e matrix -t upload`. Serial window: `ESP32 COM3` via [`scripts/serial-monitor.ps1`](scripts/serial-monitor.ps1). Details are in [`.cursor/rules/esp32-matrix.mdc`](.cursor/rules/esp32-matrix.mdc). C5 uses `pio run -e c5 -t upload` on its own COM port (UART USB). XIAO C5 uses `pio run -e xiao-c5 -t upload` (native USB CDC). Do not use the Matrix COM3 handshake for either.
 
 ## SoftAP config portal
 
@@ -123,7 +130,7 @@ Multi-board (queued — do not start unless asked)
 - [x] **Adding a board** recipe used for the next env — implemented (`[env:c5]`; not verified)
 - [ ] `[env:c6]` ESP32-C6-DevKitC-1-N8
 - [x] `[env:c5]` ESP32-C5-DevKitC-1-N8R4 — implemented (25 px GPIO 24, SD 10/7/6/2; not verified)
-- [ ] `[env:xiao-c5]` Seeed XIAO ESP32-C5
+- [x] `[env:xiao-c5]` Seeed XIAO ESP32-C5 — implemented (data GPIO 1, clock GPIO 0, SD 12/10/8/9; not verified)
 - [x] Dual-band STA scan/connect (C5 / XIAO C5); SoftAP stays 2.4 GHz — implemented (Band filter + BSSID join; not verified)
 - [ ] `NetIf` so UDP/HTTP do not call `WiFi.*` directly
 - [ ] `[env:p4-eth]` Ethernet DHCP + portal/ArtPoll on LAN IP (confirm exact P4 SKU)
@@ -256,6 +263,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.33.0** — `[env:xiao-c5]` Seeed Studio XIAO ESP32-C5 (USB CDC, 8 MB PSRAM). Default data GPIO 1, clock GPIO 0, SD CS/SCK/MISO/MOSI 12/8/9/10. A clocked IC may use GPIO 0
 - **0.32.0** — Playback marks split clips and copied clips, and shows Master or Slave on the clip that is playing. A slave Play leaves the synced show. Setup **Uni-Sync** (default No) is what makes a copied clip follow another node
 - **0.31.0** — Playback **Clear startup** (`play.boot.src` `none`) leaves boot idle. Hide AP if connected turns the SoftAP radio off, so the default `ESP_` beacon does not stay up
 - **0.30.2** — A folder that reaches a grouped clip conducts the other nodes, then they return to the show they were on when that clip ends. Removed the temporary sync debug lines
