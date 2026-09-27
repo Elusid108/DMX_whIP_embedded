@@ -1,5 +1,6 @@
 #include "led_bus.h"
 
+#include "clocked_tx.h"
 #include "identify.h"
 #include "log.h"
 #include "pixel_map.h"
@@ -55,6 +56,7 @@ private:
 
 static RuntimeClockless s_ctrl[kPatchMaxOutputs];
 static int s_boundPin[kPatchMaxOutputs];
+static int s_boundClk[kPatchMaxOutputs];
 static LedWire s_boundWire[kPatchMaxOutputs];
 
 static void timings(LedChipset chip, int &t1, int &t2, int &t3) {
@@ -130,120 +132,116 @@ static void packPixel(uint16_t i, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
   }
 }
 
-static inline void clkPulse(uint8_t clk) {
-  digitalWrite(clk, HIGH);
-  digitalWrite(clk, LOW);
-}
-
-static void writeBit(uint8_t data, uint8_t clk, bool one) {
-  digitalWrite(data, one ? HIGH : LOW);
-  clkPulse(clk);
-}
-
-static void writeByteMsb(uint8_t data, uint8_t clk, uint8_t v) {
-  for (int i = 7; i >= 0; --i) {
-    writeBit(data, clk, (v >> i) & 1);
+// Clock rate per two-wire family. Conservative: every one of these parts is
+// rated well above it, and the bits are the same as the old bit-bang path.
+static uint32_t clockHz(LedWire wire) {
+  switch (wire) {
+  case LedWire::Apa102:
+    return 4000000;
+  case LedWire::Lpd8806:
+    return 2000000;
+  default:
+    return 1000000;
   }
 }
 
+// Encode one clocked output as bytes (every family here is byte-aligned) and
+// hand it to ClockedTx.
 static void showClocked(uint8_t out) {
   const uint8_t parent = PixelMap::firstSegmentOfOutput(out);
   const PixelMapCfg &m = PixelMap::segment(parent);
-  const uint8_t data = m.dataGpio;
-  const uint8_t clk = m.clockGpio;
   const uint16_t n = PixelMap::outputPixelCount(out);
   const uint16_t off = PixelMap::outputPixelOffset(out);
   const LedWire wire = PixelMap::wireKind(m.chipset);
-  pinMode(data, OUTPUT);
-  pinMode(clk, OUTPUT);
-  digitalWrite(data, LOW);
-  digitalWrite(clk, LOW);
 
-  if (wire == LedWire::Apa102) {
-    for (uint8_t i = 0; i < 32; ++i) {
-      writeBit(data, clk, false);
-    }
+  size_t need = 0;
+  switch (wire) {
+  case LedWire::Apa102:
+    // Start frame, 4 bytes per pixel, end frame of >= n/2 + 1 one-bits.
+    need = 4 + 4u * n + ((n / 2u + 1u) + 7u) / 8u;
+    break;
+  case LedWire::P9813:
+    need = 4 + 4u * n + 4;
+    break;
+  case LedWire::Lpd8806:
+    need = 3 + 3u * n + 3;
+    break;
+  case LedWire::Lpd6803:
+    need = 4 + 2u * n + 4;
+    break;
+  default:
+    need = 2;
     for (uint16_t p = 0; p < n; ++p) {
-      writeByteMsb(data, clk, 0xE0 | 31);
-      writeByteMsb(data, clk, s_px[off + p][0]);
-      writeByteMsb(data, clk, s_px[off + p][1]);
-      writeByteMsb(data, clk, s_px[off + p][2]);
+      need += s_ch[off + p] ? s_ch[off + p] : m.channelsPerPixel;
     }
-    const uint16_t latch = static_cast<uint16_t>((n / 2) + 1);
-    for (uint16_t i = 0; i < latch; ++i) {
-      writeBit(data, clk, true);
-    }
+    break;
+  }
+  uint8_t *b = ClockedTx::buffer(need);
+  if (b == nullptr) {
     return;
   }
+  size_t o = 0;
 
-  if (wire == LedWire::P9813) {
-    writeByteMsb(data, clk, 0);
-    writeByteMsb(data, clk, 0);
-    writeByteMsb(data, clk, 0);
-    writeByteMsb(data, clk, 0);
+  if (wire == LedWire::Apa102) {
+    memset(b, 0, 4);
+    o = 4;
+    for (uint16_t p = 0; p < n; ++p) {
+      b[o++] = 0xE0 | 31;
+      b[o++] = s_px[off + p][0];
+      b[o++] = s_px[off + p][1];
+      b[o++] = s_px[off + p][2];
+    }
+    memset(b + o, 0xFF, need - o);
+    o = need;
+  } else if (wire == LedWire::P9813) {
+    memset(b, 0, 4);
+    o = 4;
     for (uint16_t p = 0; p < n; ++p) {
       const uint8_t r = s_px[off + p][0];
       const uint8_t g = s_px[off + p][1];
-      const uint8_t b = s_px[off + p][2];
-      const uint8_t flag = static_cast<uint8_t>(
-          0xC0 | ((~b) >> 2 & 0x30) | ((~g) >> 4 & 0x0C) | ((~r) >> 6 & 0x03));
-      writeByteMsb(data, clk, flag);
-      writeByteMsb(data, clk, b);
-      writeByteMsb(data, clk, g);
-      writeByteMsb(data, clk, r);
+      const uint8_t bl = s_px[off + p][2];
+      b[o++] = static_cast<uint8_t>(0xC0 | ((~bl) >> 2 & 0x30) |
+                                    ((~g) >> 4 & 0x0C) | ((~r) >> 6 & 0x03));
+      b[o++] = bl;
+      b[o++] = g;
+      b[o++] = r;
     }
-    writeByteMsb(data, clk, 0);
-    writeByteMsb(data, clk, 0);
-    writeByteMsb(data, clk, 0);
-    writeByteMsb(data, clk, 0);
-    return;
-  }
-
-  if (wire == LedWire::Lpd8806) {
-    for (uint8_t i = 0; i < 24; ++i) {
-      writeBit(data, clk, false);
-    }
+    memset(b + o, 0, 4);
+    o += 4;
+  } else if (wire == LedWire::Lpd8806) {
+    memset(b, 0, 3);
+    o = 3;
     for (uint16_t p = 0; p < n; ++p) {
-      writeByteMsb(data, clk,
-                   static_cast<uint8_t>(0x80 | (s_px[off + p][1] >> 1)));
-      writeByteMsb(data, clk,
-                   static_cast<uint8_t>(0x80 | (s_px[off + p][0] >> 1)));
-      writeByteMsb(data, clk,
-                   static_cast<uint8_t>(0x80 | (s_px[off + p][2] >> 1)));
+      b[o++] = static_cast<uint8_t>(0x80 | (s_px[off + p][1] >> 1));
+      b[o++] = static_cast<uint8_t>(0x80 | (s_px[off + p][0] >> 1));
+      b[o++] = static_cast<uint8_t>(0x80 | (s_px[off + p][2] >> 1));
     }
-    for (uint8_t i = 0; i < 24; ++i) {
-      writeBit(data, clk, false);
-    }
-    return;
-  }
-
-  if (wire == LedWire::Lpd6803) {
-    for (uint8_t i = 0; i < 32; ++i) {
-      writeBit(data, clk, false);
-    }
+    memset(b + o, 0, 3);
+    o += 3;
+  } else if (wire == LedWire::Lpd6803) {
+    memset(b, 0, 4);
+    o = 4;
     for (uint16_t p = 0; p < n; ++p) {
       const uint16_t r = s_px[off + p][0] >> 3;
       const uint16_t g = s_px[off + p][1] >> 3;
-      const uint16_t b = s_px[off + p][2] >> 3;
-      const uint16_t v = static_cast<uint16_t>(0x8000 | (r << 10) | (g << 5) | b);
-      writeByteMsb(data, clk, static_cast<uint8_t>(v >> 8));
-      writeByteMsb(data, clk, static_cast<uint8_t>(v));
+      const uint16_t bl = s_px[off + p][2] >> 3;
+      const uint16_t v =
+          static_cast<uint16_t>(0x8000 | (r << 10) | (g << 5) | bl);
+      b[o++] = static_cast<uint8_t>(v >> 8);
+      b[o++] = static_cast<uint8_t>(v);
     }
-    for (uint8_t i = 0; i < 32; ++i) {
-      writeBit(data, clk, false);
+    memset(b + o, 0, 4);
+    o += 4;
+  } else {
+    for (uint16_t p = 0; p < n; ++p) {
+      const uint8_t ch = s_ch[off + p] ? s_ch[off + p] : m.channelsPerPixel;
+      memcpy(b + o, s_px[off + p], ch);
+      o += ch;
     }
-    return;
+    b[o++] = 0;
+    b[o++] = 0;
   }
-
-  for (uint16_t p = 0; p < n; ++p) {
-    const uint8_t ch = s_ch[off + p] ? s_ch[off + p] : m.channelsPerPixel;
-    for (uint8_t k = 0; k < ch; ++k) {
-      writeByteMsb(data, clk, s_px[off + p][k]);
-    }
-  }
-  for (uint8_t i = 0; i < 16; ++i) {
-    writeBit(data, clk, false);
-  }
+  ClockedTx::send(m.dataGpio, m.clockGpio, clockHz(wire), o);
 }
 
 static bool outputWide(uint8_t out) {
@@ -306,6 +304,10 @@ static bool pinsUnchanged() {
         s_boundWire[o] != wire) {
       return false;
     }
+    if (wire != LedWire::Clockless &&
+        s_boundClk[o] != static_cast<int>(m.clockGpio)) {
+      return false;
+    }
     if (wire == LedWire::Clockless && !s_ctrl[o].bound()) {
       return false;
     }
@@ -344,11 +346,18 @@ void LedBus::apply() {
     return;
   }
 
+  ClockedTx::wait();
   for (uint8_t o = 0; o < kPatchMaxOutputs; ++o) {
     if (s_ctrl[o].bound()) {
       s_ctrl[o].release();
     }
+    if (s_boundWire[o] != LedWire::Clockless && s_boundPin[o] >= 0 &&
+        s_boundClk[o] >= 0) {
+      ClockedTx::release(static_cast<uint8_t>(s_boundPin[o]),
+                         static_cast<uint8_t>(s_boundClk[o]));
+    }
     s_boundPin[o] = -1;
+    s_boundClk[o] = -1;
     s_boundWire[o] = LedWire::Clockless;
   }
 
@@ -361,8 +370,8 @@ void LedBus::apply() {
     s_boundWire[o] = wire;
     s_boundPin[o] = static_cast<int>(m.dataGpio);
     if (wire != LedWire::Clockless) {
-      pinMode(m.dataGpio, OUTPUT);
-      pinMode(m.clockGpio, OUTPUT);
+      s_boundClk[o] = static_cast<int>(m.clockGpio);
+      ClockedTx::release(m.dataGpio, m.clockGpio);
       LOG_V("led", "out%u clocked pin=%u clk=%u count=%u chip=%s", o,
             m.dataGpio, m.clockGpio, count, PixelMap::chipsetName(m.chipset));
       continue;
@@ -391,6 +400,7 @@ void LedBus::begin() {
   s_begun = true;
   for (uint8_t o = 0; o < kPatchMaxOutputs; ++o) {
     s_boundPin[o] = -1;
+    s_boundClk[o] = -1;
     s_boundWire[o] = LedWire::Clockless;
   }
   memset(s_ch, 3, sizeof(s_ch));
