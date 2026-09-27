@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.43.0**
+Version: **0.44.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -10,7 +10,7 @@ Local `ARCHIVE/` is gitignored. It is the old generic ESP32-S3 controller (GPIO 
 
 ## Current hardware (`[env:matrix]`)
 
-- MCU: ESP32-S3FH4R2 — **4MB flash, 2MB QSPI PSRAM** (`qio_qspi`, `default.csv`)
+- MCU: ESP32-S3FH4R2 — **4MB flash, 2MB QSPI PSRAM** (`qio_qspi`, `partitions/whip_4mb.csv`: two 1.875 MB OTA app slots + 128 KB `spiffs` config; moving a Matrix from the old `default.csv` layout needs one USB flash, after that updates go over the air)
 - LED: 8×8 WS2812B on GPIO 14, GRB, default brightness **10/255** (Patch tab 0–255; warn above 128 — this panel can overheat). Patch is a list of outputs and same-GPIO chain segments (NVS `pmap` blob + segment-0 mirror). Matrix caps: 8 outputs, 24 segments, 1024 total pixels, 16 live universe slots. `POST /map`, idle.
 - USB-C: native USB-Serial/JTAG (`ARDUINO_USB_CDC_ON_BOOT=1`, `ARDUINO_USB_MODE=1`)
 - microSD: **SPI** CS 7, MOSI 6, CLK 5, MISO 4 (3.3 V module only)
@@ -184,6 +184,7 @@ Multi-device sync
 - [x] Show network: one node is the Show Host (its own 2.4 GHz AP, clock master); members join it with the venue network as fallback — implemented (not verified)
 - [x] Distribute: one node holds the full show and sends every peer its sliced part (`POST /distribute`) — implemented (not verified)
 - [x] Stream: one node plays the full show and streams every peer its universes live with ArtSync (`POST /stream`) — implemented (not verified)
+- [x] OTA: update over Wi-Fi from the portal or the companion (`POST /ota`), self-reboot, rollback to the previous image if the new one does not come up healthy, and "Update other nodes" pushes this node's image to older same-board peers (`POST /ota/peers`) — implemented (not verified)
 
 Companion PC (sibling repo `DMX_whIP_companion`, not this tree)
 
@@ -196,6 +197,8 @@ The companion discovers and locates nodes over the **selected NIC**. Contract:
 - **GET `/api/stats`** — cheap dashboard JSON (no SD file list). Same radio/`sd` summary as `/status` plus `rssi`, `wifi_5g`, `band` / `link` when present, `mode` (`live`/`play`/`idle`), `takeover` (`yes`/`no`), `src`, `age_ms`, `queued`, `drops`, `pps`, `heap`, `psram`, `up_ms`, compact `play` (`now`, `parked`, `paused`, additive `hold`, `underrun`, `frame`), `map`, `outputs`, and `patch`. Available while live. Companion may ignore this route.
 - **POST `/identify`** — form `ms` (default 3000, 200–15000). Idle LED locate pattern. Must not call `LiveInput::push`. 503 while a stream owns the LEDs (allowed during playback hold). Show scale is `max(saved bri, 64)` for the flash only, then restored (not written to NVS).
 - **POST `/test`** — form `i` (output index) and `mode` (`off` / `rainbow` / `cycle` / `ends`). Idle only, same 503 as Identify (allowed during playback hold). One mode per output; `off` or a second press of the active mode clears it. Rainbow crawls a hue gradient across that output. Cycle steps the whole output through red, green, blue, cyan, magenta, yellow, white. Ends lights the first pixel lime (`50,205,50`) and the last pixel magenta (`255,0,255`); the rest of that output is black. Other outputs stay black. A running test pauses playback. Live input cancels tests. RAM only (off after reboot). `/status` `outputs[].test` reports the mode.
+- **POST `/ota`** — `?force=0|1`, multipart file part `firmware` (a `firmware.bin` of this project). The image streams into the idle app slot; it must contain this build's tag `WHIPFW:<board>:<version>:<api>;` for the same `board`, else 400 `other board` / `not a whip image` / `not firmware`. 409 `busy` (playing a show, live input, distributing, streaming or updating peers) unless `force=1`; 409 `too large` / `no ota slot` when the flash layout needs one USB flash. 200 `{ ok, ver, reboot:true }`, then the node restarts into the new image. The new image is kept once Wi-Fi (STA or AP) has been up for 30 s; a reset before that makes the bootloader boot the previous image, and if it is still not healthy at 120 s it rolls itself back. `/status` `ota` `{ max, state, bytes, total, err, pending, rolled_back, busy, tag }`. API 3 means `/ota` exists.
+- **POST `/ota/peers`** — `?force=0|1`. A task reads every cue-bus peer's `/status` and sends this node's running image to each one with the same `board`, an older `ver`, API 3 and not `ota.busy` (unless `force`), one at a time, then waits up to 150 s for each to report the new `ver`. 409 `busy` / `distributing` / `streaming` / `no peers` / `unverified` (this node is still on a pending image). `/status` `ota_peers` `{ state, msg, sent, total, rows:[{ name, ip, from, st }] }`; `st` is `queued`, `sending`, `rebooting`, `done`, `current`, `other board`, `needs usb`, `busy`, `failed` or `no reply`. Distribute and Stream refuse to start while it runs.
 - **POST `/reboot`** — empty form. Available while live. `200 {"ok":true}` then restart. SoftAP `4.3.2.1` works if STA is down.
 - **POST `/upload`** — multipart form `path` (absolute, e.g. `/scene_1.dmx`) + file part `file`. Query `path=` is also accepted. Idle-only. Validates like playlist paths (leading `/`, no `..`, length &lt; 64) and requires a `.dmx` basename. 503 `live` / `no sd` / `busy`. Parks playback, writes chunks to SD, refreshes `/status` `play.files`. Success `200 {"ok":true,"path":"/foo.dmx","bytes":N}`. Companion may then `POST /meta` so a sibling `{basename}.json` holds the display name.
 - **POST `/play`** — form `src` (`root` / `file` / `folder`), `path`, `file_loop`, `folder_rep`, `n`. Optional `override=1` while a stream owns the LEDs: sets `play.hold` and plays the file anyway. Without it, 503 `{"error":"live"}` (companion will not steal a stream). `action=live` clears hold so the stream takes the LEDs again when packets are still arriving. `action=startup` saves that file, folder, or root as the boot playlist (`play.boot`) and does not start playback, reload, or become sync master (allowed while live). `action=startup` with `src=none` clears it (`play.boot.src` is `none`); boot stays idle until Play. Play of a grouped clip (sidecar sync group, two or more members) launches it on every member at one network time (cue bus v3); Play of any other clip leaves the running cue on this node only. Inside a group cue `pause` / `resume` / `stop` act on the whole group. Play / next / prev change the session only and leave the boot playlist. `src=stop` or `action=stop` parks output, clears hold, and leaves both playlists; `/status` `play.now` is empty until the next Play. `src=pause` / `action=pause` holds the current file and last pixels without changing NVS. `src=resume` / `action=resume` continues. Response is full `/status`. `play.hold` is true while the file is forced over a live stream.
@@ -273,6 +276,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.44.0** — OTA: Setup → Firmware uploads a `.bin` over Wi-Fi (`POST /ota`), checks it is for this board, reboots into it and rolls back by itself if it does not come up healthy; "Update other nodes" sends this node's firmware to older same-board nodes (`POST /ota/peers`). Build tag `WHIPFW:` in every image. Matrix moves to `partitions/whip_4mb.csv` (two 1.875 MB app slots; one USB flash). API 3. Node-to-node HTTP helpers shared in `net_http`
 - **0.43.0** — Stream: one node plays the whole show and sends every node on the network its universes live, fenced with ArtSync; the others need no SD card. Playback Stream button, `POST /stream`
 - **0.42.0** — Distribute: put the whole show on one node, press Distribute (or let the companion do it), and it slices the show for every node on the network by that node's own patch, sends each its part, and makes them one synced group
 - **0.41.0** — Show network: Setup **Show network** (or `POST /shownet`, or the companion) makes one node the Show Host, running its own 2.4 GHz network at 10.77.0.1 and keeping the show clock, and the others members that join it, falling back to the saved network. No router needed

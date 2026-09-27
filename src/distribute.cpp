@@ -3,7 +3,9 @@
 #include "artnet_rx.h"
 #include "dmxrec.h"
 #include "log.h"
+#include "net_http.h"
 #include "node_id.h"
+#include "ota.h"
 #include "playback.h"
 #include "sd_info.h"
 #include "sync_net.h"
@@ -50,132 +52,18 @@ static uint32_t s_sent = 0;
 static uint32_t s_total = 0;
 static Target s_targets[kMaxTargets];
 
-// ---------------------------------------------------------------- tiny JSON
-
-static const char *findKey(const char *from, const char *end, const char *key) {
-  char needle[24];
-  snprintf(needle, sizeof(needle), "\"%s\"", key);
-  const size_t n = strlen(needle);
-  for (const char *p = from; p && p + n <= end; ++p) {
-    p = static_cast<const char *>(memchr(p, '"', static_cast<size_t>(end - p)));
-    if (!p || p + n > end) {
-      return nullptr;
-    }
-    if (memcmp(p, needle, n) == 0) {
-      const char *c = p + n;
-      while (c < end && (*c == ' ' || *c == ':')) {
-        ++c;
-      }
-      return c;
-    }
-  }
-  return nullptr;
-}
-
-static long jsonInt(const char *from, const char *end, const char *key,
-                    long fallback) {
-  const char *v = findKey(from, end, key);
-  return v ? strtol(v, nullptr, 10) : fallback;
-}
-
-static bool jsonStr(const char *from, const char *end, const char *key,
-                    char *out, size_t n) {
-  const char *v = findKey(from, end, key);
-  if (!v || *v != '"') {
-    return false;
-  }
-  ++v;
-  size_t i = 0;
-  while (v < end && *v != '"' && i + 1 < n) {
-    out[i++] = *v++;
-  }
-  out[i] = '\0';
-  return true;
-}
-
 // ---------------------------------------------------------------- HTTP
+
+using NetHttp::findKey;
+using NetHttp::jsonInt;
+using NetHttp::jsonStr;
+using NetHttp::postForm;
+using NetHttp::readStatusCode;
+using NetHttp::urlEncode;
 
 static bool httpGet(const IPAddress &ip, const char *path, char *buf,
                     size_t cap, size_t &len) {
-  WiFiClient c;
-  c.setTimeout(kHttpTimeoutMs / 1000);
-  if (!c.connect(ip, 80, kHttpTimeoutMs)) {
-    return false;
-  }
-  c.printf("GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path,
-           ip.toString().c_str());
-  len = 0;
-  const uint32_t t0 = millis();
-  while ((c.connected() || c.available()) && millis() - t0 < kHttpTimeoutMs) {
-    const int a = c.available();
-    if (a <= 0) {
-      vTaskDelay(pdMS_TO_TICKS(2));
-      continue;
-    }
-    const size_t room = cap - 1 - len;
-    if (room == 0) {
-      break;
-    }
-    len += c.read(reinterpret_cast<uint8_t *>(buf + len),
-                  static_cast<size_t>(a) < room ? a : room);
-  }
-  buf[len] = '\0';
-  c.stop();
-  return strncmp(buf, "HTTP/1.1 200", 12) == 0 || strncmp(buf, "HTTP/1.0 200", 12) == 0;
-}
-
-static int readStatusCode(WiFiClient &c) {
-  const uint32_t t0 = millis();
-  char line[40];
-  size_t i = 0;
-  while (millis() - t0 < kHttpTimeoutMs * 4) {
-    if (!c.available()) {
-      if (!c.connected()) {
-        break;
-      }
-      vTaskDelay(pdMS_TO_TICKS(5));
-      continue;
-    }
-    const int ch = c.read();
-    if (ch == '\n' || i + 1 >= sizeof(line)) {
-      break;
-    }
-    line[i++] = static_cast<char>(ch);
-  }
-  line[i] = '\0';
-  const char *sp = strchr(line, ' ');
-  return sp ? atoi(sp + 1) : 0;
-}
-
-static bool postForm(const IPAddress &ip, const char *path, const String &body) {
-  WiFiClient c;
-  if (!c.connect(ip, 80, kHttpTimeoutMs)) {
-    return false;
-  }
-  c.printf("POST %s HTTP/1.1\r\nHost: %s\r\nContent-Type: "
-           "application/x-www-form-urlencoded\r\nContent-Length: %u\r\n"
-           "Connection: close\r\n\r\n",
-           path, ip.toString().c_str(), static_cast<unsigned>(body.length()));
-  c.print(body);
-  const int code = readStatusCode(c);
-  c.stop();
-  return code == 200;
-}
-
-static String urlEncode(const char *s) {
-  String out;
-  static const char hex[] = "0123456789ABCDEF";
-  for (; *s; ++s) {
-    const uint8_t ch = static_cast<uint8_t>(*s);
-    if (isalnum(ch) || ch == '-' || ch == '_' || ch == '.' || ch == '~' || ch == '/') {
-      out += static_cast<char>(ch);
-    } else {
-      out += '%';
-      out += hex[ch >> 4];
-      out += hex[ch & 15];
-    }
-  }
-  return out;
+  return NetHttp::get(ip, path, buf, cap, len);
 }
 
 // Stream kTmp to the peer's /upload as multipart path + file.
@@ -651,6 +539,10 @@ bool Distribute::start(const char *path, const char *&error) {
     error = "streaming";
     return false;
   }
+  if (Ota::peersRunning()) {
+    error = "updating";
+    return false;
+  }
   if (!path || path[0] != '/' || !SdInfo::ok()) {
     error = "bad path";
     return false;
@@ -986,6 +878,10 @@ bool StreamTx::start(const char *path, const char *&error) {
   }
   if (Distribute::running()) {
     error = "distributing";
+    return false;
+  }
+  if (Ota::peersRunning()) {
+    error = "updating";
     return false;
   }
   s_count = 0;

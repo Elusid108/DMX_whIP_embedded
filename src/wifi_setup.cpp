@@ -11,6 +11,7 @@
 #include "live_input.h"
 #include "log.h"
 #include "node_id.h"
+#include "ota.h"
 #include "pixel_map.h"
 #include "play_cfg.h"
 #include "playback.h"
@@ -852,6 +853,8 @@ static void sendStatus(int code) {
   Distribute::appendStatus(out);
   out += ',';
   StreamTx::appendStatus(out);
+  out += ',';
+  Ota::appendStatus(out);
   out += ",\"bri\":";
   out += static_cast<unsigned>(LedCtrl::get());
   out += ',';
@@ -2137,6 +2140,62 @@ static void handleUploadDone() {
   sendJson(200, out);
 }
 
+// POST /ota?force=0|1, multipart part "firmware": see ota.h.
+static void handleOtaFile() {
+  HTTPUpload &up = s_server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    Ota::uploadStart(s_server.clientContentLength(), s_server.arg("force") == "1");
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    Ota::uploadWrite(up.buf, up.currentSize);
+    yield();
+  } else if (up.status == UPLOAD_FILE_END) {
+    Ota::uploadEnd(false);
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Ota::uploadEnd(true);
+  }
+}
+
+static void handleOtaDone() {
+  const char *err = Ota::uploadError();
+  if (!err && Ota::uploadOk()) {
+    String out = "{\"ok\":true,\"ver\":";
+    jsonEscape(out, String(Ota::uploadVersion()));
+    out += ",\"reboot\":true}";
+    sendJson(200, out);
+    armReboot();
+    return;
+  }
+  if (!err) {
+    err = "no file";
+  }
+  int code = 500;
+  if (strcmp(err, "busy") == 0 || strcmp(err, "too large") == 0 ||
+      strcmp(err, "no ota slot") == 0) {
+    code = 409;
+  } else if (strcmp(err, "other board") == 0 || strcmp(err, "not a whip image") == 0 ||
+             strcmp(err, "not firmware") == 0 || strcmp(err, "no file") == 0 ||
+             strcmp(err, "aborted") == 0) {
+    code = 400;
+  }
+  String out = "{\"error\":";
+  jsonEscape(out, String(err));
+  out += '}';
+  sendJson(code, out);
+}
+
+// POST /ota/peers?force=0|1: send this image to older same-board nodes.
+static void handleOtaPeers() {
+  const char *err = nullptr;
+  if (!Ota::startPeers(s_server.arg("force") == "1", err)) {
+    String out = "{\"error\":";
+    jsonEscape(out, String(err ? err : "failed"));
+    out += '}';
+    sendJson(409, out);
+    return;
+  }
+  sendStatus(200);
+}
+
 static void handleName() {
   String longName = s_server.arg("long");
   longName.trim();
@@ -3066,6 +3125,8 @@ void WifiSetup::begin() {
   s_server.on("/live", HTTP_POST, handleLive);
   s_server.on("/play", HTTP_POST, handlePlay);
   s_server.on("/upload", HTTP_POST, handleUploadDone, handleUploadFile);
+  s_server.on("/ota", HTTP_POST, handleOtaDone, handleOtaFile);
+  s_server.on("/ota/peers", HTTP_POST, handleOtaPeers);
   s_server.on("/name", HTTP_POST, handleName);
   s_server.on("/rename", HTTP_POST, handleRename);
   s_server.on("/meta", HTTP_POST, handleMeta);
@@ -3166,6 +3227,7 @@ void WifiSetup::service() {
     s_dns.processNextRequest();
   }
   s_server.handleClient();
+  Ota::service(s_apUp || WiFi.status() == WL_CONNECTED);
   LedBus::service();
   if (s_rebootAt != 0 && static_cast<int32_t>(millis() - s_rebootAt) >= 0) {
     s_rebootAt = 0;

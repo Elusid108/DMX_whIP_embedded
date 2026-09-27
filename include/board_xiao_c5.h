@@ -7,7 +7,8 @@
 
 // Seeed Studio XIAO ESP32-C5 (8 MB flash + 8 MB PSRAM, native USB CDC).
 // Silk: D0 data GPIO1, D1 clock GPIO0, D7–D10 SD CS/SCK/MISO/MOSI.
-static constexpr char kBoardId[] = "seeed-xiao-esp32-c5";
+#define WHIP_BOARD_ID "seeed-xiao-esp32-c5"
+static constexpr char kBoardId[] = WHIP_BOARD_ID;
 static constexpr char kBoardChip[] = "esp32c5";
 static constexpr char kBoardFlashClass[] = "8mb-psram8-cdc";
 static constexpr uint8_t kGpioMax = 28;

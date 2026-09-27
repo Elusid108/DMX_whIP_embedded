@@ -292,8 +292,24 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div class="row">
 <button id="snSave" type="button">Save &amp; reboot</button>
 </div>
+<div class="mod lab">Firmware</div>
+<p class="readout" id="fwInfo"></p>
+<p class="briwarn" id="fwRb">The last update did not start cleanly, so this node went back to the version above.</p>
+<label class="lab" for="fwFile">Firmware file (.bin)</label>
+<input id="fwFile" type="file" accept=".bin,application/octet-stream">
+<div class="sbar" id="fwBarWrap" hidden><i id="fwBar"></i></div>
+<div class="row">
+<button class="pri" id="fwUp" type="button">Upload &amp; update</button>
 </div>
-<p id="ver" class="readout">dmxwhip v0.43.0</p>
+<p class="hint">The node checks the file is for this board, writes it and reboots itself. If the new firmware does not come up cleanly it goes back to this version.</p>
+<div class="row">
+<button id="fwPeers" type="button">Update other nodes</button>
+</div>
+<label class="tog"><input id="fwForce" type="checkbox"> Include busy nodes (playing or live)</label>
+<p class="hint">Sends this node's firmware to every other node of the same board that runs an older version, one at a time. They reboot themselves.</p>
+<div id="fwRows"></div>
+</div>
+<p id="ver" class="readout">dmxwhip v0.44.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -759,9 +775,89 @@ function saveShowNet(){
     setNote(role==='host'?'Rebooting as Show Host. Join the show network, then open http://10.77.0.1':'Rebooting…');
   }).catch(()=>{btn.disabled=false;dropHint();});
 }
+let otaBusy=false;
+function fwSize(n){return n>=1048576?(n/1048576).toFixed(2)+' MB':Math.round(n/1024)+' KB';}
+function applyOta(s){
+  const o=s.ota;
+  if(!o) return;
+  otaBusy=!!o.busy;
+  setTxt('fwInfo','v'+s.ver+' · '+s.board+(o.max?' · slot '+fwSize(o.max):' · no update slot')+(o.pending?' · new, checking itself':''));
+  document.getElementById('fwRb').classList.toggle('on',!!o.rolled_back);
+  const p=s.ota_peers;
+  const running=!!(p&&p.state==='running');
+  document.getElementById('fwPeers').disabled=running||!!o.pending;
+  const rows=document.getElementById('fwRows');
+  if(!p||p.state==='idle'){rows.innerHTML='';return;}
+  let h=running
+    ?'<p class="readout">Updating other nodes'+(p.total?' · sending '+Math.round(100*p.sent/p.total)+'%':'')+'</p>'
+    :'<p class="readout">'+escapeHtml(p.msg||p.state)+'</p>';
+  (p.rows||[]).forEach(r=>{
+    h+='<p class="readout">'+escapeHtml(r.name||r.ip)+' · v'+escapeHtml(r.from||'?')+' · '+escapeHtml(r.st)+'</p>';
+  });
+  rows.innerHTML=h;
+}
+function fwErr(e){
+  return ({
+    busy:'This node is busy (playing, live or updating others). Stop it first, or confirm to update anyway.',
+    'too large':'The file is bigger than this node’s update slot. Flash it once over USB with the companion Flash tab.',
+    'other board':'That firmware is for a different board.',
+    'not a whip image':'That file is not DMX whIP firmware.',
+    'not firmware':'That file is not a firmware image.',
+    'no ota slot':'This node’s flash layout has no update slot. Flash it once over USB.',
+    'verify failed':'The image did not verify. Nothing changed; try the upload again.'
+  })[e]||('Update failed: '+(e||'no reply'));
+}
+document.getElementById('fwUp').onclick=()=>{
+  const fileEl=document.getElementById('fwFile');
+  const f=fileEl.files&&fileEl.files[0];
+  if(!f){setNote('Choose a firmware .bin first.','err');return;}
+  const force=otaBusy;
+  if(!window.confirm(force
+    ?'This node is playing or receiving live DMX. Update it anyway? The lights stop while it updates and reboots.'
+    :'Update this node with '+f.name+'? It reboots itself when done.')) return;
+  const btn=document.getElementById('fwUp');
+  const wrap=document.getElementById('fwBarWrap');
+  const bar=document.getElementById('fwBar');
+  const fd=new FormData();
+  fd.append('firmware',f,f.name);
+  const xhr=new XMLHttpRequest();
+  btn.disabled=true;
+  wrap.hidden=false;
+  bar.style.width='0%';
+  xhr.upload.onprogress=e=>{if(e.lengthComputable) bar.style.width=Math.round(100*e.loaded/e.total)+'%';};
+  xhr.onload=()=>{
+    let s={};
+    try{s=JSON.parse(xhr.responseText);}catch(e){}
+    if(xhr.status===200){
+      bar.style.width='100%';
+      setNote('Updated to v'+(s.ver||'?')+'. Rebooting; this page reconnects by itself.','ok');
+      return;
+    }
+    btn.disabled=false;
+    wrap.hidden=true;
+    setNote(fwErr(s.error),'err');
+  };
+  xhr.onerror=()=>{btn.disabled=false;wrap.hidden=true;dropHint();};
+  xhr.open('POST','/ota?force='+(force?1:0));
+  xhr.send(fd);
+};
+document.getElementById('fwPeers').onclick=()=>{
+  const force=document.getElementById('fwForce').checked;
+  if(!window.confirm('Send this firmware to every older node of this board'+(force?', including busy ones':'')+'? They reboot themselves.')) return;
+  postForm('/ota/peers?force='+(force?1:0),{}).then(async r=>{
+    const s=await r.json().catch(()=>({}));
+    if(!r.ok){
+      setNote(({'no peers':'No other nodes heard on the network.',unverified:'This node is still checking its own new firmware. Try again in a minute.',distributing:'Wait for Distribute to finish.',streaming:'Stop the stream first.'})[s.error]||(s.error||'Update failed'),'err');
+      return;
+    }
+    setNote('Updating other nodes…','ok');
+    applyOta(s);
+  }).catch(dropHint);
+};
 function applyLive(s){
   applyShowNet(s);
   applyDist(s);
+  applyOta(s);
   if(liveDirty) return;
   if(typeof s.fps==='number') fpsEl.value=String(s.fps);
   if(typeof s.buf==='number') bufEl.value=String(s.buf);

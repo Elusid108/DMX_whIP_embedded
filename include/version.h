@@ -2,5 +2,9 @@
 
 #include <stdint.h>
 
-static constexpr char kFirmwareVersion[] = "0.43.0";
-static constexpr uint16_t kFirmwareApi = 2;
+// Macros so the OTA build tag (ota.cpp) can be one string literal.
+#define WHIP_FW_VERSION "0.44.0"
+#define WHIP_FW_API 3
+
+static constexpr char kFirmwareVersion[] = WHIP_FW_VERSION;
+static constexpr uint16_t kFirmwareApi = WHIP_FW_API;

@@ -6,7 +6,8 @@
 #include "log.h"
 
 // Waveshare ESP32-S3-Matrix (ESP32-S3FH4R2).
-static constexpr char kBoardId[] = "waveshare-s3-matrix";
+#define WHIP_BOARD_ID "waveshare-s3-matrix"
+static constexpr char kBoardId[] = WHIP_BOARD_ID;
 static constexpr char kBoardChip[] = "esp32s3";
 static constexpr char kBoardFlashClass[] = "4mb-qspi";
 static constexpr uint8_t kGpioMax = 48;

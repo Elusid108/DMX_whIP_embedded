@@ -6,7 +6,8 @@
 #include "log.h"
 
 // Espressif ESP32-C5-DevKitC-1-N8R4 (8 MB flash + 4 MB QSPI PSRAM).
-static constexpr char kBoardId[] = "espressif-c5-devkitc1-n8r4";
+#define WHIP_BOARD_ID "espressif-c5-devkitc1-n8r4"
+static constexpr char kBoardId[] = WHIP_BOARD_ID;
 static constexpr char kBoardChip[] = "esp32c5";
 static constexpr char kBoardFlashClass[] = "8mb-psram";
 static constexpr uint8_t kGpioMax = 28;

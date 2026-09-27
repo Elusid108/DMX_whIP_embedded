@@ -12,6 +12,7 @@
 #include "live_input.h"
 #include "log.h"
 #include "node_id.h"
+#include "ota.h"
 #include "playback.h"
 #include "pixel_map.h"
 #include "play_cfg.h"
@@ -46,6 +47,7 @@ void setup() {
   LOG_V("boot", "%s v%s", BoardProfile::id(), kFirmwareVersion);
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
         static_cast<unsigned>(Log::level()));
+  Ota::bootGuard();
   NodeId::begin();
   BoardProfile::begin();
   WifiSetup::begin();
