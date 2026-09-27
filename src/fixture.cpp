@@ -68,14 +68,19 @@ static uint16_t s_fullAddr[kLedCountMax];
 // Per frame.
 static FixDrive s_drive = FixDrive::None;
 static const uint8_t *s_data[kMaxUniverses];
-static uint8_t s_master = 255;
+static uint8_t s_dim = 255;       // master dimmer (latched), no strobe
+static bool s_open = true;        // master strobe gate
+static uint8_t s_strobeRgb[3] = {255, 255, 255};
+static bool s_strobeWhite = true;
+static uint8_t s_strobeInt = 0;   // off-phase level (0 = blackout)
+static uint8_t s_subOpen[(kFixMaxSubs + 7) / 8];
 static bool s_hueOn = false;
 static int16_t s_hue[9];
 static bool s_filterOn = false;
 static uint8_t s_filter[3] = {255, 255, 255};
 static bool s_addOn = false;
 static uint8_t s_add[3] = {0, 0, 0};
-static uint8_t s_subLevel[kFixMaxSubs];
+static uint8_t s_subLevel[kFixMaxSubs]; // sub dimmer x master, no strobe
 static uint8_t s_subRgb[kFixMaxSubs][3];
 // Dimmers the console has sent above 0 since the fixture universe was last
 // heard; the rest stay open (a channel the console does not patch reads 0).
@@ -107,10 +112,10 @@ static uint8_t s_locate[kLedCountMax / 8];
 static uint32_t s_locateUntil = 0;
 static bool s_locateOn = false;
 
-// Clip select.
-static uint8_t s_clipSeen = 0;
-static uint8_t s_clipActed = 0;
-static uint32_t s_clipSince = 0;
+// Folder + clip select (folder << 8 | clip).
+static uint16_t s_pickSeen = 0;
+static uint16_t s_pickActed = 0;
+static uint32_t s_pickSince = 0;
 
 static inline uint8_t fxMul(uint8_t a, uint8_t b) {
   return static_cast<uint8_t>((static_cast<uint16_t>(a) * (static_cast<uint16_t>(b) + 1)) >> 8);
@@ -125,6 +130,53 @@ static LiveSource fixSource() { return s_cfg.sacn ? LiveSource::Sacn : LiveSourc
 static uint8_t perSub(FixMode mode) {
   return mode == FixMode::Dim ? 2 : (mode == FixMode::Rgb ? 5 : 0);
 }
+
+// Header channel offsets per mode (-1: not in this mode).
+struct HdrMap {
+  int8_t dim, strobe, scol, sint, hue, filter, add, folder, clip;
+  uint8_t len;
+};
+static constexpr HdrMap kHdrFull = {0, 1, 2, 3, 4, 5, 8, 11, 12, kFixHeader};
+static constexpr HdrMap kHdrBasic = {0, 1, -1, -1, 2, -1, -1, 3, 4, kFixHeaderBasic};
+
+static const HdrMap &hdrOf(FixMode mode) {
+  return mode == FixMode::Basic ? kHdrBasic : kHdrFull;
+}
+
+// Look modes overlay what the node plays; the fixture universe is control.
+static bool lookMode(FixMode mode) { return mode == FixMode::Dim || mode == FixMode::Basic; }
+
+// Strobe colour: 0 white, 1-255 round the wheel from red.
+static void wheel(uint8_t v, uint8_t *rgb) {
+  if (v == 0) {
+    rgb[0] = rgb[1] = rgb[2] = 255;
+    return;
+  }
+  const uint16_t h = static_cast<uint16_t>((static_cast<uint32_t>(v - 1) * 1536u) / 255u);
+  const uint8_t f = static_cast<uint8_t>(h & 0xFF);
+  switch (h >> 8) {
+  case 0:
+    rgb[0] = 255, rgb[1] = f, rgb[2] = 0;
+    break;
+  case 1:
+    rgb[0] = static_cast<uint8_t>(255 - f), rgb[1] = 255, rgb[2] = 0;
+    break;
+  case 2:
+    rgb[0] = 0, rgb[1] = 255, rgb[2] = f;
+    break;
+  case 3:
+    rgb[0] = 0, rgb[1] = static_cast<uint8_t>(255 - f), rgb[2] = 255;
+    break;
+  case 4:
+    rgb[0] = f, rgb[1] = 0, rgb[2] = 255;
+    break;
+  default:
+    rgb[0] = 255, rgb[1] = 0, rgb[2] = static_cast<uint8_t>(255 - f);
+    break;
+  }
+}
+
+static inline bool subOpen(uint8_t k) { return (s_subOpen[k >> 3] >> (k & 7)) & 1; }
 
 // 0-9 open; 10-255 = 1-25 Hz, 40% on, phased to the shared clock.
 static bool strobeOn(uint8_t v, int64_t tUs) {
@@ -194,6 +246,24 @@ static void fxColor(uint8_t *px, uint8_t cpp, uint8_t level) {
   px[2] = b;
 }
 
+// A pixel in the strobe's off phase: the strobe colour at the strobe
+// intensity, scaled by the pixel's dimmer (0 intensity = blackout).
+static void strobePixel(uint8_t *px, uint8_t cpp, uint8_t level) {
+  const uint8_t v = fxMul(s_strobeInt, level);
+  if (cpp < 3) {
+    for (uint8_t i = 0; i < cpp; ++i) {
+      px[i] = v;
+    }
+    return;
+  }
+  for (uint8_t i = 0; i < 3; ++i) {
+    px[i] = fxMul(s_strobeRgb[i], v);
+  }
+  for (uint8_t i = 3; i < cpp; ++i) {
+    px[i] = i == 3 && s_strobeWhite ? v : 0; // white strobe uses W too
+  }
+}
+
 static void appendEsc(String &out, const char *s) {
   out += '"';
   for (; s && *s; ++s) {
@@ -255,7 +325,7 @@ static bool derive(const Cfg &c, bool tables, uint16_t &footprint, uint8_t &unis
   }
   const uint16_t base = static_cast<uint16_t>(c.ch - 1);
   if (c.mode == FixMode::Full) {
-    uint32_t pos = base + kFixHeader;
+    uint32_t pos = base + hdrOf(c.mode).len;
     if (pos > kDmxUniverseSize) {
       err = "the header does not fit after this channel";
       return false;
@@ -280,7 +350,7 @@ static bool derive(const Cfg &c, bool tables, uint16_t &footprint, uint8_t &unis
     }
     footprint = static_cast<uint16_t>(pos - base);
   } else {
-    footprint = static_cast<uint16_t>(kFixHeader + perSub(c.mode) * c.nSubs);
+    footprint = static_cast<uint16_t>(hdrOf(c.mode).len + perSub(c.mode) * c.nSubs);
     if (base + footprint > kDmxUniverseSize) {
       err = "the fixture does not fit in the universe from this channel";
       return false;
@@ -298,8 +368,8 @@ static bool derive(const Cfg &c, bool tables, uint16_t &footprint, uint8_t &unis
     const uint16_t uni = static_cast<uint16_t>(c.uni + u);
     const bool mapToo = c.sacn ? PixelMap::wantsSacn(uni) : PixelMap::wantsArtNet(uni);
     if (mapToo) {
-      if (c.mode == FixMode::Dim) {
-        err = "Dim mode needs its own universe, apart from the main patch";
+      if (lookMode(c.mode)) {
+        err = "Dim and Basic modes need their own universe, apart from the main patch";
         return false;
       }
       ++shared;
@@ -383,7 +453,7 @@ static void loadCfg() {
   }
   uint8_t head[12];
   bool ok = f.read(head, sizeof(head)) == sizeof(head) && head[0] == 'W' && head[1] == 'F' &&
-            head[2] == 'X' && head[3] == kFileVer && head[5] <= 2 && head[7] <= kFixMaxSubs;
+            head[2] == 'X' && head[3] == kFileVer && head[5] <= 3 && head[7] <= kFixMaxSubs;
   // Too big for the loop task's stack.
   Cfg *tmp = static_cast<Cfg *>(calloc(1, sizeof(Cfg)));
   if (!tmp) {
@@ -467,19 +537,23 @@ static void serviceClip() {
   if (!d) {
     return;
   }
-  const uint8_t v = d[s_cfg.ch - 1 + 9];
+  const HdrMap &m = hdrOf(s_cfg.mode);
+  const uint8_t *h = d + (s_cfg.ch - 1);
+  const uint8_t folder = h[m.folder];
+  const uint8_t clip = h[m.clip];
+  const uint16_t pick = static_cast<uint16_t>((folder << 8) | clip);
   const uint32_t now = millis();
-  if (v != s_clipSeen) {
-    s_clipSeen = v;
-    s_clipSince = now;
+  if (pick != s_pickSeen) {
+    s_pickSeen = pick;
+    s_pickSince = now;
     return;
   }
-  if (now - s_clipSince < kClipSettleMs || v == s_clipActed) {
+  if (now - s_pickSince < kClipSettleMs || pick == s_pickActed) {
     return;
   }
-  const uint8_t was = s_clipActed;
-  s_clipActed = v;
-  if (v == 0) {
+  const uint8_t was = static_cast<uint8_t>(s_pickActed & 0xFF);
+  s_pickActed = pick;
+  if (clip == 0) {
     // Back to 0 after a pick: the node's own startup playlist again, for this
     // session only (NVS keeps the startup show as it was).
     if (was != 0 && PlayCfg::set(PlayCfg::bootSrc(), PlayCfg::bootPath(),
@@ -491,17 +565,24 @@ static void serviceClip() {
     }
     return;
   }
-  if (!SdInfo::ok() || v > SdInfo::fileCount()) {
+  if (!SdInfo::ok()) {
     return;
   }
-  const char *path = SdInfo::fileAt(static_cast<uint8_t>(v - 1));
-  if (!path || !PlayCfg::set(PlaySrc::File, path, PlayFileLoop::One, PlayCfg::folderRep(),
-                             PlayCfg::folderN(), false, false)) {
+  // Folder 0 = the SD root; n = the n-th folder there. Clip n = the n-th
+  // look in that folder. Both A-Z, read from the card (no list limit).
+  char dir[kSdPathLen] = "/";
+  if (folder > 0 && !SdInfo::nthEntry("/", true, folder, dir, sizeof(dir))) {
+    return;
+  }
+  char path[kSdPathLen];
+  if (!SdInfo::nthEntry(dir, false, clip, path, sizeof(path)) ||
+      !PlayCfg::set(PlaySrc::File, path, PlayFileLoop::One, PlayCfg::folderRep(),
+                    PlayCfg::folderN(), false, false)) {
     return;
   }
   Playback::reload();
   Sync::noteLocalTrigger();
-  LOG_V("fix", "clip %u -> %s", v, path);
+  LOG_V("fix", "folder %u clip %u -> %s", folder, clip, path);
 }
 
 } // namespace
@@ -538,7 +619,7 @@ bool Fixture::isFixtureUniverse(bool sacn, uint16_t uni) {
          uni < static_cast<uint32_t>(s_cfg.uni) + s_unis;
 }
 
-bool Fixture::controlOnly() { return s_cfg.en && s_valid && s_cfg.mode == FixMode::Dim; }
+bool Fixture::controlOnly() { return s_cfg.en && s_valid && lookMode(s_cfg.mode); }
 
 bool Fixture::wantsArtNet(uint16_t uni) {
   return PixelMap::wantsArtNet(uni) || isFixtureUniverse(false, uni);
@@ -586,7 +667,7 @@ FixDrive Fixture::beginFrame(uint32_t nowMs) {
     s_data[u] = LiveInput::slotData(fixSource(), static_cast<uint16_t>(s_cfg.uni + u));
   }
   const uint8_t *h = s_data[0] ? s_data[0] + (s_cfg.ch - 1) : nullptr;
-  if (s_cfg.mode == FixMode::Dim) {
+  if (lookMode(s_cfg.mode)) {
     if (!h) {
       resetDimLatches();
       return s_drive; // no console: the look plays as recorded
@@ -597,29 +678,44 @@ FixDrive Fixture::beginFrame(uint32_t nowMs) {
   }
   if (!h) {
     resetDimLatches();
-    s_master = 255;
+    s_dim = 255;
+    s_open = true;
+    s_strobeInt = 0;
     s_hueOn = s_filterOn = s_addOn = false;
     memset(s_subLevel, 0, sizeof(s_subLevel));
     memset(s_subRgb, 0, sizeof(s_subRgb));
+    memset(s_subOpen, 0xFF, sizeof(s_subOpen));
     return s_drive;
   }
+  const HdrMap &m = hdrOf(s_cfg.mode);
   const int64_t t = SyncNet::masterUs();
-  s_master = strobeOn(h[1], t) ? latchDim(h[0], s_masterUsed) : 0;
-  s_hueOn = h[2] != 0;
+  s_dim = latchDim(h[m.dim], s_masterUsed);
+  s_open = strobeOn(h[m.strobe], t);
+  // The strobe's off phase shows this colour at this level (0 = blackout).
+  wheel(m.scol >= 0 ? h[m.scol] : 0, s_strobeRgb);
+  s_strobeWhite = m.scol < 0 || h[m.scol] == 0;
+  s_strobeInt = m.sint >= 0 ? h[m.sint] : 0;
+  s_hueOn = h[m.hue] != 0;
   if (s_hueOn) {
-    buildHue(h[2]);
+    buildHue(h[m.hue]);
   }
   // Filter = how much of each colour to remove (0 = none).
-  s_filterOn = h[3] || h[4] || h[5];
+  s_filterOn = m.filter >= 0 && (h[m.filter] || h[m.filter + 1] || h[m.filter + 2]);
   for (uint8_t i = 0; i < 3; ++i) {
-    s_filter[i] = static_cast<uint8_t>(255 - h[3 + i]);
+    s_filter[i] = m.filter >= 0 ? static_cast<uint8_t>(255 - h[m.filter + i]) : 255;
   }
-  s_addOn = h[6] || h[7] || h[8];
-  memcpy(s_add, h + 6, 3);
+  s_addOn = m.add >= 0 && (h[m.add] || h[m.add + 1] || h[m.add + 2]);
+  if (s_addOn) {
+    memcpy(s_add, h + m.add, 3);
+  }
   const uint8_t per = perSub(s_cfg.mode);
+  memset(s_subOpen, 0, sizeof(s_subOpen));
   for (uint8_t k = 0; per && k < s_cfg.nSubs; ++k) {
-    const uint8_t *sp = h + kFixHeader + k * per;
-    s_subLevel[k] = strobeOn(sp[1], t) ? fxMul(latchSubDim(k, sp[0]), s_master) : 0;
+    const uint8_t *sp = h + m.len + k * per;
+    s_subLevel[k] = fxMul(latchSubDim(k, sp[0]), s_dim);
+    if (s_open && strobeOn(sp[1], t)) {
+      s_subOpen[k >> 3] |= static_cast<uint8_t>(1u << (k & 7));
+    }
     if (s_cfg.mode == FixMode::Rgb) {
       memcpy(s_subRgb[k], sp + 2, 3);
     }
@@ -631,8 +727,12 @@ void Fixture::applyLook(uint16_t g, uint8_t *px, uint8_t cpp) {
   if (g >= s_total) {
     return;
   }
-  const uint8_t k = s_subOf[g];
-  const uint8_t level = k == kNoSub ? s_master : s_subLevel[k];
+  const uint8_t k = perSub(s_cfg.mode) ? s_subOf[g] : kNoSub;
+  const uint8_t level = k == kNoSub ? s_dim : s_subLevel[k];
+  if (!(k == kNoSub ? s_open : subOpen(k))) {
+    strobePixel(px, cpp, level);
+    return;
+  }
   if (level == 255 && !s_hueOn && !s_filterOn && !s_addOn) {
     return;
   }
@@ -649,8 +749,16 @@ void Fixture::consolePixel(uint16_t g, uint8_t *px, uint8_t cpp) {
     if (k == kNoSub || cpp < 3) {
       return;
     }
+    if (!subOpen(k)) {
+      strobePixel(px, cpp, s_subLevel[k]);
+      return;
+    }
     memcpy(px, s_subRgb[k], 3);
     fxColor(px, cpp, s_subLevel[k]);
+    return;
+  }
+  if (!s_open) {
+    strobePixel(px, cpp, s_dim);
     return;
   }
   const uint16_t at = s_fullAddr[g];
@@ -659,7 +767,7 @@ void Fixture::consolePixel(uint16_t g, uint8_t *px, uint8_t cpp) {
     const uint8_t *d = s_data[a / kDmxUniverseSize];
     px[i] = d ? d[a % kDmxUniverseSize] : 0;
   }
-  fxColor(px, cpp, s_master);
+  fxColor(px, cpp, s_dim);
 }
 
 // ================================================================== config
@@ -674,6 +782,8 @@ bool Fixture::parseMode(const char *s, FixMode &out) {
     out = FixMode::Rgb;
   } else if (strcmp(s, "full") == 0) {
     out = FixMode::Full;
+  } else if (strcmp(s, "basic") == 0) {
+    out = FixMode::Basic;
   } else {
     return false;
   }
@@ -686,6 +796,8 @@ const char *Fixture::modeName(FixMode mode) {
     return "rgb";
   case FixMode::Full:
     return "full";
+  case FixMode::Basic:
+    return "basic";
   case FixMode::Dim:
   default:
     return "dim";
@@ -801,8 +913,8 @@ bool Fixture::stageCommit(const char *&error) {
   free(s_stage);
   s_stage = nullptr;
   rebuild();
-  s_clipActed = 0;
-  s_clipSeen = 0;
+  s_pickActed = 0;
+  s_pickSeen = 0;
   LiveInput::applyCfg();
   LOG_V("fix", "saved %s mode=%s subs=%u fp=%u unis=%u", s_cfg.en ? "on" : "off",
         modeName(s_cfg.mode), s_cfg.nSubs, s_footprint, s_unis);
@@ -892,7 +1004,7 @@ void Fixture::appendJson(String &out) {
   out += ",\"ch\":";
   out += static_cast<unsigned>(s_cfg.ch);
   out += ",\"hdr\":";
-  out += static_cast<unsigned>(kFixHeader);
+  out += static_cast<unsigned>(hdrOf(s_cfg.mode).len);
   out += ",\"max_subs\":";
   out += static_cast<unsigned>(kFixMaxSubs);
   out += ",\"pixels\":";
@@ -944,8 +1056,12 @@ void Fixture::appendStatus(String &out) {
   appendEsc(out, s_err);
   out += ",\"ctl\":";
   out += s_cfg.en && s_valid && LiveInput::slotData(fixSource(), s_cfg.uni) ? "true" : "false";
+  out += ",\"hdr\":";
+  out += static_cast<unsigned>(hdrOf(s_cfg.mode).len);
+  out += ",\"folder\":";
+  out += static_cast<unsigned>(s_pickActed >> 8);
   out += ",\"clip\":";
-  out += static_cast<unsigned>(s_clipActed);
+  out += static_cast<unsigned>(s_pickActed & 0xFF);
   out += '}';
 }
 

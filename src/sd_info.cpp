@@ -690,6 +690,58 @@ uint8_t SdInfo::dirCount() { return s_nDirs; }
 
 const char *SdInfo::dirAt(uint8_t i) { return i < s_nDirs ? s_dirs[i] : ""; }
 
+bool SdInfo::nthEntry(const char *dir, bool wantDir, uint16_t n, char *out, size_t outLen) {
+  static constexpr uint16_t kMaxEntries = 255;
+  if (!out || outLen == 0) {
+    return false;
+  }
+  out[0] = '\0';
+  if (!dir || n == 0 || n > kMaxEntries || !s_ok) {
+    return false;
+  }
+  const size_t bytes = static_cast<size_t>(kMaxEntries) * kSdPathLen;
+  char(*names)[kSdPathLen] = static_cast<char(*)[kSdPathLen]>(
+      psramFound() ? ps_malloc(bytes) : malloc(bytes));
+  if (!names) {
+    return false;
+  }
+  if (!lock(1000)) {
+    free(names);
+    return false;
+  }
+  uint16_t count = 0;
+  File d = SD.open(dir);
+  if (d && d.isDirectory()) {
+    while (count < kMaxEntries) {
+      File entry = d.openNextFile();
+      if (!entry) {
+        break;
+      }
+      const char *nm = entry.name();
+      const bool isDir = entry.isDirectory();
+      char path[kSdPathLen];
+      const bool keep = !skipName(nm) && joinPath(path, sizeof(path), dir, nm) &&
+                        !ieq(path, dir) && (wantDir ? isDir : (!isDir && nameIsDmx(path)));
+      entry.close();
+      if (keep) {
+        snprintf(names[count++], kSdPathLen, "%s", path);
+      }
+    }
+  }
+  if (d) {
+    d.close();
+  }
+  unlock();
+  bool found = false;
+  if (n <= count) {
+    qsort(names, count, kSdPathLen, qcmpPath);
+    snprintf(out, outLen, "%s", names[n - 1]);
+    found = true;
+  }
+  free(names);
+  return found;
+}
+
 bool SdInfo::collectPlaylist(const char *dir, bool recursive,
                              char out[][kSdPathLen], uint8_t max, uint8_t *n) {
   if (!n) {

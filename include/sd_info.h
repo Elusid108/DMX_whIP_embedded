@@ -47,6 +47,10 @@ public:
   static uint32_t hashGroup(const char *group);
   static uint8_t dirCount();
   static const char *dirAt(uint8_t i);
+  // The n-th (1-based) sub-folder (wantDir) or .dmx file directly inside
+  // dir, A-Z like the portal lists. Reads the card each call, so it is not
+  // limited by the list above (up to 255 entries per folder).
+  static bool nthEntry(const char *dir, bool wantDir, uint16_t n, char *out, size_t outLen);
 
   // Fill out[0..*n) with *.dmx paths under dir. Sorted case-insensitive.
   static bool collectPlaylist(const char *dir, bool recursive,

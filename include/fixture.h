@@ -6,16 +6,22 @@
 // Advanced patch: the node as one console fixture.
 //
 // The fixture has its own patch (protocol, universe, channel) and a mode.
-// Every mode starts with a 10-channel header:
-//   1 master dimmer, 2 strobe (0-9 open, 10-255 = 1-25 Hz), 3 hue shift,
-//   4-6 colour filter R/G/B (amount removed, 0 = none), 7-9 colour add
-//   R/G/B, 10 clip select (0 = normal playback: back to the startup
-//   playlist after a pick; n = play the n-th look on the SD).
+// Dim, RGB and Full start with a 13-channel header:
+//   1 master dimmer, 2 strobe (0-9 open, 10-255 = 1-25 Hz), 3 strobe colour
+//   (0 white, 1-255 round the colour wheel), 4 strobe intensity (what the
+//   strobe's off phase shows: that colour at this level; 0 = blackout),
+//   5 hue shift, 6-8 colour filter R/G/B (amount removed, 0 = none), 9-11
+//   colour add R/G/B, 12 folder (0 = SD root, n = n-th folder A-Z), 13 clip
+//   (0 = normal playback: back to the startup playlist after a pick; n =
+//   the n-th look in that folder, A-Z).
+// Basic is 5 channels and nothing else: 1 intensity, 2 strobe, 3 hue shift,
+//   4 folder, 5 clip; it overlays the look like Dim, with no sub-fixtures.
 // 0 on every channel is "no effect", so channels the console does not patch
 // (sent as 0) are released. Dimmers (master and each sub-fixture's) are the
 // exception 0 can't cover: each stays open until the console first sends it
 // above 0, then works as a normal dimmer until the fixture universe is lost.
 // Then, per mode:
+//   Basic: nothing more (sub-fixtures are kept but not used).
 //   Dim  : 2 ch per sub-fixture (dim, strobe); colour = the recorded look
 //          (SD playback or the live stream on the main patch). The fixture
 //          universe is control only and never takes over playback.
@@ -32,10 +38,11 @@
 // Stored in LittleFS on the "spiffs" partition (/fixture.bin; pixel names in
 // /pxnames.txt), so it survives an SD swap.
 
-enum class FixMode : uint8_t { Dim = 0, Rgb = 1, Full = 2 };
+enum class FixMode : uint8_t { Dim = 0, Rgb = 1, Full = 2, Basic = 3 };
 enum class FixDrive : uint8_t { None = 0, Look = 1, Console = 2 };
 
-static constexpr uint8_t kFixHeader = 10;
+static constexpr uint8_t kFixHeader = 13;      // Dim, RGB, Full
+static constexpr uint8_t kFixHeaderBasic = 5;
 static constexpr uint8_t kFixMaxSubs = 96;
 static constexpr uint16_t kFixMaxRanges = 256;
 static constexpr uint8_t kFixNameLen = 24;
@@ -54,7 +61,7 @@ public:
   static uint8_t collectSacnUniverses(uint16_t *out, uint8_t max);
   // A universe of this fixture's patch (enabled and valid only).
   static bool isFixtureUniverse(bool sacn, uint16_t uni);
-  // Dim mode: fixture universes carry control, not content.
+  // Dim / Basic: fixture universes carry control, not content.
   static bool controlOnly();
 
   // ---- render

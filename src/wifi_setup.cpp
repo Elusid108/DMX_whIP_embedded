@@ -2151,7 +2151,7 @@ static void handleFixtureGet() {
   sendJson(200, out);
 }
 
-// POST /fixture: en, mode (dim|rgb|full), proto (artnet|sacn), uni, ch, n,
+// POST /fixture: en, mode (basic|dim|rgb|full), proto (artnet|sacn), uni, ch, n,
 // then s<i>n (name) and s<i>px ("0-11,24-35") for i < n.
 static void handleFixturePost() {
   FixMode mode = FixMode::Dim;
