@@ -77,6 +77,30 @@ static bool s_addOn = false;
 static uint8_t s_add[3] = {0, 0, 0};
 static uint8_t s_subLevel[kFixMaxSubs];
 static uint8_t s_subRgb[kFixMaxSubs][3];
+// Dimmers the console has sent above 0 since the fixture universe was last
+// heard; the rest stay open (a channel the console does not patch reads 0).
+static bool s_masterUsed = false;
+static uint8_t s_subUsed[(kFixMaxSubs + 7) / 8];
+
+static void resetDimLatches() {
+  s_masterUsed = false;
+  memset(s_subUsed, 0, sizeof(s_subUsed));
+}
+
+// v, or open (255) until the console has sent this dimmer above 0.
+static uint8_t latchDim(uint8_t v, bool &used) {
+  used = used || v != 0;
+  return used ? v : 255;
+}
+
+static uint8_t latchSubDim(uint8_t k, uint8_t v) {
+  bool used = (s_subUsed[k >> 3] >> (k & 7)) & 1;
+  const uint8_t out = latchDim(v, used);
+  if (used) {
+    s_subUsed[k >> 3] |= static_cast<uint8_t>(1u << (k & 7));
+  }
+  return out;
+}
 
 // Locate.
 static uint8_t s_locate[kLedCountMax / 8];
@@ -294,6 +318,7 @@ static void rebuild() {
   const char *err = "";
   s_valid = derive(s_cfg, true, s_footprint, s_unis, err);
   s_err = err;
+  resetDimLatches();
   memset(s_subOf, 0xFF, sizeof(s_subOf));
   for (uint8_t k = 0; k < s_cfg.nSubs; ++k) {
     const SubCfg &sub = s_cfg.subs[k];
@@ -550,6 +575,7 @@ FixDrive Fixture::beginFrame(uint32_t nowMs) {
   const uint8_t *h = s_data[0] ? s_data[0] + (s_cfg.ch - 1) : nullptr;
   if (s_cfg.mode == FixMode::Dim) {
     if (!h) {
+      resetDimLatches();
       return s_drive; // no console: the look plays as recorded
     }
     s_drive = FixDrive::Look;
@@ -557,6 +583,7 @@ FixDrive Fixture::beginFrame(uint32_t nowMs) {
     s_drive = FixDrive::Console;
   }
   if (!h) {
+    resetDimLatches();
     s_master = 255;
     s_hueOn = s_filterOn = s_addOn = false;
     memset(s_subLevel, 0, sizeof(s_subLevel));
@@ -564,19 +591,22 @@ FixDrive Fixture::beginFrame(uint32_t nowMs) {
     return s_drive;
   }
   const int64_t t = SyncNet::masterUs();
-  s_master = strobeOn(h[1], t) ? h[0] : 0;
+  s_master = strobeOn(h[1], t) ? latchDim(h[0], s_masterUsed) : 0;
   s_hueOn = h[2] != 0;
   if (s_hueOn) {
     buildHue(h[2]);
   }
-  s_filterOn = h[3] != 255 || h[4] != 255 || h[5] != 255;
-  memcpy(s_filter, h + 3, 3);
+  // Filter = how much of each colour to remove (0 = none).
+  s_filterOn = h[3] || h[4] || h[5];
+  for (uint8_t i = 0; i < 3; ++i) {
+    s_filter[i] = static_cast<uint8_t>(255 - h[3 + i]);
+  }
   s_addOn = h[6] || h[7] || h[8];
   memcpy(s_add, h + 6, 3);
   const uint8_t per = perSub(s_cfg.mode);
   for (uint8_t k = 0; per && k < s_cfg.nSubs; ++k) {
     const uint8_t *sp = h + kFixHeader + k * per;
-    s_subLevel[k] = strobeOn(sp[1], t) ? fxMul(sp[0], s_master) : 0;
+    s_subLevel[k] = strobeOn(sp[1], t) ? fxMul(latchSubDim(k, sp[0]), s_master) : 0;
     if (s_cfg.mode == FixMode::Rgb) {
       memcpy(s_subRgb[k], sp + 2, 3);
     }

@@ -6,8 +6,8 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.46.0</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dmxwhip v0.48.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -151,6 +151,20 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 .fxpx input{padding:3px 6px;font-size:.85rem;margin:0}
 .fxidx{font:11px ui-monospace,monospace;color:var(--muted);text-align:right}
 .fxerr{color:#f87171;font-size:.8rem;margin:4px 0}
+.setcol{min-width:0}
+.setcol #list{max-height:40vh}
+@media (min-width:768px){
+body{max-width:60rem;padding:14px 20px}
+.dash{grid-template-columns:repeat(4,minmax(0,1fr));grid-template-rows:minmax(0,13rem);align-content:start}
+#viewPlay.on{display:grid;grid-template-columns:minmax(0,3fr) minmax(0,2fr);grid-template-rows:auto repeat(6,auto) 1fr;column-gap:16px}
+#viewPlay>.hint{grid-column:1/-1}
+#plist{grid-column:1;grid-row:2/-1;margin-top:0}
+#viewPlay>:not(.hint):not(#plist){grid-column:2}
+#viewSetup.on{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:24px;align-content:start}
+#viewSetup>.hint{grid-column:1/-1}
+.setcol>.mod:first-child{border-top:0;margin-top:0;padding-top:0}
+.fxsub{grid-template-columns:minmax(0,1fr) auto}
+}
 </style>
 </head>
 <body>
@@ -285,6 +299,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 <div id="viewSetup">
 <p class="hint" id="setupHint">2.4 GHz only. If this sheet closes, rejoin <b>dmxwhip</b> or open http://4.3.2.1</p>
+<div class="setcol">
 <div class="lab">Radio</div>
 <div class="row">
 <button id="scan" type="button">Scan</button>
@@ -311,6 +326,8 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 </div>
 <div id="savedrow"><p class="readout" id="savedlab"></p></div>
 <p id="status"></p>
+</div>
+<div class="setcol">
 <div class="mod lab">Live input</div>
 <div class="grid3">
 <div><label class="lab" for="fps">FPS</label>
@@ -368,7 +385,8 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <p class="hint">Sends this node's firmware to every other node of the same board that runs an older version, one at a time. They reboot themselves.</p>
 <div id="fwRows"></div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.46.0</p>
+</div>
+<p id="ver" class="readout">dmxwhip v0.48.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
