@@ -3,6 +3,7 @@
 #include "board_profile.h"
 #include "board_types.h"
 #include "distribute.h"
+#include "fixture.h"
 #include "identify.h"
 #include "led_bus.h"
 #include "led_test.h"
@@ -855,6 +856,8 @@ static void sendStatus(int code) {
   StreamTx::appendStatus(out);
   out += ',';
   Ota::appendStatus(out);
+  out += ',';
+  Fixture::appendStatus(out);
   out += ",\"bri\":";
   out += static_cast<unsigned>(LedCtrl::get());
   out += ',';
@@ -2140,6 +2143,103 @@ static void handleUploadDone() {
   sendJson(200, out);
 }
 
+// GET /fixture: the advanced patch (see fixture.h).
+static void handleFixtureGet() {
+  String out;
+  out.reserve(2048);
+  Fixture::appendJson(out);
+  sendJson(200, out);
+}
+
+// POST /fixture: en, mode (dim|rgb|full), proto (artnet|sacn), uni, ch, n,
+// then s<i>n (name) and s<i>px ("0-11,24-35") for i < n.
+static void handleFixturePost() {
+  FixMode mode = FixMode::Dim;
+  if (!Fixture::parseMode(s_server.arg("mode").c_str(), mode)) {
+    sendJson(400, "{\"error\":\"bad mode\"}");
+    return;
+  }
+  const String proto = s_server.arg("proto");
+  if (proto != "artnet" && proto != "sacn") {
+    sendJson(400, "{\"error\":\"bad proto\"}");
+    return;
+  }
+  const long uni = s_server.arg("uni").toInt();
+  const long ch = s_server.arg("ch").toInt();
+  const long n = s_server.arg("n").toInt();
+  if (uni < 0 || uni > 63999 || ch < 1 || ch > 512 || n < 0 || n > kFixMaxSubs) {
+    sendJson(400, "{\"error\":\"bad patch\"}");
+    return;
+  }
+  Fixture::stageBegin(s_server.arg("en") == "1", mode, proto == "sacn",
+                      static_cast<uint16_t>(uni), static_cast<uint16_t>(ch));
+  const char *err = nullptr;
+  bool ok = true;
+  for (long i = 0; ok && i < n; ++i) {
+    const String key = String("s") + i;
+    ok = Fixture::stageSub(s_server.arg(key + "n").c_str(), s_server.arg(key + "px").c_str(), err);
+  }
+  if (ok) {
+    ok = Fixture::stageCommit(err);
+  }
+  if (!ok) {
+    String out = "{\"error\":";
+    jsonEscape(out, String(err ? err : "failed"));
+    out += '}';
+    sendJson(400, out);
+    return;
+  }
+  handleFixtureGet();
+}
+
+// GET /fixture/names?from=&n= (n <= 128).
+static void handleFixtureNamesGet() {
+  long from = s_server.arg("from").toInt();
+  long n = s_server.hasArg("n") ? s_server.arg("n").toInt() : 128;
+  from = from < 0 ? 0 : (from > kLedCountMax ? kLedCountMax : from);
+  n = n < 0 ? 0 : (n > 128 ? 128 : n);
+  String out;
+  out.reserve(static_cast<size_t>(n) * 28 + 64);
+  Fixture::appendNames(out, static_cast<uint16_t>(from), static_cast<uint16_t>(n));
+  sendJson(200, out);
+}
+
+// POST /fixture/locate: px ("0-11,40"), ms (0 cancels, max 15000).
+static void handleFixtureLocate() {
+  if (LiveInput::active() && !Playback::hold()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  const long ms = s_server.hasArg("ms") ? s_server.arg("ms").toInt() : 10000;
+  const char *err = nullptr;
+  if (!Fixture::locate(s_server.arg("px").c_str(), ms < 0 ? 0 : static_cast<uint32_t>(ms), err)) {
+    String out = "{\"error\":";
+    jsonEscape(out, String(err ? err : "failed"));
+    out += '}';
+    sendJson(400, out);
+    return;
+  }
+  sendJson(200, "{\"ok\":true}");
+}
+
+// POST /fixture/names: from, names (one per line, 23 chars kept).
+static void handleFixtureNamesPost() {
+  const long from = s_server.arg("from").toInt();
+  if (from < 0 || from >= kLedCountMax || !s_server.hasArg("names")) {
+    sendJson(400, "{\"error\":\"bad names\"}");
+    return;
+  }
+  const char *err = nullptr;
+  if (!Fixture::setNames(static_cast<uint16_t>(from), s_server.arg("names"), err)) {
+    String out = "{\"error\":";
+    jsonEscape(out, String(err ? err : "failed"));
+    out += '}';
+    sendJson(500, out);
+    return;
+  }
+  sendJson(200, "{\"ok\":true}");
+}
+
 // POST /ota?force=0|1, multipart part "firmware": see ota.h.
 static void handleOtaFile() {
   HTTPUpload &up = s_server.upload();
@@ -3127,6 +3227,11 @@ void WifiSetup::begin() {
   s_server.on("/upload", HTTP_POST, handleUploadDone, handleUploadFile);
   s_server.on("/ota", HTTP_POST, handleOtaDone, handleOtaFile);
   s_server.on("/ota/peers", HTTP_POST, handleOtaPeers);
+  s_server.on("/fixture", HTTP_GET, handleFixtureGet);
+  s_server.on("/fixture", HTTP_POST, handleFixturePost);
+  s_server.on("/fixture/names", HTTP_GET, handleFixtureNamesGet);
+  s_server.on("/fixture/names", HTTP_POST, handleFixtureNamesPost);
+  s_server.on("/fixture/locate", HTTP_POST, handleFixtureLocate);
   s_server.on("/name", HTTP_POST, handleName);
   s_server.on("/rename", HTTP_POST, handleRename);
   s_server.on("/meta", HTTP_POST, handleMeta);

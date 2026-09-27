@@ -948,6 +948,11 @@ uint16_t PixelMap::firstSacnUniverse() {
   return s_seg[0].startSacnUniverse;
 }
 
+uint8_t PixelMap::usedSlots() {
+  loadNvs();
+  return countSlots(s_seg, s_n);
+}
+
 uint8_t PixelMap::collectSacnUniverses(uint16_t *out, uint8_t max) {
   loadNvs();
   uint8_t n = 0;

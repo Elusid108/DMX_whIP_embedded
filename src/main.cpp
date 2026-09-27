@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "board_profile.h"
+#include "fixture.h"
 #include "identify.h"
 #include "led_bus.h"
 #include "led_test.h"
@@ -25,15 +26,25 @@ static bool s_livePreemptedPlay = false;
 
 static uint8_t s_frame[kPlayMaxPayload];
 
+// d stays untouched (a held frame is re-rendered when the fixture animates).
 static void renderPacked(const uint8_t *d, uint16_t len) {
   LedBus::clear();
   const uint16_t n = PixelMap::outputPixelCount(0);
   const uint8_t ch = PixelMap::cfg().channelsPerPixel;
   const uint16_t off = PixelMap::outputPixelOffset(0);
+  // SD shows are looks: only Dim mode's overlay applies to them.
+  const bool fx = Fixture::beginFrame(millis()) == FixDrive::Look;
+  uint8_t px[kMaxChannelsPerPixel];
   for (uint16_t p = 0; p < n; ++p) {
     const uint16_t i = static_cast<uint16_t>(p * ch);
     if (ch >= 3 && static_cast<uint16_t>(i + ch) <= len) {
-      LedBus::setPacked(static_cast<uint16_t>(off + p), d + i);
+      if (fx) {
+        memcpy(px, d + i, ch);
+        Fixture::applyLook(static_cast<uint16_t>(off + p), px, ch);
+        LedBus::setPacked(static_cast<uint16_t>(off + p), px);
+      } else {
+        LedBus::setPacked(static_cast<uint16_t>(off + p), d + i);
+      }
     } else {
       LedBus::setRgb(static_cast<uint16_t>(off + p), 0, 0, 0);
     }
@@ -55,6 +66,7 @@ void setup() {
   LiveInput::begin();
   SdInfo::begin();
   PixelMap::begin();
+  Fixture::begin();
   PlayCfg::begin();
   Playback::begin();
   Sync::begin();
@@ -73,11 +85,13 @@ void loop() {
   LedBus::service();
   LiveInput::service();
   Sync::service();
+  Fixture::service();
 
   const bool live = LiveInput::active() && !Playback::hold();
   if (live) {
     Identify::cancel();
     LedTest::cancel();
+    Fixture::cancelLocate();
     if (Playback::running()) {
       LOG_V("main", "live preempts play");
       s_livePreemptedPlay = true;
@@ -87,7 +101,7 @@ void loop() {
     if (Playback::playing()) {
       Playback::pause();
     }
-  } else if (LedTest::active()) {
+  } else if (LedTest::active() || Fixture::locating()) {
     if (Playback::playing()) {
       Playback::pause();
     }
@@ -127,7 +141,7 @@ void loop() {
 
   // Render. LedBus::show() only when pixels changed (plus a 1 s keepalive so
   // a glitched strip heals); a held playback frame is not re-sent every tick.
-  enum class Mode : uint8_t { Live, Ident, Test, Play, Hold, Black };
+  enum class Mode : uint8_t { Live, Ident, Test, Locate, Play, Hold, Black };
   static Mode prevMode = Mode::Black;
   static uint32_t lastShow = 0;
   static bool haveFrame = false;
@@ -146,6 +160,8 @@ void loop() {
     mode = Mode::Ident;
   } else if (LedTest::active()) {
     mode = Mode::Test;
+  } else if (Fixture::locating()) {
+    mode = Mode::Locate;
   } else if (Playback::hasFile() && !Playback::userPaused() &&
              (LiveCfg::loss() == LiveLoss::Play || Playback::playing() ||
               Sync::inCue())) {
@@ -155,12 +171,17 @@ void loop() {
   }
   const bool entered = mode != prevMode;
   prevMode = mode;
+  // A patched fixture (strobe, dimmer moves) changes pixels between content
+  // frames: re-render every show tick while its console is heard.
+  const bool fxTick = fpsDue && Fixture::animating();
 
   bool drew = false;
   switch (mode) {
   case Mode::Live:
     if (syncLive ? liveFence : fpsDue) {
-      drew = LiveInput::renderLeds();
+      drew = LiveInput::renderLeds(fxTick);
+    } else if (fxTick) {
+      drew = LiveInput::renderLeds(true);
     }
     break;
   case Mode::Ident:
@@ -172,6 +193,12 @@ void loop() {
   case Mode::Test:
     if (fpsDue) {
       LedTest::render(now);
+      drew = true;
+    }
+    break;
+  case Mode::Locate:
+    if (fpsDue) {
+      Fixture::renderLocate();
       drew = true;
     }
     break;
@@ -190,7 +217,7 @@ void loop() {
       // Flags the underrun and pauses the show clock.
       Playback::renderDue(s_frame, sizeof(s_frame), now);
     }
-    if (!drew && entered && haveFrame) {
+    if (!drew && haveFrame && (entered || fxTick)) {
       renderPacked(s_frame, static_cast<uint16_t>(sizeof(s_frame)));
       drew = true;
     }

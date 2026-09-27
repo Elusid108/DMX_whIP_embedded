@@ -3,6 +3,7 @@
 #include "live_input.h"
 #include "log.h"
 #include "node_id.h"
+#include "fixture.h"
 #include "pixel_map.h"
 #include "sync.h"
 #include "version.h"
@@ -264,7 +265,7 @@ static void parsePacket(int n, const IPAddress &from) {
   }
   const uint16_t uni =
       static_cast<uint16_t>(s_pkt[14] | (s_pkt[15] << 8)) & 0x7FFF;
-  if (!PixelMap::wantsArtNet(uni)) {
+  if (!Fixture::wantsArtNet(uni)) {
     ++s_wrongUni;
     return;
   }

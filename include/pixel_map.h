@@ -180,6 +180,8 @@ public:
   static uint16_t firstArtNetUniverse();
   static uint16_t firstSacnUniverse();
   static uint8_t collectSacnUniverses(uint16_t *out, uint8_t max);
+  // Live universe slots the main patch needs.
+  static uint8_t usedSlots();
   static bool set(const PixelMapSet &in, bool save);
   static bool setAll(const PixelMapCfg *segs, uint8_t n, bool save);
   static bool setAllProtos(SegProto proto, bool save);

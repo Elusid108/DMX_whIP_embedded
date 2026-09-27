@@ -2,6 +2,7 @@
 
 #include "live_input.h"
 #include "log.h"
+#include "fixture.h"
 #include "pixel_map.h"
 #include "sync.h"
 
@@ -98,7 +99,7 @@ static bool joinMcast() {
   }
   leaveExtras();
   uint16_t unis[kLiveUniSlots];
-  const uint8_t n = PixelMap::collectSacnUniverses(unis, kLiveUniSlots);
+  const uint8_t n = Fixture::collectSacnUniverses(unis, kLiveUniSlots);
   const uint16_t start = n ? unis[0] : PixelMap::firstSacnUniverse();
   const IPAddress group = multicastGroup(start);
   s_udp.stop();
@@ -199,7 +200,7 @@ static void parsePacket(int n, const IPAddress &from) {
     return;
   }
   const uint16_t uni = rd16(s_pkt + 113);
-  if (!PixelMap::wantsSacn(uni)) {
+  if (!Fixture::wantsSacn(uni)) {
     ++s_wrongUni;
     return;
   }
@@ -259,6 +260,12 @@ void SacnRx::begin() {
   s_mcast = false;
   LOG_V("sacn", "listen :%u uni=%u", kSacnPort, PixelMap::firstSacnUniverse());
   joinMcast();
+}
+
+void SacnRx::rejoin() {
+  if (s_up) {
+    joinMcast();
+  }
 }
 
 void SacnRx::stop() {

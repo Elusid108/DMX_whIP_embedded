@@ -24,4 +24,6 @@ public:
   static void stop();
   static void service();
   static void onStaGotIp();
+  // Re-join multicast groups after the patch changed.
+  static void rejoin();
 };

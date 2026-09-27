@@ -1,6 +1,7 @@
 #include "live_input.h"
 
 #include "artnet_rx.h"
+#include "fixture.h"
 #include "led_bus.h"
 #include "log.h"
 #include "pixel_map.h"
@@ -18,6 +19,7 @@ struct UniSlot {
   uint16_t universe;
   uint8_t dmx[kDmxUniverseSize];
   bool have;
+  uint32_t ms;
 };
 
 static UniSlot s_slots[kLiveUniSlots];
@@ -95,15 +97,21 @@ static bool hasSlot(LiveSource src, uint16_t universe) {
   return s != nullptr && s->have;
 }
 
+// g: global pixel index of the segment's first pixel (advanced here).
 static void packSeg(const PixelMapCfg &m, uint8_t seg, uint8_t *dst,
-                    uint16_t &o) {
+                    uint16_t &o, uint16_t &g, FixDrive drive) {
   const uint8_t ch = m.channelsPerPixel;
   // Consecutive channels almost always share a universe: look the slot up
   // once per universe change, not once per channel.
   LiveSource cSrc = LiveSource::None;
   uint16_t cUni = 0;
   const UniSlot *cSlot = nullptr;
-  for (uint16_t p = 0; p < m.pixelCount; ++p) {
+  for (uint16_t p = 0; p < m.pixelCount; ++p, ++g) {
+    if (drive == FixDrive::Console) {
+      Fixture::consolePixel(g, dst + o, ch);
+      o = static_cast<uint16_t>(o + ch);
+      continue;
+    }
     uint16_t uniOff = 0;
     uint16_t ch1 = 1;
     if (!PixelMap::pixelOrigin(seg, p, uniOff, ch1)) {
@@ -146,34 +154,39 @@ static void packSeg(const PixelMapCfg &m, uint8_t seg, uint8_t *dst,
       }
       dst[o++] = cSlot != nullptr ? cSlot->dmx[slotOff] : 0;
     }
+    if (drive == FixDrive::Look) {
+      Fixture::applyLook(g, dst + o - ch, ch);
+    }
   }
 }
 
-static uint16_t assembleOutput(uint8_t out, uint8_t *dst) {
+static uint16_t assembleOutput(uint8_t out, uint8_t *dst, FixDrive drive) {
   uint16_t o = 0;
+  uint16_t g = PixelMap::outputPixelOffset(out);
   const uint8_t n = PixelMap::segmentCount();
   for (uint8_t i = 0; i < n; ++i) {
     if (PixelMap::outputOfSegment(i) != out) {
       continue;
     }
-    packSeg(PixelMap::segment(i), i, dst, o);
+    packSeg(PixelMap::segment(i), i, dst, o, g, drive);
   }
   return o;
 }
 
 static bool assembleOut0() {
-  s_outLen = assembleOutput(0, s_out);
+  s_outLen = assembleOutput(0, s_out, FixDrive::None);
   return s_outLen > 0;
 }
 
 static void startSockets() {
-  if (PixelMap::anyArtNet()) {
+  if (Fixture::anyArtNet()) {
     ArtNetRx::begin();
   } else {
     ArtNetRx::stop();
   }
-  if (PixelMap::anySacn()) {
+  if (Fixture::anySacn()) {
     SacnRx::begin();
+    SacnRx::rejoin();
   } else {
     SacnRx::stop();
   }
@@ -210,10 +223,10 @@ void LiveInput::applyCfg() {
 }
 
 void LiveInput::onStaGotIp() {
-  if (PixelMap::anyArtNet()) {
+  if (Fixture::anyArtNet()) {
     ArtNetRx::onStaGotIp();
   }
-  if (PixelMap::anySacn()) {
+  if (Fixture::anySacn()) {
     SacnRx::onStaGotIp();
   }
 }
@@ -284,10 +297,10 @@ bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
   if (src == LiveSource::None || src == LiveSource::Mixed || data == nullptr) {
     return false;
   }
-  if (src == LiveSource::ArtNet && !PixelMap::wantsArtNet(universe)) {
-    return false;
-  }
-  if (src == LiveSource::Sacn && !PixelMap::wantsSacn(universe)) {
+  const bool sacn = src == LiveSource::Sacn;
+  const bool content = sacn ? PixelMap::wantsSacn(universe) : PixelMap::wantsArtNet(universe);
+  const bool fixture = Fixture::isFixtureUniverse(sacn, universe);
+  if (!content && !fixture) {
     return false;
   }
   UniSlot *slot = findSlot(src, universe, true);
@@ -298,6 +311,20 @@ bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
     len = kDmxUniverseSize;
   }
   ++s_rx;
+  const uint32_t now = millis();
+  slot->ms = now;
+  if (fixture && !content && Fixture::controlOnly()) {
+    // Console control for the look (Dim mode): update the levels, but never
+    // take over playback as a live stream.
+    memcpy(slot->dmx, data, len);
+    if (len < kDmxUniverseSize) {
+      memset(slot->dmx + len, 0, kDmxUniverseSize - len);
+    }
+    slot->have = true;
+    slot->src = src;
+    slot->universe = universe;
+    return true;
+  }
   if (s_fresh) {
     ++s_drops;
   }
@@ -310,7 +337,7 @@ bool LiveInput::push(LiveSource src, const uint8_t *data, uint16_t len,
   slot->universe = universe;
   s_fresh = true;
   s_count = 1;
-  s_lastMs = millis();
+  s_lastMs = now;
   if (src == LiveSource::ArtNet) {
     s_lastArtMs = s_lastMs;
   } else {
@@ -333,16 +360,25 @@ bool LiveInput::pop(const uint8_t *&dmx, uint16_t &len) {
   return true;
 }
 
-bool LiveInput::renderLeds() {
-  if (!s_fresh) {
+bool LiveInput::renderLeds(bool force) {
+  if (!s_fresh && !force) {
     return false;
   }
   s_fresh = false;
   s_count = 0;
+  const FixDrive drive = Fixture::beginFrame(millis());
   const uint8_t n = PixelMap::outputCount();
   for (uint8_t o = 0; o < n; ++o) {
-    const uint16_t len = assembleOutput(o, s_out);
+    const uint16_t len = assembleOutput(o, s_out, drive);
     LedBus::setOutputPacked(o, s_out, len);
   }
   return true;
+}
+
+const uint8_t *LiveInput::slotData(LiveSource src, uint16_t universe) {
+  const UniSlot *s = findSlot(src, universe, false);
+  if (s == nullptr || !s->have || millis() - s->ms >= kLiveTimeoutMs) {
+    return nullptr;
+  }
+  return s->dmx;
 }

@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.43.0</title>
+<title>dmxwhip v0.46.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -130,6 +130,27 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 .err{color:#f87171}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
 .hint{color:var(--muted);font-size:.75rem;margin:0 0 6px;line-height:1.3}
+.seg2{display:flex;margin:0 0 8px;border:1px solid var(--border);border-radius:6px;overflow:hidden;flex:0 0 auto}
+.seg2 button{flex:1;width:auto;margin:0;border:0;border-radius:0;padding:6px;font-size:.8rem;background:var(--chrome);color:var(--muted)}
+.seg2 button.on{background:var(--accent);color:var(--bg)}
+#pxMainBox{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+#pxMainBox.off,#fxBox.off{display:none}
+#fxBox{flex:0 0 auto}
+.fxmeta{font:11px/1.3 ui-monospace,monospace;color:var(--muted);word-break:break-word}
+.fxbar{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.fxbar button,.fxbar select{width:auto;margin:0;padding:6px 10px;font-size:.8rem}
+.fxsub{display:grid;grid-template-columns:1fr auto;gap:4px 6px;align-items:center;border:1px solid var(--border);border-radius:6px;padding:6px 8px;margin:0 0 6px;background:var(--chrome)}
+.fxsub input{padding:4px 6px;font-size:.85rem;margin:0}
+.fxsub .fxmeta{grid-column:1/-1}
+.fxseg{border:1px solid var(--border);border-radius:6px;margin:0 0 6px;background:var(--chrome)}
+.fxseghead{display:flex;align-items:center;gap:6px;padding:6px 8px}
+.fxseghead b{flex:1;min-width:0;font-size:.75rem;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fxpx{display:grid;grid-template-columns:2.6em 1fr;gap:2px 6px;align-items:center;padding:4px 8px;border-top:1px solid var(--border);cursor:pointer}
+.fxpx .fxmeta{grid-column:2}
+.fxpx.sel{background:#22d3ee1f;box-shadow:inset 2px 0 0 var(--accent)}
+.fxpx input{padding:3px 6px;font-size:.85rem;margin:0}
+.fxidx{font:11px ui-monospace,monospace;color:var(--muted);text-align:right}
+.fxerr{color:#f87171;font-size:.8rem;margin:4px 0}
 </style>
 </head>
 <body>
@@ -217,11 +238,49 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div class="row"><button id="setStartup" type="button">Set startup</button><button id="clearStartup" type="button">Clear startup</button></div>
 </div>
 <div id="viewPixels">
+<div class="seg2"><button id="pxTabMain" class="on" type="button">Main patch</button><button id="pxTabAdv" type="button">Advanced</button></div>
+<div id="pxMainBox">
 <p class="hint">Each row is a fixture. Same data GPIO chains under the parent (top of the group is first on the wire). Save writes the map and applies it. Brightness applies immediately.</p>
 <div id="patchList"></div>
 <div class="row patchbar">
 <button class="pri" id="mapSave" type="button">Save</button>
 <button id="mapAdd" type="button">Add Output +</button>
+</div>
+</div>
+<div id="fxBox" class="off">
+<p class="hint">Makes this node one console fixture with its own address. Pixels come from the saved main patch. Group them into sub-fixtures; the channel list follows the mode.</p>
+<label class="tog"><input id="fxEn" type="checkbox"> Enabled</label>
+<label class="lab" for="fxMode">Mode</label>
+<select id="fxMode">
+<option value="dim">Dim + FX</option>
+<option value="rgb">RGB + FX</option>
+<option value="full">Full</option>
+</select>
+<p class="hint" id="fxModeHint"></p>
+<div class="grid3">
+<div><label class="lab" for="fxProto">Protocol</label><select id="fxProto"><option value="artnet">Art-Net</option><option value="sacn">sACN</option></select></div>
+<div><label class="lab" for="fxUni">Universe</label><input id="fxUni" type="number" min="0" max="63999" inputmode="numeric"></div>
+<div><label class="lab" for="fxCh">Channel</label><input id="fxCh" type="number" min="1" max="512" inputmode="numeric"></div>
+</div>
+<p class="readout" id="fxFoot"></p>
+<p class="fxerr" id="fxErr"></p>
+<details><summary class="lab">Header channels</summary><p class="readout" id="fxHdr"></p></details>
+<div class="mod lab">Sub-fixtures</div>
+<div id="fxSubs"></div>
+<div class="mod lab">Pixels</div>
+<div class="fxbar">
+<button id="fxGroup" type="button">Group as new</button>
+<select id="fxAddTo" aria-label="Sub-fixture to add to"></select>
+<button id="fxAdd" type="button">Add to</button>
+<button id="fxUngroup" type="button">Ungroup</button>
+<button id="fxLocate" type="button">Locate</button>
+<button id="fxClear" type="button">Clear</button>
+</div>
+<p class="fxmeta" id="fxSel">Tap pixels to select; Shift-tap selects a run.</p>
+<div id="fxTree"></div>
+<div class="row" style="margin-top:8px">
+<button class="pri" id="fxSave" type="button">Save advanced patch</button>
+</div>
 </div>
 </div>
 <div id="viewSetup">
@@ -309,7 +368,7 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <p class="hint">Sends this node's firmware to every other node of the same board that runs an older version, one at a time. They reboot themselves.</p>
 <div id="fwRows"></div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.44.0</p>
+<p id="ver" class="readout">dmxwhip v0.46.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -933,6 +992,408 @@ function applyChrome(s){
   applyLive(s);
   applyBand(s);
 }
+// ---------------------------------------------------------------- advanced patch
+const FX_HDR=['Master dimmer','Strobe','Hue shift','Filter red','Filter green','Filter blue','Add red','Add green','Add blue','Clip select'];
+const fxEls={};
+['pxTabMain','pxTabAdv','pxMainBox','fxBox','fxEn','fxMode','fxModeHint','fxProto','fxUni','fxCh','fxFoot','fxErr','fxHdr','fxSubs','fxTree','fxSel','fxGroup','fxAddTo','fxAdd','fxUngroup','fxLocate','fxClear','fxSave'].forEach(id=>{fxEls[id]=document.getElementById(id);});
+let fxView=false;
+let fx={en:false,mode:'dim',proto:'artnet',uni:0,ch:1,subs:[]};
+let fxSubOf=[];
+let fxNames=[];
+let fxNamesDirty=false;
+let fxDirty=false;
+let fxLoaded=false;
+let fxLoading=false;
+let fxOuts=[];
+let fxOutsKey='';
+let fxPx=[];
+let fxSel=new Set();
+let fxAnchor=-1;
+const fxOpen=new Set();
+function fxBuildPixels(outs){
+  const px=[];
+  (outs||[]).forEach((o,oi)=>{
+    (o.segs||[]).forEach((seg,si)=>{
+      const cpp=seg.ch_px||(3+(seg.white?1:0)+(seg.cct?1:0));
+      for(let i=0;i<(seg.count||0);i++) px.push({out:oi,seg:si,cpp});
+    });
+  });
+  return px;
+}
+function fxNoteOutputs(s){
+  if(!Array.isArray(s.outputs)) return;
+  const key=JSON.stringify(s.outputs.map(o=>[o.data,(o.segs||[]).map(g=>[g.count,g.ch_px])]));
+  if(key===fxOutsKey) return;
+  fxOutsKey=key;
+  fxOuts=s.outputs;
+  fxPx=fxBuildPixels(fxOuts);
+  const next=new Array(fxPx.length).fill(-1);
+  for(let g=0;g<next.length&&g<fxSubOf.length;g++) next[g]=fxSubOf[g];
+  fxSubOf=next;
+  fxSel=new Set([...fxSel].filter(g=>g<fxPx.length));
+  if(fxView) fxRender();
+}
+function fxParseRanges(str,cb){
+  String(str||'').split(',').forEach(part=>{
+    const m=/^\s*(\d+)\s*(?:-\s*(\d+))?\s*$/.exec(part);
+    if(!m) return;
+    const a=+m[1],b=m[2]!=null?+m[2]:a;
+    for(let g=a;g<=b;g++) cb(g);
+  });
+}
+function fxRanges(list){
+  const out=[];
+  let a=-1,b=-1;
+  list.slice().sort((x,y)=>x-y).forEach(g=>{
+    if(a>=0&&g===b+1){b=g;return;}
+    if(a>=0) out.push(a===b?String(a):a+'-'+b);
+    a=b=g;
+  });
+  if(a>=0) out.push(a===b?String(a):a+'-'+b);
+  return out.join(',');
+}
+function fxPixelsOf(k){
+  const out=[];
+  fxSubOf.forEach((v,g)=>{if(v===k) out.push(g);});
+  return out;
+}
+function fxPer(){return fx.mode==='dim'?2:(fx.mode==='rgb'?5:0);}
+// Same rules as fixture.cpp: header first; Full never splits a pixel across a universe.
+function fxLayout(){
+  const base=Math.max(0,(fx.ch|0)-1);
+  const lay={addr:null,footprint:0,unis:1,err:''};
+  if(fx.mode==='full'){
+    let pos=base+10;
+    if(pos>512) lay.err='The header does not fit after this channel.';
+    lay.addr=new Array(fxPx.length);
+    fxPx.forEach((p,g)=>{
+      if((pos%512)+p.cpp>512) pos=(Math.floor(pos/512)+1)*512;
+      lay.addr[g]=pos;
+      pos+=p.cpp;
+    });
+    lay.unis=Math.max(1,Math.ceil(pos/512));
+    lay.footprint=pos-base;
+    if(!lay.err&&lay.unis>6) lay.err='Full mode needs more than 6 universes. Use a reduced mode or fewer pixels.';
+  }else{
+    lay.footprint=10+fxPer()*fx.subs.length;
+    if(base+lay.footprint>512) lay.err='The fixture does not fit in the universe from this channel.';
+  }
+  return lay;
+}
+function fxChText(rel,n){
+  const u=Math.floor(rel/512);
+  const first=rel%512+1;
+  const list=[];
+  for(let i=0;i<n;i++) list.push(first+i);
+  return (u>0?'U'+((fx.uni|0)+u)+': ':'')+list.join(',');
+}
+function fxSubCh(k){
+  const per=fxPer();
+  if(!per) return '—';
+  return fxChText((fx.ch|0)-1+10+per*k,per);
+}
+function fxPixelCh(g,lay){
+  if(fx.mode==='full') return lay.addr&&lay.addr[g]!=null?fxChText(lay.addr[g],fxPx[g].cpp):'—';
+  const k=fxSubOf[g];
+  return k>=0?fxSubCh(k):'none (not grouped)';
+}
+function fxFootText(lay){
+  const base=(fx.ch|0);
+  const name=fx.mode==='full'?'Full':(fx.mode==='rgb'?'RGB + FX':'Dim + FX');
+  const math=fx.mode==='full'
+    ?'10 + '+fxPx.length+' px'
+    :'10 + '+fxPer()+'×'+fx.subs.length;
+  const last=base-1+lay.footprint-1;
+  const endU=(fx.uni|0)+Math.floor(last/512);
+  return name+' · '+math+' = '+lay.footprint+' ch · '+(fx.proto==='sacn'?'sACN':'Art-Net')+' '+(fx.uni|0)+'.'+base+'–'+endU+'.'+(last%512+1)+(lay.unis>1?' · '+lay.unis+' universes':'');
+}
+function fxFillForm(){
+  fxEls.fxEn.checked=!!fx.en;
+  fxEls.fxMode.value=fx.mode;
+  fxEls.fxProto.value=fx.proto;
+  fxEls.fxUni.value=String(fx.uni);
+  fxEls.fxCh.value=String(fx.ch);
+}
+function fxRenderSubs(){
+  const opts=fx.subs.map((s,k)=>'<option value="'+k+'">'+escapeHtml(s.name||('Sub '+(k+1)))+'</option>').join('');
+  fxEls.fxAddTo.innerHTML=opts||'<option value="">No sub-fixtures</option>';
+  if(!fx.subs.length){
+    fxEls.fxSubs.innerHTML='<p class="hint">None yet. Select pixels below, then Group as new.</p>';
+    return;
+  }
+  let h='';
+  fx.subs.forEach((s,k)=>{
+    const n=fxPixelsOf(k).length;
+    h+='<div class="fxsub" data-k="'+k+'">'+
+      '<input data-f="subname" value="'+escapeHtml(s.name)+'" maxlength="23" aria-label="Sub-fixture '+(k+1)+' name">'+
+      '<div class="patchops">'+
+        '<button data-a="sel" type="button">Select</button>'+
+        '<button data-a="up" type="button"'+(k===0?' disabled':'')+' aria-label="Move up">↑</button>'+
+        '<button data-a="down" type="button"'+(k===fx.subs.length-1?' disabled':'')+' aria-label="Move down">↓</button>'+
+        '<button data-a="del" type="button" aria-label="Delete">×</button>'+
+      '</div>'+
+      '<span class="fxmeta">'+(k+1)+' · '+n+' px · ch '+fxSubCh(k)+'</span>'+
+    '</div>';
+  });
+  fxEls.fxSubs.innerHTML=h;
+}
+function fxPixelRow(g,lay){
+  const k=fxSubOf[g];
+  const sub=k>=0?fx.subs[k]:null;
+  return '<div class="fxpx'+(fxSel.has(g)?' sel':'')+'" data-g="'+g+'">'+
+    '<span class="fxidx">'+g+'</span>'+
+    '<input data-f="pxname" value="'+escapeHtml(fxNames[g]||'')+'" placeholder="Pixel '+g+'" maxlength="23" aria-label="Pixel '+g+' name">'+
+    '<span class="fxmeta">'+(sub?escapeHtml(sub.name)+' · ':'')+'ch '+fxPixelCh(g,lay)+'</span>'+
+  '</div>';
+}
+function fxRenderTree(lay){
+  if(!fxPx.length){
+    fxEls.fxTree.innerHTML='<p class="hint">No pixels. Save a main patch first.</p>';
+    return;
+  }
+  let h='';
+  let g0=0;
+  fxOuts.forEach((o,oi)=>{
+    (o.segs||[]).forEach((seg,si)=>{
+      const n=seg.count||0;
+      const key=oi+'.'+si;
+      const open=fxOpen.has(key);
+      h+='<div class="fxseg" data-key="'+key+'" data-g0="'+g0+'" data-n="'+n+'">'+
+        '<div class="fxseghead"><b>Output '+(oi+1)+' · GPIO '+o.data+(o.segs.length>1?' · part '+(si+1):'')+' · px '+g0+'–'+(g0+n-1)+'</b>'+
+        '<div class="patchops"><button data-a="selseg" type="button">Select</button><button data-a="toggle" type="button">'+(open?'Hide':'Show')+'</button></div></div>';
+      if(open){
+        for(let g=g0;g<g0+n;g++) h+=fxPixelRow(g,lay);
+      }
+      h+='</div>';
+      g0+=n;
+    });
+  });
+  fxEls.fxTree.innerHTML=h;
+}
+function fxSelText(){
+  const list=[...fxSel];
+  const has=list.length>0;
+  fxEls.fxSel.textContent=has
+    ?list.length+' selected: '+fxRanges(list)
+    :'Tap pixels to select; Shift-tap selects a run.';
+  fxEls.fxGroup.disabled=!has;
+  fxEls.fxAdd.disabled=!has||!fx.subs.length;
+  fxEls.fxUngroup.disabled=!has;
+  fxEls.fxLocate.disabled=!has;
+  fxEls.fxClear.disabled=!has;
+}
+const FX_MODE_HINT={
+  dim:'Dimmer + strobe per sub-fixture over the recorded look (SD or the live stream). Needs its own universe.',
+  rgb:'Dimmer, strobe and colour per sub-fixture from the console. Ungrouped pixels stay dark.',
+  full:'Every LED from the console, after the header.'
+};
+function fxRender(){
+  const lay=fxLayout();
+  fxEls.fxModeHint.textContent=FX_MODE_HINT[fx.mode]||'';
+  fxEls.fxFoot.textContent=fxFootText(lay);
+  fxEls.fxErr.textContent=lay.err||fxServerErr||'';
+  const base=(fx.ch|0);
+  fxEls.fxHdr.textContent=FX_HDR.map((n,i)=>(base+i)+' '+n).join(' · ');
+  fxRenderSubs();
+  fxRenderTree(lay);
+  fxSelText();
+}
+function fxPaintSel(){
+  fxEls.fxTree.querySelectorAll('.fxpx').forEach(el=>{el.classList.toggle('sel',fxSel.has(+el.dataset.g));});
+  fxSelText();
+}
+let fxServerErr='';
+function fxApply(f){
+  fx={
+    en:!!f.en,mode:f.mode||'dim',proto:f.proto||'artnet',
+    uni:f.uni|0,ch:f.ch||1,
+    subs:(f.subs||[]).map(s=>({name:s.name||''}))
+  };
+  fxSubOf=new Array(fxPx.length).fill(-1);
+  (f.subs||[]).forEach((s,k)=>fxParseRanges(s.px,g=>{if(g<fxSubOf.length) fxSubOf[g]=k;}));
+  fxServerErr=f.storage===false
+    ?'This node has no config partition. Flash it once over USB.'
+    :(f.en&&f.valid===false?(f.err||''):'');
+  fxDirty=false;
+  fxFillForm();
+}
+async function fxLoad(){
+  if(fxLoading) return;
+  fxLoading=true;
+  try{
+    const f=await jget('/fixture');
+    fxApply(f);
+    const names=[];
+    for(let from=0;from<(f.pixels||0);from+=128){
+      const r=await jget('/fixture/names?from='+from+'&n=128');
+      (r.names||[]).forEach((n,i)=>{names[from+i]=n;});
+    }
+    fxNames=names;
+    fxNamesDirty=false;
+    fxLoaded=true;
+    fxRender();
+  }catch(e){
+    setNote('Could not read the advanced patch.','err');
+  }finally{
+    fxLoading=false;
+  }
+}
+function fxShow(adv){
+  fxView=adv;
+  fxEls.pxTabMain.className=adv?'':'on';
+  fxEls.pxTabAdv.className=adv?'on':'';
+  fxEls.pxMainBox.classList.toggle('off',adv);
+  fxEls.fxBox.classList.toggle('off',!adv);
+  if(adv){
+    if(!fxLoaded&&!fxDirty) fxLoad();
+    else fxRender();
+  }
+}
+fxEls.pxTabMain.onclick=()=>fxShow(false);
+fxEls.pxTabAdv.onclick=()=>fxShow(true);
+function fxFieldsChanged(){
+  fx.en=fxEls.fxEn.checked;
+  fx.mode=fxEls.fxMode.value;
+  fx.proto=fxEls.fxProto.value;
+  fx.uni=Math.max(0,parseInt(fxEls.fxUni.value,10)||0);
+  fx.ch=Math.min(512,Math.max(1,parseInt(fxEls.fxCh.value,10)||1));
+  fxDirty=true;
+  fxServerErr='';
+  fxRender();
+}
+['fxEn','fxMode','fxProto'].forEach(id=>{fxEls[id].onchange=fxFieldsChanged;});
+['fxUni','fxCh'].forEach(id=>{fxEls[id].onchange=fxFieldsChanged;});
+fxEls.fxSubs.addEventListener('input',e=>{
+  const row=e.target.closest('.fxsub');
+  if(!row||e.target.dataset.f!=='subname') return;
+  fx.subs[+row.dataset.k].name=e.target.value;
+  fxDirty=true;
+});
+fxEls.fxSubs.addEventListener('change',e=>{
+  if(e.target.dataset.f==='subname') fxRender();
+});
+fxEls.fxSubs.addEventListener('click',e=>{
+  const btn=e.target.closest('button');
+  const row=e.target.closest('.fxsub');
+  if(!btn||!row) return;
+  const k=+row.dataset.k;
+  const a=btn.dataset.a;
+  if(a==='sel'){
+    fxSel=new Set(fxPixelsOf(k));
+    fxPaintSel();
+    return;
+  }
+  if(a==='up'||a==='down'){
+    const j=a==='up'?k-1:k+1;
+    if(j<0||j>=fx.subs.length) return;
+    const t=fx.subs[k];fx.subs[k]=fx.subs[j];fx.subs[j]=t;
+    fxSubOf=fxSubOf.map(v=>v===k?j:(v===j?k:v));
+  }else if(a==='del'){
+    fx.subs.splice(k,1);
+    fxSubOf=fxSubOf.map(v=>v===k?-1:(v>k?v-1:v));
+  }
+  fxDirty=true;
+  fxRender();
+});
+fxEls.fxTree.addEventListener('input',e=>{
+  if(e.target.dataset.f!=='pxname') return;
+  const row=e.target.closest('.fxpx');
+  fxNames[+row.dataset.g]=e.target.value;
+  fxNamesDirty=true;
+});
+fxEls.fxTree.addEventListener('click',e=>{
+  if(e.target.tagName==='INPUT') return;
+  const btn=e.target.closest('button');
+  if(btn){
+    const seg=btn.closest('.fxseg');
+    if(!seg) return;
+    if(btn.dataset.a==='toggle'){
+      const key=seg.dataset.key;
+      if(fxOpen.has(key)) fxOpen.delete(key);
+      else fxOpen.add(key);
+      fxRenderTree(fxLayout());
+      return;
+    }
+    if(btn.dataset.a==='selseg'){
+      const g0=+seg.dataset.g0,n=+seg.dataset.n;
+      let all=true;
+      for(let g=g0;g<g0+n;g++) all=all&&fxSel.has(g);
+      for(let g=g0;g<g0+n;g++){if(all) fxSel.delete(g);else fxSel.add(g);}
+      fxPaintSel();
+    }
+    return;
+  }
+  const row=e.target.closest('.fxpx');
+  if(!row) return;
+  const g=+row.dataset.g;
+  if(e.shiftKey&&fxAnchor>=0){
+    const a=Math.min(fxAnchor,g),b=Math.max(fxAnchor,g);
+    for(let i=a;i<=b;i++) fxSel.add(i);
+  }else if(fxSel.has(g)){
+    fxSel.delete(g);
+  }else{
+    fxSel.add(g);
+  }
+  fxAnchor=g;
+  fxPaintSel();
+});
+function fxAssign(k){
+  fxSel.forEach(g=>{fxSubOf[g]=k;});
+  fxDirty=true;
+  fxRender();
+}
+fxEls.fxGroup.onclick=()=>{
+  if(!fxSel.size) return;
+  if(fx.subs.length>=96){setNote('96 sub-fixtures is the maximum.','err');return;}
+  fx.subs.push({name:'Sub '+(fx.subs.length+1)});
+  fxAssign(fx.subs.length-1);
+};
+fxEls.fxAdd.onclick=()=>{
+  const k=parseInt(fxEls.fxAddTo.value,10);
+  if(!fxSel.size||!(k>=0)) return;
+  fxAssign(k);
+};
+fxEls.fxUngroup.onclick=()=>fxAssign(-1);
+fxEls.fxClear.onclick=()=>{fxSel.clear();fxAnchor=-1;fxPaintSel();};
+fxEls.fxLocate.onclick=()=>{
+  if(!fxSel.size) return;
+  postForm('/fixture/locate',{px:fxRanges([...fxSel]),ms:'10000'}).then(async r=>{
+    if(!r.ok){const s=await r.json().catch(()=>({}));setNote(s.error==='live'?'Locate is unavailable while live input is on.':(s.error||'Locate failed'),'err');return;}
+    setNote('Selected pixels lit white for 10 s.','ok');
+  }).catch(dropHint);
+};
+fxEls.fxSave.onclick=async()=>{
+  const lay=fxLayout();
+  if(fx.en&&lay.err){setNote(lay.err,'err');return;}
+  const fields={en:fx.en?'1':'0',mode:fx.mode,proto:fx.proto,uni:String(fx.uni),ch:String(fx.ch),n:String(fx.subs.length)};
+  fx.subs.forEach((s,k)=>{
+    fields['s'+k+'n']=s.name;
+    fields['s'+k+'px']=fxRanges(fxPixelsOf(k));
+  });
+  const btn=fxEls.fxSave;
+  btn.disabled=true;
+  try{
+    const r=await postForm('/fixture',fields);
+    const s=await r.json().catch(()=>({}));
+    if(!r.ok){setNote('Advanced patch not saved: '+(s.error||'error'),'err');return;}
+    if(fxNamesDirty){
+      for(let from=0;from<fxPx.length;from+=128){
+        const chunk=[];
+        for(let g=from;g<Math.min(fxPx.length,from+128);g++) chunk.push(String(fxNames[g]||'').replace(/[\r\n]/g,' '));
+        const rn=await postForm('/fixture/names',{from:String(from),names:chunk.join('\n')});
+        if(!rn.ok) throw new Error('names');
+      }
+      fxNamesDirty=false;
+    }
+    fxApply(s);
+    fxRender();
+    setNote('Advanced patch saved.','ok');
+  }catch(e){
+    setNote('Advanced patch saved, but pixel names were not.','err');
+  }finally{
+    btn.disabled=false;
+  }
+};
 function applyPixels(s){
   if(s.patch){
     patchCaps={
@@ -957,6 +1418,7 @@ function applyPixels(s){
     }
   }
   applyTests(s);
+  fxNoteOutputs(s);
 }
 function applyTests(s){
   if(!Array.isArray(s.outputs)) return;
