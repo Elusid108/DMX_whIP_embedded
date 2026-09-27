@@ -4,6 +4,9 @@
 
 enum class LiveProto : uint8_t { Auto = 0, ArtNet = 1, Sacn = 2 };
 
+// What the LEDs do after the live stream goes quiet.
+enum class LiveLoss : uint8_t { Play = 0, Hold = 1, Black = 2 };
+
 class LiveCfg {
 public:
   static void begin();
@@ -13,11 +16,13 @@ public:
   static bool park();
   static bool takeover();
   static bool uniSync();
+  static LiveLoss loss();
   static uint32_t showIntervalMs();
   static const char *protoName();
   static const char *parkName();
   static const char *takeoverName();
   static const char *uniSyncName();
+  static const char *lossName();
   static bool set(LiveProto proto, uint8_t fps, uint8_t buf, bool park,
-                  bool takeover, bool uniSync, bool save);
+                  bool takeover, bool uniSync, LiveLoss loss, bool save);
 };

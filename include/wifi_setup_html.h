@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.34.0</title>
+<title>dmxwhip v0.35.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -264,11 +264,18 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <label class="lab" for="unisync">Uni-Sync</label>
 <select id="unisync"><option value="no" selected>No</option><option value="yes">Yes</option></select>
 <p class="hint">Yes plays a copied clip together when another node launches it. No ignores those copies and does not send them.</p>
+<label class="lab" for="loss">No signal</label>
+<select id="loss">
+<option value="play" selected>Play</option>
+<option value="hold">Hold</option>
+<option value="black">Black</option>
+</select>
+<p class="hint">Play resumes the show after the stream stops. Hold keeps the last frame. Black clears the lights.</p>
 <div class="row">
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.34.0</p>
+<p id="ver" class="readout">dmxwhip v0.35.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -290,6 +297,7 @@ const bufEl=document.getElementById('buf');
 const parkEl=document.getElementById('park');
 const takeoverEl=document.getElementById('takeover');
 const unisyncEl=document.getElementById('unisync');
+const lossEl=document.getElementById('loss');
 const bandEl=document.getElementById('band');
 const bandRow=document.getElementById('bandrow');
 const setupHint=document.getElementById('setupHint');
@@ -714,6 +722,7 @@ function applyLive(s){
   if(s.park) parkEl.value=s.park;
   if(takeoverEl&&s.takeover) takeoverEl.value=s.takeover;
   if(unisyncEl&&s.unisync) unisyncEl.value=s.unisync;
+  if(lossEl&&s.loss) lossEl.value=s.loss;
 }
 function linkLabel(v){
   if(v==='5g') return '5 GHz';
@@ -1091,7 +1100,7 @@ function postBand(){
     .catch(()=>{bandDirty=false;dropHint();});
 }
 function postLive(){
-  return postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value,takeover:takeoverEl?takeoverEl.value:'yes',unisync:unisyncEl?unisyncEl.value:'no'})
+  return postForm('/live',{fps:fpsEl.value,buf:bufEl.value,park:parkEl.value,takeover:takeoverEl?takeoverEl.value:'yes',unisync:unisyncEl?unisyncEl.value:'no',loss:lossEl?lossEl.value:'play'})
     .then(async r=>{if(!r.ok) throw new Error('http');liveDirty=false;applyMeta(await r.json());})
     .catch(dropHint);
 }
@@ -1427,6 +1436,7 @@ bufEl.onchange=markSetupDirty;
 parkEl.onchange=markSetupDirty;
 if(takeoverEl) takeoverEl.onchange=markSetupDirty;
 if(unisyncEl) unisyncEl.onchange=markSetupDirty;
+if(lossEl) lossEl.onchange=markSetupDirty;
 if(bandEl) bandEl.onchange=()=>{
   markSetupDirty();
   renderNets();

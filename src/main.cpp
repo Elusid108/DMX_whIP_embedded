@@ -108,13 +108,15 @@ void loop() {
       } else if (Sync::waitingForMaster()) {
         // Wait for the elected master; fall back in Sync::service.
       } else if (!Playback::running()) {
-        if (s_livePreemptedPlay) {
-          LOG_V("main", "play resume after silence");
-          s_livePreemptedPlay = false;
+        if (LiveCfg::loss() == LiveLoss::Play) {
+          if (s_livePreemptedPlay) {
+            LOG_V("main", "play resume after silence");
+            s_livePreemptedPlay = false;
+          }
+          Playback::start();
+          Playback::play();
+          Sync::noteAutoStart();
         }
-        Playback::start();
-        Playback::play();
-        Sync::noteAutoStart();
       } else if (!Playback::playing()) {
         Playback::play();
       }
@@ -157,7 +159,9 @@ void loop() {
     Identify::render(now);
   } else if (LedTest::active()) {
     LedTest::render(now);
-  } else if (Playback::hasFile() && !Playback::userPaused()) {
+  } else if (Playback::hasFile() && !Playback::userPaused() &&
+             (LiveCfg::loss() == LiveLoss::Play || Playback::playing() ||
+              Sync::cueFollow())) {
     if (Sync::cueFollow()) {
       if (cuePulse && Sync::cuePlaying() &&
           (Sync::cueHasTime() || Sync::cueHasFrame())) {
@@ -177,7 +181,7 @@ void loop() {
         }
       }
     }
-  } else if (fpsDue) {
+  } else if (fpsDue && LiveCfg::loss() != LiveLoss::Hold) {
     LedBus::clear();
   }
   LedBus::show();

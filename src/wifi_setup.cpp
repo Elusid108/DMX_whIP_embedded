@@ -751,6 +751,8 @@ static void sendStatus(int code) {
   jsonEscape(out, String(LiveCfg::takeoverName()));
   out += ",\"unisync\":";
   jsonEscape(out, String(LiveCfg::uniSyncName()));
+  out += ",\"loss\":";
+  jsonEscape(out, String(LiveCfg::lossName()));
   out += ',';
   appendWifiBand(out);
   out += ",\"live\":";
@@ -962,6 +964,8 @@ static void sendStats() {
   jsonEscape(out, String(LiveCfg::takeoverName()));
   out += ",\"unisync\":";
   jsonEscape(out, String(LiveCfg::uniSyncName()));
+  out += ",\"loss\":";
+  jsonEscape(out, String(LiveCfg::lossName()));
   out += ',';
   appendWifiBand(out);
   out += ",\"live\":";
@@ -1529,7 +1533,22 @@ static void handleLive() {
     }
   }
 
-  if (!LiveCfg::set(proto, fps, buf, park, takeover, uniSync, true)) {
+  LiveLoss loss = LiveCfg::loss();
+  if (s_server.hasArg("loss")) {
+    const String lossArg = s_server.arg("loss");
+    if (lossArg == "play") {
+      loss = LiveLoss::Play;
+    } else if (lossArg == "hold") {
+      loss = LiveLoss::Hold;
+    } else if (lossArg == "black") {
+      loss = LiveLoss::Black;
+    } else {
+      sendJson(400, "{\"error\":\"bad loss\"}");
+      return;
+    }
+  }
+
+  if (!LiveCfg::set(proto, fps, buf, park, takeover, uniSync, loss, true)) {
     sendJson(400, "{\"error\":\"bad live\"}");
     return;
   }
