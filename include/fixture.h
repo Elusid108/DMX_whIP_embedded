@@ -9,7 +9,8 @@
 // Every mode starts with a 10-channel header:
 //   1 master dimmer, 2 strobe (0-9 open, 10-255 = 1-25 Hz), 3 hue shift,
 //   4-6 colour filter R/G/B (amount removed, 0 = none), 7-9 colour add
-//   R/G/B, 10 clip select (0 = keep, n = play the n-th look on the SD).
+//   R/G/B, 10 clip select (0 = normal playback: back to the startup
+//   playlist after a pick; n = play the n-th look on the SD).
 // 0 on every channel is "no effect", so channels the console does not patch
 // (sent as 0) are released. Dimmers (master and each sub-fixture's) are the
 // exception 0 can't cover: each stays open until the console first sends it

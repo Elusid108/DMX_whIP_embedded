@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>dmxwhip v0.48.0</title>
+<title>dmxwhip v0.49.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -151,6 +151,12 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 .fxpx input{padding:3px 6px;font-size:.85rem;margin:0}
 .fxidx{font:11px ui-monospace,monospace;color:var(--muted);text-align:right}
 .fxerr{color:#f87171;font-size:.8rem;margin:4px 0}
+.fxmapw{max-height:18rem;overflow:auto;border:1px solid var(--border);border-radius:6px;margin-top:4px}
+.fxmap{width:100%;border-collapse:collapse;font-size:.8rem}
+.fxmap th,.fxmap td{padding:3px 6px;border-bottom:1px solid var(--border);text-align:left;vertical-align:top}
+.fxmap th{color:var(--muted);font-weight:500;position:sticky;top:0;background:var(--chrome)}
+.fxmap td:first-child{white-space:nowrap;font-variant-numeric:tabular-nums}
+.fxmap td:last-child{color:var(--muted)}
 .setcol{min-width:0}
 .setcol #list{max-height:40vh}
 @media (min-width:768px){
@@ -271,6 +277,7 @@ body{max-width:60rem;padding:14px 20px}
 <option value="full">Full</option>
 </select>
 <p class="hint" id="fxModeHint"></p>
+<p class="hint">A channel left at 0 has no effect, so channels your console doesn’t patch are ignored. Dimmers stay open until the console first raises them.</p>
 <div class="grid3">
 <div><label class="lab" for="fxProto">Protocol</label><select id="fxProto"><option value="artnet">Art-Net</option><option value="sacn">sACN</option></select></div>
 <div><label class="lab" for="fxUni">Universe</label><input id="fxUni" type="number" min="0" max="63999" inputmode="numeric"></div>
@@ -278,7 +285,7 @@ body{max-width:60rem;padding:14px 20px}
 </div>
 <p class="readout" id="fxFoot"></p>
 <p class="fxerr" id="fxErr"></p>
-<details><summary class="lab">Header channels</summary><p class="readout" id="fxHdr"></p></details>
+<details open><summary class="lab">Channel map</summary><div class="fxmapw"><table class="fxmap" id="fxHdr"></table></div></details>
 <div class="mod lab">Sub-fixtures</div>
 <div id="fxSubs"></div>
 <div class="mod lab">Pixels</div>
@@ -386,7 +393,7 @@ body{max-width:60rem;padding:14px 20px}
 <div id="fwRows"></div>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.48.0</p>
+<p id="ver" class="readout">dmxwhip v0.49.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -1011,7 +1018,7 @@ function applyChrome(s){
   applyBand(s);
 }
 // ---------------------------------------------------------------- advanced patch
-const FX_HDR=['Master dimmer','Strobe','Hue shift','Filter red','Filter green','Filter blue','Add red','Add green','Add blue','Clip select'];
+const FX_HDR=[['Master dimmer','0-255 · open until first raised'],['Strobe','0-9 open · 10-255 = 1-25 Hz'],['Hue shift','0 none · 1-255 round the colour wheel'],['Filter red','Red removed · 0 none'],['Filter green','Green removed · 0 none'],['Filter blue','Blue removed · 0 none'],['Add red','Red added · 0 none'],['Add green','Green added · 0 none'],['Add blue','Blue added · 0 none'],['Clip select','0 normal playback · n = n-th look on the SD']];
 const fxEls={};
 ['pxTabMain','pxTabAdv','pxMainBox','fxBox','fxEn','fxMode','fxModeHint','fxProto','fxUni','fxCh','fxFoot','fxErr','fxHdr','fxSubs','fxTree','fxSel','fxGroup','fxAddTo','fxAdd','fxUngroup','fxLocate','fxClear','fxSave'].forEach(id=>{fxEls[id]=document.getElementById(id);});
 let fxView=false;
@@ -1201,17 +1208,53 @@ function fxSelText(){
   fxEls.fxClear.disabled=!has;
 }
 const FX_MODE_HINT={
-  dim:'Dimmer + strobe per sub-fixture over the recorded look (SD or the live stream). Needs its own universe.',
-  rgb:'Dimmer, strobe and colour per sub-fixture from the console. Ungrouped pixels stay dark.',
-  full:'Every LED from the console, after the header.'
+  dim:'Overlays what the node already plays: its SD show, a synced group, or the live stream on its main patch. The console adds the header effects and a dimmer + strobe per sub-fixture (2 ch each); with no sub-fixtures it is a pure overlay. It uses its own universe, which never takes over playback; with no console the show plays untouched.',
+  rgb:'The console colours each sub-fixture (dim, strobe, red, green, blue, 5 ch each). The node’s own show is not used, and pixels in no sub-fixture stay dark.',
+  full:'The console drives every LED directly after the 10 header channels, in each strip’s colour order. It continues into the next universes without splitting a pixel (up to 6).'
 };
+// Channel span as text: 21-25, U3: 1-40, U2: 500 - U3: 20 (same as the
+// companion's fixture.js spanText).
+function fxSpan(a,b){
+  const at=r=>{const u=Math.floor(r/512);return{u,ch:r%512+1,t:u>0?'U'+((fx.uni|0)+u)+': ':''};};
+  const x=at(a),y=at(b);
+  if(a===b) return x.t+x.ch;
+  if(x.u===y.u) return x.t+x.ch+'-'+y.ch;
+  return (x.t||'U'+(fx.uni|0)+': ')+x.ch+' - '+y.t+y.ch;
+}
+// Every channel's function: header, then one row per sub-fixture or segment.
+function fxMapRows(lay){
+  const base=Math.max(0,(fx.ch|0)-1);
+  const rows=FX_HDR.map((h,i)=>[fxSpan(base+i,base+i),h[0],h[1]]);
+  if(fx.mode==='full'){
+    if(!lay.addr) return rows;
+    let g=0;
+    (fxOuts||[]).forEach((o,oi)=>(o.segs||[]).forEach((seg,si)=>{
+      const n=seg.count||0,cpp=seg.ch_px||(3+(seg.white?1:0)+(seg.cct?1:0));
+      if(n){
+        let ord=String(seg.order||'').toLowerCase();
+        if(ord.length!==cpp) ord='rgbwc'.slice(0,cpp);
+        rows.push([fxSpan(lay.addr[g],lay.addr[g+n-1]+cpp-1),'Out '+(oi+1)+' Seg '+(si+1),
+          'px '+g+'-'+(g+n-1)+' · '+cpp+' ch each ('+ord.split('').map(c=>c==='c'?'WW':c.toUpperCase()).join(', ')+')']);
+      }
+      g+=n;
+    }));
+    return rows;
+  }
+  const per=fxPer(),f=fx.mode==='rgb'?'Dim, Strobe, Red, Green, Blue':'Dim, Strobe';
+  fx.subs.forEach((s,k)=>{
+    const r=base+10+per*k;
+    rows.push([fxSpan(r,r+per-1),s.name||('Sub '+(k+1)),f+' · '+fxPixelsOf(k).length+' px']);
+  });
+  return rows;
+}
 function fxRender(){
   const lay=fxLayout();
   fxEls.fxModeHint.textContent=FX_MODE_HINT[fx.mode]||'';
   fxEls.fxFoot.textContent=fxFootText(lay);
   fxEls.fxErr.textContent=lay.err||fxServerErr||'';
   const base=(fx.ch|0);
-  fxEls.fxHdr.textContent=FX_HDR.map((n,i)=>(base+i)+' '+n).join(' · ');
+  fxEls.fxHdr.innerHTML='<tr><th>Channel</th><th>Function</th><th>Values</th></tr>'+
+    fxMapRows(lay).map(r=>'<tr><td>'+r[0]+'</td><td>'+escapeHtml(r[1])+'</td><td>'+r[2]+'</td></tr>').join('');
   fxRenderSubs();
   fxRenderTree(lay);
   fxSelText();

@@ -477,8 +477,21 @@ static void serviceClip() {
   if (now - s_clipSince < kClipSettleMs || v == s_clipActed) {
     return;
   }
+  const uint8_t was = s_clipActed;
   s_clipActed = v;
-  if (v == 0 || !SdInfo::ok() || v > SdInfo::fileCount()) {
+  if (v == 0) {
+    // Back to 0 after a pick: the node's own startup playlist again, for this
+    // session only (NVS keeps the startup show as it was).
+    if (was != 0 && PlayCfg::set(PlayCfg::bootSrc(), PlayCfg::bootPath(),
+                                 PlayCfg::bootFileLoop(), PlayCfg::bootFolderRep(),
+                                 PlayCfg::bootFolderN(), false, false)) {
+      Playback::reload();
+      Sync::noteLocalTrigger();
+      LOG_V("fix", "clip 0 -> startup playlist");
+    }
+    return;
+  }
+  if (!SdInfo::ok() || v > SdInfo::fileCount()) {
     return;
   }
   const char *path = SdInfo::fileAt(static_cast<uint8_t>(v - 1));
