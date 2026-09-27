@@ -37,8 +37,6 @@ public:
   static void userResume();
   static void setLoop(bool on);
   static void reload();
-  // Master heard a slave leave the show. This file loops: park. Otherwise next.
-  static void releaseFromSync();
 
   // Playback hold: the file wins over a live stream until Stop, the Live
   // page Stream action, or the playlist has no next file.
@@ -55,14 +53,9 @@ public:
   // True while a reload is waiting for the play task.
   static bool reloadPending();
 
-  // Move an in-flight cue seek onto the newest show t_ms, or seek now.
-  static void nudgeCue(uint32_t t_ms);
-
-  // True when a tick should binary-seek. False when the reader is already
-  // near t_ms or a seek is in progress. Play and Seek skip this and call
-  // nudgeCue directly.
-  static bool cueNeedsSeek(uint32_t t_ms);
-
+  // The reader wraps this one file forever (a single-file playlist that
+  // loops); a group cue launched from it loops too.
+  static bool loopsOnItself();
   static bool hasFile();
   static bool parked();
   static bool userPaused();
@@ -83,9 +76,28 @@ public:
   // nothing is due or on underrun (holds last output; no invent).
   static bool renderDue(uint8_t *rgb, size_t n, uint32_t nowMs);
 
-  // Follower: a cue tick says the master's show clock read t_ms. Anchors the
-  // local clock on the lowest-latency tick of a short window.
-  static void syncTick(uint32_t t_ms, uint32_t nowMs);
+  // Group schedule on the shared network clock (SyncNet::masterUs()):
+  // position = startPos + (masterNow - startAt). loop wraps every dur ms
+  // (0 = this file's own length). Survives rebinds until clearSchedule().
+  static void setSchedule(uint32_t startPosMs, int64_t startAtMasterUs,
+                          uint32_t durMs, bool loop);
+  static void pauseSchedule(uint32_t posMs);
+  static void clearSchedule();
+  static bool scheduled();
+  static bool schedulePaused();
+  // Position since the file's first pass (not wrapped), ms.
+  static uint32_t scheduleTotalMs();
+  // A non-looping schedule has run past its length.
+  static bool scheduleEnded();
+  // The network clock stepped by deltaUs: keep the position continuous.
+  static void rebaseSchedule(int64_t deltaUs);
+  // Seek the reader to the scheduled position (plus leadMs).
+  static void seekSchedule(uint32_t leadMs);
+  // How far the scheduled position has run past the last shown frame while
+  // the ring is empty (the reader fell behind), ms.
+  static uint32_t scheduleLagMs();
+  // Length of the bound file: last record time plus one frame, ms.
+  static uint32_t durationMs();
 
   // Show position on the local clock (ms). Head frame time when unanchored.
   static uint32_t showPosMs(uint32_t nowMs);

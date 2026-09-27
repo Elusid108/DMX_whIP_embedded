@@ -7,6 +7,7 @@
 #include "play_cfg.h"
 #include "sd_info.h"
 #include "sync.h"
+#include "sync_net.h"
 
 #include <Arduino.h>
 #include <SD.h>
@@ -30,6 +31,7 @@ static constexpr uint32_t kPlayPathLen = kSdPathLen;
 struct Slot {
   uint32_t t_us;
   uint32_t frame;
+  uint16_t pass;
   uint16_t size;
   uint8_t rgb[kPlayMaxPayload];
 };
@@ -64,7 +66,6 @@ static bool s_underrun = false;
 static bool s_begun = false;
 static bool s_exhausted = false;
 static bool s_reload = false;
-static volatile bool s_syncRelease = false;
 static bool s_loggedNoFile = false;
 static bool s_loggedLoop = false;
 static bool s_loggedNoMatch = false;
@@ -79,20 +80,30 @@ static uint32_t s_outFrame = 0;
 static uint32_t s_payload = 0;
 static uint32_t s_dmxOff = 0;
 
-// Show clock: showPos = now + s_clkOff while armed. Local playback anchors
-// on the first frame after start/seek/underrun; a follower anchors on the
-// lowest-latency cue tick of the last kTickWin ticks (max of t_ms - now).
-static constexpr uint8_t kTickWin = 8;
-static constexpr int32_t kTickResetMs = 500;
+// Local show clock: showPos = now + s_clkOff while armed. It anchors on the
+// first frame after start/seek/underrun (pause on underrun, never invent).
 static constexpr uint32_t kRewindSlackMs = 200;
 static bool s_clkArmed = false;
-static bool s_clkExt = false;
 static int32_t s_clkOff = 0;
 static uint32_t s_lastShownMs = 0;
 static uint32_t s_lastGapMs = 0;
-static int32_t s_tickOff[kTickWin];
-static uint8_t s_tickN = 0;
-static uint8_t s_tickI = 0;
+
+// Group schedule (cue bus): position = startPos + (masterNow - startAt), on
+// the shared network clock. Loops wrap every dur ms; each ring frame carries
+// the reader pass it was read in, so a wrap never strands queued frames.
+struct Schedule {
+  bool on;
+  bool paused;
+  bool loop;
+  int64_t startAtUs;
+  uint32_t startPosMs;
+  uint32_t durMs;
+  uint32_t pausePosMs;
+};
+static Schedule s_sched = {};
+static uint16_t s_readPass = 0;
+static uint16_t s_seekPass = 0;
+static uint32_t s_durMs = 0;
 
 // Sequential SD reads go through one block buffer (one lock per block
 // instead of two per 522-byte record).
@@ -293,12 +304,7 @@ static void unlockPlay() {
   }
 }
 
-static void clearClockLocked() {
-  s_clkArmed = false;
-  s_clkExt = false;
-  s_tickN = 0;
-  s_tickI = 0;
-}
+static void clearClockLocked() { s_clkArmed = false; }
 
 static void resetRingLocked() {
   s_head = 0;
@@ -540,6 +546,7 @@ static void pushReadFrame() {
     Slot &s = s_ring[s_head];
     s.t_us = s_readTUs;
     s.frame = s_readFrame;
+    s.pass = s_readPass;
     s.size = s_readSize;
     memcpy(s.rgb, s_readRgb, s_readSize);
     s_head = static_cast<uint8_t>((s_head + 1) % s_slots);
@@ -555,6 +562,7 @@ static bool wrapShow() {
   s_frameIndex = 0;
   s_off = kDmxrecHeaderBytes;
   s_matchedPass = 0;
+  s_readPass = static_cast<uint16_t>(s_readPass + 1);
   const bool first = !s_loggedLoop;
   unlockPlay();
   clearAssembler();
@@ -652,23 +660,13 @@ static bool applySeek() {
       return false;
     }
     const uint32_t from = s_frameIndex;
-    for (uint8_t pass = 0; pass < 3; ++pass) {
-      if (!binaryLandMs(want, frames, land)) {
-        lockPlay();
-        s_seekKind = kind;
-        s_seekMs = wantMs;
-        s_seekFrame = wantFrame;
-        unlockPlay();
-        return false;
-      }
-      if (!Sync::cueFollow() || !Sync::cueHasTime()) {
-        break;
-      }
-      const uint32_t latest = Sync::cueTargetMs();
-      if (latest == want) {
-        break;
-      }
-      want = latest;
+    if (!binaryLandMs(want, frames, land)) {
+      lockPlay();
+      s_seekKind = kind;
+      s_seekMs = wantMs;
+      s_seekFrame = wantFrame;
+      unlockPlay();
+      return false;
     }
     if (from + 8 < land || land + 8 < from) {
       LOG_V("play", "catch t_ms=%u frame=%u", static_cast<unsigned>(want),
@@ -690,6 +688,7 @@ static bool applySeek() {
   s_frameIndex = land;
   s_off = off;
   s_matchedPass = 0;
+  s_readPass = s_seekPass;
   if (kind == SeekKind::TimeMs) {
     s_landedReqMs = want;
     s_landedReqFrame = 0xFFFFFFFFu;
@@ -810,6 +809,31 @@ static bool bindPath(const char *path) {
   }
   fileBytes = f.size();
   const size_t got = f.read(reinterpret_cast<uint8_t *>(&h), sizeof(h));
+  // Show length: last record time plus one frame gap (first two distinct
+  // record times), so a loop holds the last frame for a frame.
+  uint32_t durMs = 0;
+  if (got == sizeof(h) && h.frame_count > 0 &&
+      fileBytes == dmxrecFileBytes(h.frame_count)) {
+    DmxrecFramePrefix pre;
+    uint32_t first = 0;
+    uint32_t gap = 0;
+    const uint32_t probe = h.frame_count < 64 ? h.frame_count : 64;
+    for (uint32_t i = 0; i < probe && gap == 0; ++i) {
+      if (!f.seek(dmxrecFrameOffset(i)) ||
+          f.read(reinterpret_cast<uint8_t *>(&pre), sizeof(pre)) != sizeof(pre)) {
+        break;
+      }
+      if (i == 0) {
+        first = pre.t_ms;
+      } else if (pre.t_ms > first) {
+        gap = pre.t_ms - first;
+      }
+    }
+    if (f.seek(dmxrecFrameOffset(h.frame_count - 1)) &&
+        f.read(reinterpret_cast<uint8_t *>(&pre), sizeof(pre)) == sizeof(pre)) {
+      durMs = pre.t_ms + (gap ? gap : 25);
+    }
+  }
   f.close();
   SdInfo::unlock();
 
@@ -846,9 +870,11 @@ static bool bindPath(const char *path) {
   s_payload = payload;
   s_dmxOff = off;
   s_frameCount = h.frame_count;
+  s_durMs = durMs;
   s_frameIndex = 0;
   s_off = kDmxrecHeaderBytes;
   s_matchedPass = 0;
+  s_readPass = 0;
   s_loggedLoop = false;
   s_loggedNoMatch = false;
   s_loggedNoFile = false;
@@ -1003,21 +1029,6 @@ static void playbackTask(void *) {
       continue;
     }
 
-    lockPlay();
-    const bool syncRelease = s_syncRelease;
-    if (syncRelease) {
-      s_syncRelease = false;
-    }
-    unlockPlay();
-    if (syncRelease) {
-      if (PlayCfg::fileLoop() == PlayFileLoop::One) {
-        Playback::park();
-      } else if (!advancePlaylist()) {
-        Playback::park();
-      }
-      continue;
-    }
-
     if (!run || !has) {
       closeFile();
       vTaskDelay(pdMS_TO_TICKS(50));
@@ -1046,8 +1057,15 @@ static void playbackTask(void *) {
 
     lockPlay();
     const bool atEnd = s_frameIndex >= s_frameCount;
+    // Binding the next file resets the ring: let the queued tail of this one
+    // play out first (a deep ring would otherwise cut up to a second).
+    const bool drain = s_loop && s_listN > 1 && s_count > 0;
     unlockPlay();
     if (atEnd) {
+      if (drain) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        continue;
+      }
       onFileEnd();
       continue;
     }
@@ -1061,6 +1079,13 @@ static void playbackTask(void *) {
       continue;
     }
     if (r == ReadResult::Eof) {
+      lockPlay();
+      const bool drainEof = s_loop && s_listN > 1 && s_count > 0;
+      unlockPlay();
+      if (drainEof) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        continue;
+      }
       onFileEnd();
       continue;
     }
@@ -1239,8 +1264,11 @@ void Playback::cueFile(const char *path, uint32_t t_ms, bool savePlaylist) {
   }
   s_armCueMs = t_ms;
   s_armCueSeek = true;
-  PlayCfg::set(PlaySrc::File, path, PlayCfg::fileLoop(), PlayCfg::folderRep(),
-               PlayCfg::folderN(), savePlaylist);
+  // A group cue plays this one file (it loops or ends with the cue); the
+  // caller's snapshot restores the session's own loop setting afterwards.
+  PlayCfg::set(PlaySrc::File, path,
+               savePlaylist ? PlayCfg::fileLoop() : PlayFileLoop::One,
+               PlayCfg::folderRep(), PlayCfg::folderN(), savePlaylist);
   reload();
   play();
 }
@@ -1257,56 +1285,6 @@ bool Playback::reloadPending() {
   const bool on = s_reload;
   unlockPlay();
   return on;
-}
-
-void Playback::nudgeCue(uint32_t t_ms) {
-  lockPlay();
-  const bool arming = s_armCueSeek || s_reload || !s_hasFile;
-  if (arming) {
-    s_armCueMs = t_ms;
-    s_armCueSeek = true;
-    unlockPlay();
-    return;
-  }
-  unlockPlay();
-  seekMs(t_ms);
-}
-
-bool Playback::cueNeedsSeek(uint32_t t_ms) {
-  lockPlay();
-  const bool arming = s_armCueSeek || s_reload || !s_hasFile;
-  if (arming) {
-    unlockPlay();
-    return true;
-  }
-  if (s_seekBusy || s_seekKind == SeekKind::TimeMs) {
-    unlockPlay();
-    return false;
-  }
-  if (s_count > 0) {
-    const uint32_t oldest = s_ring[s_tail].t_us / 1000u;
-    unlockPlay();
-    // A tick ahead of the queue must not wipe it. The reader catches up.
-    // Rewind (loop back to 0) still seeks.
-    if (t_ms < oldest) {
-      return !nearMs(t_ms, oldest);
-    }
-    return false;
-  }
-  const uint32_t landed = s_landedReqMs;
-  const uint32_t shown = s_tUs / 1000u;
-  const bool haveShown = landed != 0xFFFFFFFFu || s_tUs != 0 || s_matchedPass > 0;
-  unlockPlay();
-  if (landed != 0xFFFFFFFFu && t_ms < landed && !nearMs(t_ms, landed)) {
-    return true;
-  }
-  if (haveShown && t_ms < shown && !nearMs(t_ms, shown)) {
-    return true;
-  }
-  if (landed == 0xFFFFFFFFu && !haveShown) {
-    return true;
-  }
-  return false;
 }
 
 void Playback::play() {
@@ -1357,12 +1335,6 @@ void Playback::setLoop(bool on) {
   unlockPlay();
 }
 
-void Playback::releaseFromSync() {
-  lockPlay();
-  s_syncRelease = true;
-  unlockPlay();
-}
-
 void Playback::reload() {
   if (!s_begun) {
     return;
@@ -1375,6 +1347,13 @@ void Playback::reload() {
   s_parked = false;
   s_userPaused = false;
   unlockPlay();
+}
+
+bool Playback::loopsOnItself() {
+  lockPlay();
+  const bool on = s_loop && s_listN == 1 && s_passLeft != 1;
+  unlockPlay();
+  return on;
 }
 
 bool Playback::hasFile() { return s_hasFile; }
@@ -1417,21 +1396,50 @@ bool Playback::peekFrame(uint32_t &t_us, uint32_t &frame) {
   return true;
 }
 
+// Scheduled position in ms since the start of the file's first pass; < 0
+// before the cue starts. Caller holds s_mu.
+static int64_t schedTotalMsLocked(int64_t masterUs) {
+  if (s_sched.paused) {
+    return s_sched.pausePosMs;
+  }
+  return static_cast<int64_t>(s_sched.startPosMs) +
+         (masterUs - s_sched.startAtUs) / 1000;
+}
+
 // Caller holds s_mu and s_count > 0.
 static bool headDueLocked(uint32_t nowMs) {
+  const Slot &head = s_ring[s_tail];
+  const uint32_t t = head.t_us / 1000u;
+  if (s_sched.on) {
+    if (s_sched.paused) {
+      return false;
+    }
+    const int64_t total = schedTotalMsLocked(SyncNet::masterUs());
+    if (total < 0) {
+      return false;
+    }
+    uint32_t pass = 0;
+    uint64_t within = static_cast<uint64_t>(total);
+    if (s_sched.loop && s_sched.durMs > 0) {
+      pass = static_cast<uint32_t>(within / s_sched.durMs);
+      within %= s_sched.durMs;
+    }
+    const uint16_t p = static_cast<uint16_t>(pass);
+    return static_cast<int16_t>(head.pass - p) < 0 ||
+           (head.pass == p && t <= within);
+  }
   if (!s_clkArmed) {
     return true;
   }
-  const uint32_t head = s_ring[s_tail].t_us / 1000u;
   const int64_t pos = static_cast<int64_t>(nowMs) + s_clkOff;
-  if (!s_clkExt && head + kRewindSlackMs < s_lastShownMs) {
+  if (t + kRewindSlackMs < s_lastShownMs) {
     // Loop back to the top of the show: hold the last frame for one gap.
-    s_clkOff = static_cast<int32_t>(static_cast<int64_t>(head) - nowMs -
+    s_clkOff = static_cast<int32_t>(static_cast<int64_t>(t) - nowMs -
                                     static_cast<int64_t>(s_lastGapMs));
-    s_lastShownMs = head;
+    s_lastShownMs = t;
     return s_lastGapMs == 0;
   }
-  return static_cast<int64_t>(head) <= pos;
+  return static_cast<int64_t>(t) <= pos;
 }
 
 bool Playback::frameDue(uint32_t nowMs) {
@@ -1449,15 +1457,14 @@ bool Playback::renderDue(uint8_t *rgb, size_t n, uint32_t nowMs) {
   if (s_count == 0) {
     if (s_run) {
       noteUnderrunLocked();
-      // Pause the clock; the next frame re-anchors (never invent frames).
-      if (!s_clkExt) {
-        s_clkArmed = false;
-      }
+      // Pause the local clock; the next frame re-anchors (never invent
+      // frames). A group schedule keeps running on the network clock.
+      s_clkArmed = false;
     }
     unlockPlay();
     return false;
   }
-  if (!s_clkArmed) {
+  if (!s_sched.on && !s_clkArmed) {
     s_clkOff = static_cast<int32_t>(
         static_cast<int64_t>(s_ring[s_tail].t_us / 1000u) - nowMs);
     s_clkArmed = true;
@@ -1486,40 +1493,16 @@ bool Playback::renderDue(uint8_t *rgb, size_t n, uint32_t nowMs) {
   return true;
 }
 
-void Playback::syncTick(uint32_t t_ms, uint32_t nowMs) {
-  const int32_t sample =
-      static_cast<int32_t>(static_cast<int64_t>(t_ms) - nowMs);
-  lockPlay();
-  if (s_clkExt && s_tickN > 0) {
-    const int32_t d = sample - s_clkOff;
-    if (d > kTickResetMs || d < -kTickResetMs) {
-      s_tickN = 0;
-      s_tickI = 0;
-    }
-  }
-  s_tickOff[s_tickI] = sample;
-  s_tickI = static_cast<uint8_t>((s_tickI + 1) % kTickWin);
-  if (s_tickN < kTickWin) {
-    s_tickN = static_cast<uint8_t>(s_tickN + 1);
-  }
-  // The tick that arrived fastest reads the latest show time for its
-  // arrival instant: take the max offset of the window.
-  int32_t best = s_tickOff[(s_tickI + kTickWin - 1) % kTickWin];
-  for (uint8_t i = 0; i < s_tickN; ++i) {
-    if (s_tickOff[i] > best) {
-      best = s_tickOff[i];
-    }
-  }
-  s_clkOff = best;
-  s_clkArmed = true;
-  s_clkExt = true;
-  unlockPlay();
-}
-
 uint32_t Playback::showPosMs(uint32_t nowMs) {
   lockPlay();
   uint32_t pos = s_lastShownMs;
-  if (s_clkArmed) {
+  if (s_sched.on) {
+    const int64_t total = schedTotalMsLocked(SyncNet::masterUs());
+    pos = total < 0 ? 0 : static_cast<uint32_t>(total);
+    if (s_sched.loop && s_sched.durMs > 0) {
+      pos %= s_sched.durMs;
+    }
+  } else if (s_clkArmed) {
     const int64_t p = static_cast<int64_t>(nowMs) + s_clkOff;
     pos = p > 0 ? static_cast<uint32_t>(p) : 0;
   } else if (s_count > 0) {
@@ -1561,6 +1544,7 @@ bool Playback::seekMs(uint32_t t_ms) {
   }
   s_seekKind = SeekKind::TimeMs;
   s_seekMs = t_ms;
+  s_seekPass = 0;
   s_landedReqMs = 0xFFFFFFFFu;
   resetRingLocked();
   unlockPlay();
@@ -1583,11 +1567,112 @@ bool Playback::seekFrame(uint32_t index) {
   }
   s_seekKind = SeekKind::Frame;
   s_seekFrame = index;
+  s_seekPass = 0;
   s_landedReqFrame = 0xFFFFFFFFu;
   resetRingLocked();
   unlockPlay();
   return true;
 }
+
+void Playback::setSchedule(uint32_t startPosMs, int64_t startAtMasterUs,
+                           uint32_t durMs, bool loop) {
+  lockPlay();
+  s_sched.on = true;
+  s_sched.paused = false;
+  s_sched.loop = loop;
+  s_sched.startAtUs = startAtMasterUs;
+  s_sched.startPosMs = startPosMs;
+  s_sched.durMs = durMs ? durMs : s_durMs;
+  s_sched.pausePosMs = startPosMs;
+  unlockPlay();
+}
+
+void Playback::pauseSchedule(uint32_t posMs) {
+  lockPlay();
+  if (s_sched.on) {
+    s_sched.paused = true;
+    s_sched.pausePosMs = posMs;
+  }
+  unlockPlay();
+}
+
+void Playback::clearSchedule() {
+  lockPlay();
+  s_sched = {};
+  unlockPlay();
+}
+
+bool Playback::scheduled() { return s_sched.on; }
+
+bool Playback::schedulePaused() { return s_sched.on && s_sched.paused; }
+
+uint32_t Playback::scheduleTotalMs() {
+  lockPlay();
+  const int64_t total =
+      s_sched.on ? schedTotalMsLocked(SyncNet::masterUs()) : 0;
+  unlockPlay();
+  return total < 0 ? 0 : static_cast<uint32_t>(total);
+}
+
+bool Playback::scheduleEnded() {
+  lockPlay();
+  bool ended = false;
+  if (s_sched.on && !s_sched.loop && s_sched.durMs > 0 && !s_sched.paused) {
+    ended = schedTotalMsLocked(SyncNet::masterUs()) >
+            static_cast<int64_t>(s_sched.durMs);
+  }
+  unlockPlay();
+  return ended;
+}
+
+void Playback::rebaseSchedule(int64_t deltaUs) {
+  lockPlay();
+  if (s_sched.on) {
+    s_sched.startAtUs += deltaUs;
+  }
+  unlockPlay();
+}
+
+void Playback::seekSchedule(uint32_t leadMs) {
+  lockPlay();
+  if (!s_sched.on || !s_hasFile) {
+    unlockPlay();
+    return;
+  }
+  const int64_t total =
+      schedTotalMsLocked(SyncNet::masterUs()) + static_cast<int64_t>(leadMs);
+  uint64_t within = total < 0 ? 0 : static_cast<uint64_t>(total);
+  uint32_t pass = 0;
+  if (s_sched.loop && s_sched.durMs > 0) {
+    pass = static_cast<uint32_t>(within / s_sched.durMs);
+    within %= s_sched.durMs;
+  }
+  s_seekPass = static_cast<uint16_t>(pass);
+  s_seekKind = SeekKind::TimeMs;
+  s_seekMs = static_cast<uint32_t>(within);
+  s_landedReqMs = 0xFFFFFFFFu;
+  resetRingLocked();
+  unlockPlay();
+}
+
+uint32_t Playback::scheduleLagMs() {
+  lockPlay();
+  uint32_t lag = 0;
+  if (s_sched.on && !s_sched.paused && s_count == 0 &&
+      s_seekKind == SeekKind::None && !s_seekBusy && s_hasFile) {
+    const int64_t total = schedTotalMsLocked(SyncNet::masterUs());
+    uint64_t within = total < 0 ? 0 : static_cast<uint64_t>(total);
+    if (s_sched.loop && s_sched.durMs > 0) {
+      within %= s_sched.durMs;
+    }
+    const uint64_t shown = s_lastShownMs;
+    lag = within > shown ? static_cast<uint32_t>(within - shown) : 0;
+  }
+  unlockPlay();
+  return lag;
+}
+
+uint32_t Playback::durationMs() { return s_hasFile ? s_durMs : 0; }
 
 uint32_t Playback::tUs() { return s_tUs; }
 

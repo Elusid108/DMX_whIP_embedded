@@ -6,13 +6,14 @@
 #include "play_cfg.h"
 #include "playback.h"
 #include "sd_info.h"
+#include "sync_net.h"
 
 #include <Arduino.h>
 #include <SD.h>
-#include <WiFi.h>
-#include <WiFiUdp.h>
+#include <cstdlib>
 #include <cstring>
 
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
@@ -23,20 +24,24 @@ static void playlistAdvanceNow();
 
 namespace {
 
-static constexpr uint32_t kCueJoinRetryMs = 2000;
-static constexpr uint32_t kPlayBurstGapMs = 4;
-// Followers free-run on their own clock between ticks, so the master only
-// needs a few ticks a second (was one per show frame).
-static constexpr uint32_t kTickGapMs = 100;
-static constexpr size_t kCueMaxPkt = 32;
+// Members start this long after a launch so every node can bind, seek and
+// prebuffer its slice first.
+static constexpr uint32_t kLaunchLeadMs = 300;
+static constexpr uint32_t kPauseLeadMs = 120;
+static constexpr uint32_t kResumeLeadMs = 200;
+// A grouped slice bound by autoplay / boot waits this long for a running cue
+// before the lowest-id waiting node launches it.
+static constexpr uint32_t kWaitLaunchMs = 2500;
+// After a non-looping cue ends, wait this long for the launcher's next cue
+// before a follower returns to its own show.
+static constexpr uint32_t kEndGraceMs = 1500;
+static constexpr uint32_t kLagSeekMs = 1000;
 
-static WiFiUDP s_udp;
-static uint8_t s_pkt[kCueMaxPkt];
-static bool s_begun = false;
-static bool s_up = false;
-static bool s_mcast = false;
-static uint32_t s_joinMs = 0;
-static bool s_loggedJoinFail = false;
+static constexpr uint8_t kSyncMaxMembers = 8;
+static constexpr uint32_t kSyncNameLen = 64;
+static constexpr uint32_t kSyncMacLen = 18;
+
+// ---------------------------------------------------------------- live fence
 
 static uint32_t s_liveSyncMs = 0;
 static bool s_liveFence = false;
@@ -44,66 +49,70 @@ static bool s_liveActive = false;
 static bool s_loggedArtSync = false;
 static bool s_loggedE131 = false;
 
-static bool s_follow = false;
-static bool s_cuePlay = true;
-static bool s_hasTime = false;
-static bool s_hasFrame = false;
-static uint32_t s_targetMs = 0;
-static uint32_t s_targetFrame = 0;
-static uint32_t s_cueMs = 0;
-static bool s_loggedFollow = false;
-static uint32_t s_loggedSeekMs = 0xFFFFFFFFu;
-static uint32_t s_loggedSeekFrame = 0xFFFFFFFFu;
-static uint32_t s_lastSnapMs = 0xFFFFFFFFu;
-static uint32_t s_lastSnapFrame = 0xFFFFFFFFu;
+// ---------------------------------------------------------------- bound file
 
-static constexpr uint8_t kSyncMaxMembers = 8;
-static constexpr uint32_t kSyncNameLen = 64;
-static constexpr uint32_t kSyncMacLen = 18;
-static constexpr uint32_t kSyncGroupLen = 40;
-
-static char s_group[kSyncGroupLen];
+static char s_boundPath[kSdPathLen];
+static char s_group[kSdGroupLen];
 static bool s_groupUni = false;
 static uint32_t s_groupHash = 0;
+static uint32_t s_groupDur = 0;
 static uint8_t s_memberN = 0;
 static char s_memberName[kSyncMaxMembers][kSyncNameLen];
 static char s_memberMac[kSyncMaxMembers][kSyncMacLen];
-static bool s_master = false;
-static bool s_waitMaster = false;
-static bool s_pendingLocal = false;
-static bool s_releaseLive = false;
-static bool s_releaseSticky = false;
 
+// ---------------------------------------------------------------- cue
+
+struct Cue {
+  bool active;
+  bool bound;
+  bool loop;
+  bool paused;
+  uint32_t id;
+  uint32_t group;
+  uint32_t launcher;
+  int64_t createdAt;
+  int64_t startAt;
+  uint32_t startPos;
+  uint32_t dur;
+  uint32_t pausePos;
+  char path[kSdPathLen];
+};
+static Cue s_cue = {};
+
+struct Pending {
+  bool on;
+  uint8_t op;
+  int64_t at;
+  uint32_t pos;
+};
+static Pending s_pend = {};
+
+static bool s_launchArmed = false;
+static bool s_advanceArmed = false;
+static uint32_t s_waitGroup = 0;
+static uint32_t s_waitSince = 0;
+static bool s_stopSticky = false;
+static bool s_liveRelease = false;
+static bool s_restoring = false;
+static uint32_t s_endMs = 0;
+
+// The show this node was on before a group borrowed it (RAM only).
 struct ShowSnap {
   bool valid;
   bool hadFile;
   bool hold;
   bool parked;
+  bool waiting;
   PlaySrc src;
   PlayFileLoop fileLoop;
   PlayFolderRep folderRep;
   uint8_t n;
   uint32_t t_ms;
-  uint32_t groupHash;
   char path[kSdPathLen];
 };
-
 static ShowSnap s_snap = {};
-static bool s_takeoverOn = false;
-static uint32_t s_takeoverHash = 0;
-static bool s_restoring = false;
-static uint32_t s_restoreMs = 0;
-static uint32_t s_pendingHash = 0;
-static bool s_cueBind = false;
-static uint32_t s_missHash = 0;
-static uint32_t s_missMs = 0;
-static uint32_t s_lastEmitMs = 0;
-static uint8_t s_lastEmitOp = 0;
-static bool s_armMasterPlay = false;
-static uint8_t s_playBurstLeft = 0;
-static uint32_t s_playBurstMs = 0;
 
-static uint32_t hashGroup(const char *s) { return SdInfo::hashGroup(s); }
+// ---------------------------------------------------------------- sidecar
 
 static bool sidecarPath(const char *dmx, char *out, size_t n) {
   if (!dmx || !out || n < 8) {
@@ -114,9 +123,6 @@ static bool sidecarPath(const char *dmx, char *out, size_t n) {
     return false;
   }
   snprintf(out, n, "%s", dmx);
-  if (len < 4) {
-    return false;
-  }
   memcpy(out + len - 4, ".json", 6);
   return true;
 }
@@ -158,124 +164,94 @@ static bool extractJsonString(const char *buf, const char *key, char *out,
   return i > 0;
 }
 
+static uint32_t extractJsonUint(const char *buf, const char *key) {
+  char needle[24];
+  snprintf(needle, sizeof(needle), "\"%s\"", key);
+  const char *p = buf ? strstr(buf, needle) : nullptr;
+  if (!p) {
+    return 0;
+  }
+  p = strchr(p + strlen(needle), ':');
+  return p ? static_cast<uint32_t>(strtoul(p + 1, nullptr, 10)) : 0;
+}
+
 static void parseMembers(const char *buf) {
   s_memberN = 0;
-  if (!buf) {
-    return;
-  }
-  const char *p = strstr(buf, "\"members\"");
-  if (!p) {
-    return;
-  }
-  p = strchr(p, '[');
+  const char *p = buf ? strstr(buf, "\"members\"") : nullptr;
+  p = p ? strchr(p, '[') : nullptr;
   if (!p) {
     return;
   }
   p++;
   while (*p && s_memberN < kSyncMaxMembers) {
     const char *obj = strchr(p, '{');
-    if (!obj) {
-      break;
-    }
-    const char *end = strchr(obj, '}');
-    if (!end) {
+    const char *end = obj ? strchr(obj, '}') : nullptr;
+    if (!obj || !end) {
       break;
     }
     char tmp[192];
     const size_t n = static_cast<size_t>(end - obj + 1);
-    if (n >= sizeof(tmp)) {
-      p = end + 1;
-      continue;
-    }
-    memcpy(tmp, obj, n);
-    tmp[n] = '\0';
-    extractJsonString(tmp, "n", s_memberName[s_memberN], kSyncNameLen);
-    extractJsonString(tmp, "m", s_memberMac[s_memberN], kSyncMacLen);
-    if (s_memberName[s_memberN][0]) {
-      s_memberN += 1;
+    if (n < sizeof(tmp)) {
+      memcpy(tmp, obj, n);
+      tmp[n] = '\0';
+      extractJsonString(tmp, "n", s_memberName[s_memberN], kSyncNameLen);
+      extractJsonString(tmp, "m", s_memberMac[s_memberN], kSyncMacLen);
+      if (s_memberName[s_memberN][0]) {
+        s_memberN += 1;
+      }
     }
     p = end + 1;
   }
 }
 
-static void clearGroup() {
+static void loadBoundGroup(const char *path) {
   s_group[0] = '\0';
   s_groupHash = 0;
   s_groupUni = false;
+  s_groupDur = 0;
   s_memberN = 0;
-  s_master = false;
-  s_waitMaster = false;
-}
-
-static bool sidecarGroupHash(const char *dmx, uint32_t &outHash) {
   char side[kSdPathLen];
-  if (!sidecarPath(dmx, side, sizeof(side))) {
-    return false;
-  }
-  if (!SD.exists(side)) {
-    return false;
-  }
-  if (!SdInfo::lock(400)) {
-    return false;
-  }
-  File f = SD.open(side, FILE_READ);
-  if (!f) {
-    SdInfo::unlock();
-    return false;
+  if (!path || !path[0] || !sidecarPath(path, side, sizeof(side))) {
+    return;
   }
   char buf[768];
-  const int n = f.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
-  f.close();
-  SdInfo::unlock();
+  int n = 0;
+  if (SdInfo::lock(1000)) {
+    File f = SD.exists(side) ? SD.open(side, FILE_READ) : File();
+    if (f) {
+      n = f.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
+      f.close();
+    }
+    SdInfo::unlock();
+  }
   if (n <= 0) {
-    return false;
+    return;
   }
   buf[n] = '\0';
-  char group[kSyncGroupLen];
-  if (!extractJsonString(buf, "group", group, sizeof(group))) {
-    return false;
+  if (!extractJsonString(buf, "group", s_group, sizeof(s_group))) {
+    s_group[0] = '\0';
+    return;
   }
-  outHash = hashGroup(group);
-  return outHash != 0;
+  parseMembers(buf);
+  char kind[8] = {};
+  if (extractJsonString(buf, "kind", kind, sizeof(kind))) {
+    s_groupUni = strcmp(kind, "uni") == 0;
+  }
+  s_groupDur = extractJsonUint(buf, "dur");
+  s_groupHash = SdInfo::hashGroup(s_group);
 }
 
-static bool findGroupFile(uint32_t want, char *out, size_t outLen) {
-  // The SD tree caches each sidecar's group hash; no card I/O here.
-  const uint8_t listed = SdInfo::fileCount();
-  for (uint8_t i = 0; i < listed; ++i) {
-    if (SdInfo::groupHashAt(i) != want) {
-      continue;
-    }
-    snprintf(out, outLen, "%s", SdInfo::fileAt(i));
-    return true;
-  }
-  if (listed > 0) {
-    return false;
-  }
-  static char scan[kSdMaxPlayFiles][kSdPathLen];
-  uint8_t n = 0;
-  if (!SdInfo::collectPlaylist("/", true, scan, kSdMaxPlayFiles, &n)) {
-    return false;
-  }
-  for (uint8_t i = 0; i < n; ++i) {
-    uint32_t h = 0;
-    if (!sidecarGroupHash(scan[i], h) || h != want) {
-      continue;
-    }
-    snprintf(out, outLen, "%s", scan[i]);
-    return true;
-  }
-  return false;
+// The bound file is a slice this node plays in a group.
+static bool boundGrouped() {
+  return s_group[0] && s_memberN >= 2 && !(s_groupUni && !LiveCfg::uniSync());
 }
 
-static void clearSnap() {
-  s_snap.valid = false;
-  s_takeoverOn = false;
-  s_takeoverHash = 0;
-}
+// ---------------------------------------------------------------- snapshot
+
+static void clearSnap() { s_snap.valid = false; }
 
 static void captureSnap() {
-  if (s_takeoverOn) {
+  if (s_snap.valid) {
     return;
   }
   s_snap.src = PlayCfg::src();
@@ -286,467 +262,287 @@ static void captureSnap() {
   s_snap.hold = Playback::hold();
   s_snap.parked = Playback::parked();
   s_snap.hadFile = Playback::hasFile() && !Playback::parked();
-  uint32_t t_us = 0;
-  uint32_t frame = 0;
-  if (!Playback::peekFrame(t_us, frame)) {
-    t_us = Playback::tUs();
-  }
-  s_snap.t_ms = t_us / 1000u;
-  s_snap.groupHash = s_groupHash;
+  s_snap.waiting = s_waitGroup != 0;
+  s_snap.t_ms = Playback::tUs() / 1000u;
   s_snap.valid = true;
-  s_takeoverOn = true;
-  LOG_V("sync", "takeover from %s t_ms=%u", s_snap.path,
+  LOG_V("sync", "borrowed from %s t_ms=%u", s_snap.path,
         static_cast<unsigned>(s_snap.t_ms));
 }
 
 static void restoreSnap() {
   if (!s_snap.valid) {
-    clearSnap();
     return;
   }
   const ShowSnap snap = s_snap;
   clearSnap();
-  s_restoring = true;
-  s_restoreMs = millis();
-  LOG_V("sync", "takeover return %s t_ms=%u", snap.path,
+  // A node that was waiting for a group goes back to waiting; any other
+  // show resumes locally without re-launching its group.
+  s_restoring = !snap.waiting;
+  LOG_V("sync", "return to %s t_ms=%u", snap.path,
         static_cast<unsigned>(snap.t_ms));
   PlayCfg::set(snap.src, snap.path, snap.fileLoop, snap.folderRep, snap.n,
                false, false);
-  if (!snap.hold && LiveInput::active()) {
-    Playback::setHold(false);
-    Playback::reload();
-    Playback::pause();
-    return;
-  }
-  if (snap.parked || !snap.hadFile) {
-    Playback::setHold(false);
-    if (snap.parked) {
-      s_restoring = false;
-      Playback::park();
-    } else {
-      Playback::setLoop(true);
-      Playback::reload();
-      Playback::play();
-    }
-    return;
-  }
-  Playback::setHold(snap.hold);
   Playback::setLoop(true);
+  Playback::setHold(snap.hold);
+  if (snap.parked) {
+    s_restoring = false;
+    Playback::park();
+    return;
+  }
+  if (!snap.hadFile) {
+    Playback::reload();
+    Playback::play();
+    return;
+  }
   Playback::resumeAt(snap.t_ms);
 }
 
-static bool ensureCueFile(uint32_t groupHash, uint32_t t_ms, bool fromPlay) {
-  if (groupHash == 0) {
-    return true;
+// ---------------------------------------------------------------- cue state
+
+static CueMsg cueMsg(uint8_t op) {
+  CueMsg m = {};
+  m.op = op;
+  m.group = s_cue.group;
+  m.cue = s_cue.id;
+  m.loop = s_cue.loop;
+  m.paused = s_cue.paused;
+  return m;
+}
+
+static void leaveCue() {
+  if (!s_cue.active) {
+    return;
   }
-  if (groupHash == s_groupHash) {
-    return true;
+  s_cue.active = false;
+  s_pend.on = false;
+  s_endMs = 0;
+  Playback::clearSchedule();
+  LOG_V("sync", "leave cue %08x", static_cast<unsigned>(s_cue.id));
+}
+
+// A follower's cue is over: back to the show it was on.
+static void endCue() {
+  const bool launcher = s_cue.launcher == SyncNet::selfId();
+  leaveCue();
+  Playback::setLoop(true);
+  if (s_snap.valid) {
+    restoreSnap();
+  } else if (!launcher) {
+    Playback::park();
   }
-  if (s_cueBind && groupHash == s_pendingHash) {
-    Playback::nudgeCue(t_ms);
-    return true;
+}
+
+static void applySchedule() {
+  Playback::setSchedule(s_cue.startPos, s_cue.startAt, s_cue.dur, s_cue.loop);
+  if (s_cue.paused) {
+    Playback::pauseSchedule(s_cue.pausePos);
   }
-  if (!LiveCfg::takeover() && !s_takeoverOn) {
-    return false;
+}
+
+static void launchLocal() {
+  if (!boundGrouped()) {
+    return;
   }
-  const uint32_t now = millis();
-  if (!fromPlay && s_missHash == groupHash && s_missMs != 0 &&
-      now - s_missMs < 1000) {
-    return false;
+  const int64_t now = SyncNet::masterUs();
+  s_cue = {};
+  s_cue.active = true;
+  s_cue.bound = true;
+  s_cue.id = esp_random() | 1u;
+  s_cue.group = s_groupHash;
+  s_cue.launcher = SyncNet::selfId();
+  s_cue.createdAt = now;
+  s_cue.startAt = now + static_cast<int64_t>(kLaunchLeadMs) * 1000;
+  s_cue.startPos = 0;
+  s_cue.dur = s_groupDur ? s_groupDur : Playback::durationMs();
+  s_cue.loop = Playback::loopsOnItself();
+  snprintf(s_cue.path, sizeof(s_cue.path), "%s", s_boundPath);
+  s_waitGroup = 0;
+  s_stopSticky = false;
+  s_endMs = 0;
+  applySchedule();
+  Playback::seekSchedule(0);
+  Playback::play();
+  CueMsg m = cueMsg(kSyncOpLaunch);
+  m.createdAt = s_cue.createdAt;
+  m.startAt = s_cue.startAt;
+  m.startPos = s_cue.startPos;
+  m.dur = s_cue.dur;
+  SyncNet::sendCue(m);
+  LOG_V("sync", "launch %s cue=%08x dur=%u loop=%u", s_group,
+        static_cast<unsigned>(s_cue.id), static_cast<unsigned>(s_cue.dur),
+        s_cue.loop ? 1u : 0u);
+}
+
+static void join(const CueMsg &m, int idx) {
+  const char *path = SdInfo::fileAt(static_cast<uint8_t>(idx));
+  if (!s_cue.active) {
+    captureSnap();
   }
-  char path[kSdPathLen];
-  if (!findGroupFile(groupHash, path, sizeof(path))) {
-    s_missHash = groupHash;
-    s_missMs = now;
-    return false;
-  }
+  s_cue = {};
+  s_cue.active = true;
+  s_cue.id = m.cue;
+  s_cue.group = m.group;
+  s_cue.launcher = m.sender;
+  s_cue.createdAt = m.createdAt;
+  s_cue.startAt = m.startAt;
+  s_cue.startPos = m.startPos;
+  s_cue.dur = m.dur;
+  s_cue.loop = m.loop;
+  s_cue.paused = m.paused;
+  s_cue.pausePos = m.pos;
+  snprintf(s_cue.path, sizeof(s_cue.path), "%s", path);
+  s_waitGroup = 0;
+  s_stopSticky = false;
+  s_endMs = 0;
+  s_pend.on = false;
+  applySchedule();
+  Playback::setLoop(s_cue.loop);
+  Playback::setHold(false);
   if (Playback::hasFile() && !Playback::parked() &&
       strcmp(Playback::path(), path) == 0) {
-    return true;
-  }
-  s_missHash = 0;
-  captureSnap();
-  s_takeoverHash = groupHash;
-  s_pendingHash = groupHash;
-  s_cueBind = true;
-  Playback::cueFile(path, t_ms, false);
-  return true;
-}
-
-static bool ownPacket(const IPAddress &from) {
-  const IPAddress sta = WiFi.localIP();
-  if (sta && from == sta) {
-    return true;
-  }
-  const IPAddress ap = WiFi.softAPIP();
-  return (WiFi.getMode() & WIFI_AP) && ap && from == ap;
-}
-
-static bool magicOk(const uint8_t *p) {
-  return p[0] == static_cast<uint8_t>(kCueMagic0) &&
-         p[1] == static_cast<uint8_t>(kCueMagic1) &&
-         p[2] == static_cast<uint8_t>(kCueMagic2) &&
-         p[3] == static_cast<uint8_t>(kCueMagic3);
-}
-
-static IPAddress cueGroup() {
-  return IPAddress(kCueMcastA, kCueMcastB, kCueMcastC, kCueMcastD);
-}
-
-static bool bindUnicast() {
-  if (!s_udp.begin(kCuePort)) {
-    LOG_C("sync", "udp bind :%u failed", kCuePort);
-    s_up = false;
-    s_mcast = false;
-    return false;
-  }
-  s_up = true;
-  s_mcast = false;
-  return true;
-}
-
-static bool joinMcast() {
-  const bool apUp = (WiFi.getMode() & WIFI_AP) != 0;
-  if (!s_up || (WiFi.status() != WL_CONNECTED && !apUp)) {
-    return false;
-  }
-  const uint32_t now = millis();
-  if (s_joinMs != 0 && now - s_joinMs < kCueJoinRetryMs) {
-    return false;
-  }
-  s_joinMs = now;
-  const IPAddress group = cueGroup();
-  s_udp.stop();
-  if (!s_udp.beginMulticast(group, kCuePort)) {
-    if (!s_loggedJoinFail) {
-      s_loggedJoinFail = true;
-      LOG_C("sync", "mcast join failed");
-    }
-    if (!bindUnicast()) {
-      return false;
-    }
-    return false;
-  }
-  s_up = true;
-  s_mcast = true;
-  s_loggedJoinFail = false;
-  LOG_V("sync", "cue %s:%u", group.toString().c_str(), kCuePort);
-  return true;
-}
-
-static void enterFollow() {
-  Playback::setHold(true);
-  Playback::setLoop(false);
-  if (s_follow) {
-    return;
-  }
-  s_follow = true;
-  if (!s_loggedFollow) {
-    s_loggedFollow = true;
-    LOG_V("sync", "cue follow (bus)");
-  }
-}
-
-static void leaveFollow() {
-  if (!s_follow) {
-    return;
-  }
-  s_follow = false;
-  s_cuePlay = true;
-  s_hasTime = false;
-  s_hasFrame = false;
-  s_lastSnapMs = 0xFFFFFFFFu;
-  s_lastSnapFrame = 0xFFFFFFFFu;
-  Playback::setHold(false);
-  if (s_takeoverOn) {
-    restoreSnap();
-    s_loggedFollow = false;
-    return;
-  }
-  if (s_group[0]) {
-    s_master = false;
-    s_waitMaster = true;
-    Playback::pause();
-    LOG_V("sync", "cue silent → listen");
-    s_loggedFollow = false;
-    return;
-  }
-  Playback::setLoop(true);
-  Playback::play();
-  LOG_V("sync", "cue silent → local auto-play");
-  s_loggedFollow = false;
-}
-
-static void applyPosition(uint8_t flags, uint32_t t_ms, uint32_t frame,
-                          bool forceSeek) {
-  s_hasTime = (flags & kCueFlagHasTime) != 0;
-  s_hasFrame = (flags & kCueFlagHasFrame) != 0;
-  if (s_hasTime) {
-    s_targetMs = t_ms;
-  }
-  if (s_hasFrame) {
-    s_targetFrame = frame;
-  }
-  if (!s_hasTime && !s_hasFrame) {
-    return;
-  }
-
-  bool seek = forceSeek;
-  if (!seek && s_hasTime) {
-    seek = Playback::cueNeedsSeek(s_targetMs);
-  } else if (!seek && s_hasFrame) {
-    uint32_t t_us = 0;
-    uint32_t curFrame = 0;
-    if (!Playback::peekFrame(t_us, curFrame) || curFrame != s_targetFrame) {
-      seek = true;
-    }
-  }
-
-  if (!seek) {
-    return;
-  }
-  if (s_hasTime) {
-    Playback::nudgeCue(s_targetMs);
-    s_lastSnapMs = s_targetMs;
-  } else if (s_hasFrame) {
-    Playback::seekFrame(s_targetFrame);
-    s_lastSnapFrame = s_targetFrame;
-  }
-}
-
-static const char *opName(uint8_t op) {
-  switch (op) {
-  case kCueOpPlay:
-    return "play";
-  case kCueOpPause:
-    return "pause";
-  case kCueOpSeek:
-    return "seek";
-  case kCueOpTick:
-    return "tick";
-  case kCueOpRelease:
-    return "release";
-  default:
-    return "op";
-  }
-}
-
-static void becomeMaster() {
-  s_master = true;
-  s_waitMaster = false;
-  if (s_follow) {
-    s_follow = false;
-    Playback::setLoop(true);
-    s_loggedFollow = false;
-  }
-}
-
-static void emitCue(uint8_t op, bool hasTime, bool hasFrame, uint32_t t_ms,
-                    uint32_t frame) {
-  if (!s_up) {
-    return;
-  }
-  uint8_t pkt[kCuePktLenV2];
-  memset(pkt, 0, sizeof(pkt));
-  pkt[0] = static_cast<uint8_t>(kCueMagic0);
-  pkt[1] = static_cast<uint8_t>(kCueMagic1);
-  pkt[2] = static_cast<uint8_t>(kCueMagic2);
-  pkt[3] = static_cast<uint8_t>(kCueMagic3);
-  const bool v2 = s_group[0] != '\0';
-  pkt[4] = v2 ? kCueVersion2 : kCueVersion;
-  pkt[5] = op;
-  uint8_t flags = 0;
-  if (hasTime) {
-    flags |= kCueFlagHasTime;
-  }
-  if (hasFrame) {
-    flags |= kCueFlagHasFrame;
-  }
-  if (s_groupUni) {
-    flags |= kCueFlagUni;
-  }
-  pkt[6] = flags;
-  memcpy(pkt + 8, &t_ms, 4);
-  memcpy(pkt + 12, &frame, 4);
-  if (v2) {
-    memcpy(pkt + 16, &s_groupHash, 4);
-  }
-  const uint8_t len = v2 ? kCuePktLenV2 : kCuePktLen;
-  const IPAddress group = cueGroup();
-  if (s_udp.beginPacket(group, kCuePort) != 1) {
-    return;
-  }
-  s_udp.write(pkt, len);
-  s_udp.endPacket();
-  s_lastEmitMs = millis();
-  s_lastEmitOp = op;
-}
-
-static void emitNow(uint8_t op) {
-  uint32_t t_us = 0;
-  uint32_t frame = 0;
-  const bool has = Playback::peekFrame(t_us, frame);
-  // The show clock position (not the next queued frame) so followers anchor
-  // their own clock to this instant.
-  const uint32_t t_ms = has ? Playback::showPosMs(millis()) : 0;
-  emitCue(op, has, has, t_ms, has ? Playback::frameIndex() : 0);
-}
-
-static void startPlayBurst() {
-  emitNow(kCueOpPlay);
-  s_playBurstLeft = 2;
-  s_playBurstMs = millis();
-}
-
-static void onCue(const CuePacket &p) {
-  if (s_releaseLive) {
-    return;
-  }
-  s_cueMs = millis();
-  s_master = false;
-  s_waitMaster = false;
-  const bool first = !s_follow;
-  enterFollow();
-
-  const bool hasPos =
-      (p.flags & (kCueFlagHasTime | kCueFlagHasFrame)) != 0;
-
-  switch (p.opcode) {
-  case kCueOpPlay: {
-    const bool rising = first || !s_cuePlay;
-    s_cuePlay = true;
-    applyPosition(p.flags, p.t_ms, p.frame, true);
+    s_cue.bound = true;
+    Playback::seekSchedule(0);
     Playback::play();
-    if (p.flags & kCueFlagHasTime) {
-      Playback::syncTick(p.t_ms, s_cueMs);
+  } else {
+    Playback::cueFile(path, 0, false);
+    Playback::setHold(false);
+  }
+  LOG_V("sync", "join %s cue=%08x from %08x", path,
+        static_cast<unsigned>(m.cue), static_cast<unsigned>(m.sender));
+}
+
+static void considerJoin(const CueMsg &m) {
+  if (s_liveRelease || (LiveInput::active() && !Playback::hold())) {
+    return;
+  }
+  if (s_cue.active && s_cue.id == m.cue) {
+    // A peer's view of our own cue: pick up a pause / resume we missed.
+    if (m.op == kSyncOpState && !s_pend.on &&
+        (m.paused != s_cue.paused ||
+         (!m.paused && m.startAt != s_cue.startAt))) {
+      s_cue.paused = m.paused;
+      s_cue.pausePos = m.pos;
+      s_cue.startAt = m.startAt;
+      s_cue.startPos = m.startPos;
+      applySchedule();
+      Playback::seekSchedule(0);
     }
-    if (rising) {
-      LOG_V("sync", "cue play t_ms=%u frame=%u flags=%u",
-            static_cast<unsigned>(p.t_ms), static_cast<unsigned>(p.frame),
-            p.flags);
+    return;
+  }
+  if (s_cue.active && m.createdAt <= s_cue.createdAt) {
+    return;
+  }
+  const int idx = SdInfo::findGroup(m.group);
+  if (idx < 0) {
+    return;
+  }
+  if (strcmp(SdInfo::markAt(static_cast<uint8_t>(idx)), "uni") == 0 &&
+      !LiveCfg::uniSync()) {
+    return;
+  }
+  if (!m.loop && m.dur && !m.paused) {
+    const int64_t pos = static_cast<int64_t>(m.startPos) +
+                        (SyncNet::masterUs() - m.startAt) / 1000;
+    if (pos > static_cast<int64_t>(m.dur)) {
+      return;
     }
+  }
+  const bool sameGroup = (s_cue.active && s_cue.group == m.group) ||
+                         s_waitGroup == m.group || s_groupHash == m.group;
+  const bool idle = !Playback::hasFile() || Playback::parked() ||
+                    !Playback::playing() || s_waitGroup != 0;
+  if (s_stopSticky && (sameGroup || !LiveCfg::takeover())) {
+    return;
+  }
+  if (!sameGroup && !idle && !LiveCfg::takeover()) {
+    return;
+  }
+  join(m, idx);
+}
+
+static void handleCue(const CueMsg &m) {
+  switch (m.op) {
+  case kSyncOpLaunch:
+  case kSyncOpState:
+    considerJoin(m);
+    return;
+  default:
     break;
   }
-  case kCueOpPause: {
-    const bool falling = first || s_cuePlay;
-    s_cuePlay = false;
-    applyPosition(p.flags, p.t_ms, p.frame, hasPos);
-    Playback::pause();
-    if (falling) {
-      LOG_V("sync", "cue pause t_ms=%u frame=%u flags=%u",
-            static_cast<unsigned>(p.t_ms), static_cast<unsigned>(p.frame),
-            p.flags);
-    }
-    break;
+  if (!s_cue.active || m.group != s_cue.group) {
+    return;
   }
-  case kCueOpSeek:
-    applyPosition(p.flags, p.t_ms, p.frame, true);
-    if (s_cuePlay && (p.flags & kCueFlagHasTime)) {
-      Playback::syncTick(p.t_ms, s_cueMs);
-    }
-    if (p.t_ms != s_loggedSeekMs || p.frame != s_loggedSeekFrame) {
-      s_loggedSeekMs = p.t_ms;
-      s_loggedSeekFrame = p.frame;
-      LOG_V("sync", "cue seek t_ms=%u frame=%u flags=%u",
-            static_cast<unsigned>(p.t_ms), static_cast<unsigned>(p.frame),
-            p.flags);
+  switch (m.op) {
+  case kSyncOpPause:
+    s_pend = {true, kSyncOpPause, m.at, m.pos};
+    break;
+  case kSyncOpResume:
+  case kSyncOpSeek:
+    s_pend.on = false;
+    s_cue.startAt = m.startAt;
+    s_cue.startPos = m.startPos;
+    s_cue.paused = m.op == kSyncOpSeek && m.paused;
+    s_cue.pausePos = m.startPos;
+    applySchedule();
+    if (m.op == kSyncOpSeek) {
+      Playback::seekSchedule(0);
     }
     break;
-  case kCueOpTick:
-    applyPosition(p.flags, p.t_ms, p.frame, first);
-    if (s_cuePlay && (p.flags & kCueFlagHasTime)) {
-      Playback::syncTick(p.t_ms, s_cueMs);
-    }
+  case kSyncOpStop:
+    s_pend = {true, kSyncOpStop, m.at, 0};
     break;
   default:
-    LOG_V("sync", "cue %s ignored", opName(p.opcode));
     break;
   }
 }
 
-static void parseCue(int n, const IPAddress &from) {
-  if (s_restoring || ownPacket(from)) {
+static void applyPending() {
+  if (!s_pend.on || SyncNet::masterUs() < s_pend.at) {
     return;
   }
-  if (n < static_cast<int>(kCuePktLen)) {
+  const Pending p = s_pend;
+  s_pend.on = false;
+  if (p.op == kSyncOpPause) {
+    s_cue.paused = true;
+    s_cue.pausePos = p.pos;
+    Playback::pauseSchedule(p.pos);
+    LOG_V("sync", "group pause %u", static_cast<unsigned>(p.pos));
     return;
   }
-  if (!magicOk(s_pkt)) {
-    return;
+  if (p.op == kSyncOpStop) {
+    LOG_V("sync", "group stop");
+    if (s_snap.valid) {
+      endCue();
+      return;
+    }
+    leaveCue();
+    Playback::setLoop(true);
+    Playback::park();
   }
-  const uint8_t opEarly = s_pkt[5];
-  const bool uniPkt = (s_pkt[6] & kCueFlagUni) != 0;
-  if (uniPkt && !LiveCfg::uniSync() && opEarly != kCueOpRelease) {
-    return;
-  }
-  const uint8_t ver = s_pkt[4];
-  uint32_t group = 0;
-  if (ver == kCueVersion2) {
-    if (n < static_cast<int>(kCuePktLenV2)) {
-      return;
-    }
-    memcpy(&group, s_pkt + 16, 4);
-    uint32_t t_ms = 0;
-    memcpy(&t_ms, s_pkt + 8, 4);
-    const bool foreign = group != s_groupHash && group != s_pendingHash;
-    const uint8_t op = s_pkt[5];
-    if (op == kCueOpRelease) {
-      if (group != s_groupHash && group != s_pendingHash) {
-        return;
-      }
-      if (s_master && !s_follow) {
-        s_master = false;
-        s_waitMaster = false;
-        s_playBurstLeft = 0;
-        s_armMasterPlay = false;
-        Playback::releaseFromSync();
-        LOG_V("sync", "release master");
-      } else if (s_follow || s_takeoverOn) {
-        leaveFollow();
-        LOG_V("sync", "release follow");
-      }
-      return;
-    }
-    if (s_releaseLive) {
-      const bool join = LiveCfg::takeover() && foreign &&
-                        (op == kCueOpPlay || op == kCueOpTick);
-      if (!join) {
-        return;
-      }
-      s_releaseLive = false;
-      s_releaseSticky = false;
-      LOG_V("sync", "takeover joins over stop");
-    }
-    if (s_takeoverOn && s_snap.valid && s_snap.groupHash != 0 &&
-        group == s_snap.groupHash) {
-      return;
-    }
-    if (foreign) {
-      if (!LiveCfg::takeover() && !s_takeoverOn) {
-        return;
-      }
-      if (!ensureCueFile(group, t_ms, op == kCueOpPlay)) {
-        return;
-      }
-    }
-  } else if (ver == kCueVersion) {
-    if (s_releaseLive) {
-      return;
-    }
-    if (s_group[0]) {
-      return;
-    }
-  } else {
-    return;
-  }
-  CuePacket p;
-  memcpy(&p, s_pkt, sizeof(p));
-  onCue(p);
 }
 
-// The play task binds files and advances playlists. Sync state and the cue
-// socket belong to the Arduino loop task, so those calls are queued and run
-// from Sync::service() in order.
+static void publishHello() {
+  if (!s_cue.active) {
+    SyncNet::setHelloState(nullptr, s_waitGroup);
+    return;
+  }
+  CueSummary c = {};
+  c.group = s_cue.group;
+  c.cue = s_cue.id;
+  c.createdAt = s_cue.createdAt;
+  c.startAt = s_cue.startAt;
+  c.startPos = s_cue.startPos;
+  c.dur = s_cue.dur;
+  c.pausePos = s_cue.pausePos;
+  c.loop = s_cue.loop;
+  c.paused = s_cue.paused;
+  SyncNet::setHelloState(&c, 0);
+}
+
+// ---------------------------------------------------------------- task queue
+
+// The play task binds files and advances playlists; Sync state and the cue
+// socket belong to the Arduino loop task, so those calls are queued.
 enum class EvKind : uint8_t { PlayFile = 1, Advance = 2 };
 struct SyncEvt {
   EvKind kind;
@@ -791,45 +587,62 @@ static void drainEvents() {
 
 } // namespace
 
-void Sync::begin() {
-  if (s_begun) {
+static void onPlayFileNow(const char *path) {
+  const bool restoring = s_restoring && path && path[0];
+  if (path && path[0]) {
+    s_restoring = false;
+  }
+  snprintf(s_boundPath, sizeof(s_boundPath), "%s", path ? path : "");
+  loadBoundGroup(path);
+  if (!path || !path[0]) {
     return;
   }
-  s_begun = true;
-  if (!bindUnicast()) {
+  if (s_cue.active) {
+    if (strcmp(path, s_cue.path) == 0 && !s_launchArmed) {
+      s_cue.bound = true;
+      if (s_cue.dur == 0) {
+        // Launched without a length (companion): use this slice's.
+        s_cue.dur = s_groupDur ? s_groupDur : Playback::durationMs();
+        applySchedule();
+      }
+      Playback::seekSchedule(0);
+      Playback::play();
+      return;
+    }
+    // A local Play or our own playlist moved to another file.
+    leaveCue();
+  }
+  if (!boundGrouped() || restoring) {
+    s_waitGroup = 0;
+    s_launchArmed = false;
+    s_advanceArmed = false;
     return;
   }
-  LOG_V("sync", "listen :%u (auto-play until cue)", kCuePort);
-  joinMcast();
+  if (s_launchArmed || s_advanceArmed) {
+    s_launchArmed = false;
+    s_advanceArmed = false;
+    launchLocal();
+    return;
+  }
+  // Autoplay / boot bound a slice: wait for the group's cue.
+  s_waitGroup = s_groupHash;
+  s_waitSince = millis();
+  LOG_V("sync", "wait for group %s", s_group);
 }
 
-void Sync::service() {
-  if (!s_begun) {
+static void playlistAdvanceNow() {
+  // Our own playlist reached this file: a grouped one conducts the group.
+  if (s_cue.active && s_cue.launcher != SyncNet::selfId()) {
     return;
   }
-  if (s_up && !s_mcast) {
-    joinMcast();
-  }
-  if (!s_up && s_begun) {
-    bindUnicast();
-  }
+  s_advanceArmed = true;
+}
 
+void Sync::begin() { SyncNet::begin(); }
+
+void Sync::service() {
   drainEvents();
-
-  if (s_up) {
-    for (;;) {
-      const int n = s_udp.parsePacket();
-      if (n <= 0) {
-        break;
-      }
-      const IPAddress from = s_udp.remoteIP();
-      const int got =
-          s_udp.read(s_pkt, n > static_cast<int>(kCueMaxPkt) ? kCueMaxPkt : n);
-      if (got > 0) {
-        parseCue(got, from);
-      }
-    }
-  }
+  SyncNet::service();
 
   const uint32_t now = millis();
   if (s_liveActive &&
@@ -838,41 +651,47 @@ void Sync::service() {
     s_liveFence = false;
     LOG_V("sync", "live free-run (no ArtSync/E1.31)");
   }
-  if (s_releaseLive && !s_releaseSticky && !LiveInput::active()) {
-    s_releaseLive = false;
-    if (s_group[0]) {
-      s_master = false;
-      s_waitMaster = true;
-      LOG_V("sync", "release ended (stream quiet)");
+  if (s_liveRelease && !LiveInput::active()) {
+    s_liveRelease = false;
+  }
+
+  const int64_t step = SyncNet::takeClockStep();
+  if (step != 0 && s_cue.active) {
+    s_cue.startAt += step;
+    Playback::rebaseSchedule(step);
+    if (s_pend.on) {
+      s_pend.at += step;
     }
   }
-  if (s_restoring && s_restoreMs != 0 && now - s_restoreMs >= 2000) {
-    s_restoring = false;
+
+  CueMsg m;
+  while (SyncNet::pollCue(m)) {
+    handleCue(m);
   }
-  if (s_follow && (s_cueMs == 0 || now - s_cueMs >= kCueHoldMs)) {
-    leaveFollow();
-  }
-  if (s_armMasterPlay && !s_group[0] && !Playback::reloadPending() &&
-      Playback::hasFile()) {
-    s_armMasterPlay = false;
-  }
-  if (s_armMasterPlay && s_group[0] && Playback::available() > 0) {
-    s_armMasterPlay = false;
-    startPlayBurst();
-    LOG_V("sync", "launch play t_ms queued");
-  }
-  if (s_playBurstLeft != 0 &&
-      (s_playBurstMs == 0 || now - s_playBurstMs >= kPlayBurstGapMs)) {
-    emitNow(kCueOpPlay);
-    s_playBurstLeft = static_cast<uint8_t>(s_playBurstLeft - 1);
-    s_playBurstMs = now;
-  }
-  if (s_master && !s_follow && Playback::playing() && s_playBurstLeft == 0 &&
-      !s_armMasterPlay) {
-    if (s_lastEmitMs == 0 || now - s_lastEmitMs >= kTickGapMs) {
-      emitNow(kCueOpTick);
+  applyPending();
+
+  if (s_cue.active && s_cue.bound) {
+    if (Playback::scheduleLagMs() > kLagSeekMs) {
+      Playback::seekSchedule(80);
+    }
+    if (Playback::scheduleEnded() ||
+        (!Playback::hasFile() && !Playback::reloadPending())) {
+      if (s_endMs == 0) {
+        s_endMs = now;
+      } else if (now - s_endMs >= kEndGraceMs) {
+        endCue();
+      }
+    } else {
+      s_endMs = 0;
     }
   }
+
+  if (s_waitGroup != 0 && !s_cue.active && s_groupHash == s_waitGroup &&
+      now - s_waitSince >= kWaitLaunchMs &&
+      SyncNet::lowestWaiting(s_waitGroup)) {
+    launchLocal();
+  }
+  publishHello();
 }
 
 void Sync::onArtSync() {
@@ -913,28 +732,6 @@ bool Sync::takeLiveFence() {
   return true;
 }
 
-bool Sync::cueFollow() { return s_follow; }
-
-bool Sync::cuePlaying() { return s_cuePlay; }
-
-bool Sync::cueSocketUp() { return s_up; }
-
-bool Sync::cueHasTime() { return s_hasTime; }
-
-bool Sync::cueHasFrame() { return s_hasFrame; }
-
-uint32_t Sync::cueTargetMs() { return s_targetMs; }
-
-uint32_t Sync::cueTargetFrame() { return s_targetFrame; }
-
-static void dropMasterArm() {
-  if (!s_armMasterPlay) {
-    return;
-  }
-  s_armMasterPlay = false;
-  s_playBurstLeft = 0;
-}
-
 void Sync::onPlayFile(const char *path) {
   if (!onLoopTask()) {
     postEvent(EvKind::PlayFile, path);
@@ -942,100 +739,6 @@ void Sync::onPlayFile(const char *path) {
   }
   drainEvents();
   onPlayFileNow(path);
-}
-
-static void onPlayFileNow(const char *path) {
-  struct ClearRestore {
-    bool arm;
-    ~ClearRestore() {
-      if (arm) {
-        s_restoring = false;
-      }
-    }
-  } clearRestore{path != nullptr && path[0] != '\0'};
-  const bool keepMaster = s_pendingLocal || s_armMasterPlay;
-  clearGroup();
-  if (!path || !path[0]) {
-    if (keepMaster) {
-      s_master = true;
-    }
-    if (!s_armMasterPlay) {
-      s_pendingLocal = false;
-      s_pendingHash = 0;
-      s_cueBind = false;
-    }
-    return;
-  }
-  char side[64];
-  if (!sidecarPath(path, side, sizeof(side))) {
-    if (keepMaster) {
-      s_master = true;
-    }
-    dropMasterArm();
-    s_pendingLocal = false;
-    s_pendingHash = 0;
-    s_cueBind = false;
-    return;
-  }
-  char buf[768];
-  int n = 0;
-  if (SdInfo::lock(1000)) {
-    File f = SD.exists(side) ? SD.open(side, FILE_READ) : File();
-    if (f) {
-      n = f.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
-      f.close();
-    }
-    SdInfo::unlock();
-  }
-  if (n <= 0) {
-    if (keepMaster) {
-      s_master = true;
-    }
-    dropMasterArm();
-    s_pendingLocal = false;
-    s_pendingHash = 0;
-    s_cueBind = false;
-    return;
-  }
-  buf[n] = '\0';
-  if (!extractJsonString(buf, "group", s_group, sizeof(s_group))) {
-    s_group[0] = '\0';
-  }
-  parseMembers(buf);
-  char kind[8] = {};
-  if (extractJsonString(buf, "kind", kind, sizeof(kind))) {
-    s_groupUni = strcmp(kind, "uni") == 0;
-  }
-  if (!s_group[0] || s_memberN < 2 || (s_groupUni && !LiveCfg::uniSync())) {
-    s_group[0] = '\0';
-    s_groupHash = 0;
-    s_groupUni = false;
-    s_pendingHash = 0;
-    s_memberN = 0;
-    if (keepMaster) {
-      s_master = true;
-    }
-    dropMasterArm();
-    s_pendingLocal = false;
-    s_pendingHash = 0;
-    s_cueBind = false;
-    return;
-  }
-  s_groupHash = hashGroup(s_group);
-  if (keepMaster) {
-    s_pendingLocal = false;
-    s_master = true;
-    s_waitMaster = false;
-    s_pendingHash = s_groupHash;
-    s_cueBind = false;
-    LOG_V("sync", "group %s local master", s_group);
-    return;
-  }
-  s_master = false;
-  s_waitMaster = true;
-  s_pendingHash = s_groupHash;
-  s_cueBind = false;
-  LOG_V("sync", "group %s listen", s_group);
 }
 
 void Sync::notePlaylistAdvance() {
@@ -1047,106 +750,84 @@ void Sync::notePlaylistAdvance() {
   playlistAdvanceNow();
 }
 
-static void playlistAdvanceNow() {
-  if (s_follow || s_takeoverOn || s_restoring) {
-    return;
-  }
-  if (!s_group[0] || s_memberN < 2) {
-    return;
-  }
-  clearSnap();
-  s_releaseLive = false;
-  s_releaseSticky = false;
-  s_pendingLocal = false;
-  s_master = true;
-  s_waitMaster = false;
-  s_pendingHash = s_groupHash;
-  s_cueBind = false;
-  LOG_V("sync", "group %s local master", s_group);
-  if (Playback::available() > 0) {
-    s_armMasterPlay = false;
-    startPlayBurst();
-    return;
-  }
-  s_armMasterPlay = true;
-  s_playBurstLeft = 0;
-}
-
-void Sync::noteSlaveLeave() {
-  if (!s_follow) {
-    return;
-  }
-  emitCue(kCueOpRelease, false, false, 0, 0);
-  leaveFollow();
-  LOG_V("sync", "slave leave");
-}
-
 void Sync::noteLocalTrigger() {
   clearSnap();
-  s_releaseLive = false;
-  s_releaseSticky = false;
-  s_pendingLocal = true;
-  becomeMaster();
-  if (Playback::reloadPending()) {
-    s_armMasterPlay = true;
-    s_playBurstLeft = 0;
-    return;
+  s_stopSticky = false;
+  s_liveRelease = false;
+  s_launchArmed = true;
+}
+
+bool Sync::noteLocalPause() {
+  if (!s_cue.active || s_cue.paused) {
+    return s_cue.active;
   }
-  s_armMasterPlay = false;
-  startPlayBurst();
+  const int64_t at = SyncNet::masterUs() + static_cast<int64_t>(kPauseLeadMs) * 1000;
+  const uint32_t pos = Playback::scheduleTotalMs() + kPauseLeadMs;
+  s_pend = {true, kSyncOpPause, at, pos};
+  CueMsg m = cueMsg(kSyncOpPause);
+  m.at = at;
+  m.pos = pos;
+  SyncNet::sendCue(m);
+  return true;
+}
+
+bool Sync::noteLocalResume() {
+  if (!s_cue.active || !s_cue.paused) {
+    return false;
+  }
+  s_pend.on = false;
+  s_cue.paused = false;
+  s_cue.startPos = s_cue.pausePos;
+  s_cue.startAt = SyncNet::masterUs() + static_cast<int64_t>(kResumeLeadMs) * 1000;
+  applySchedule();
+  CueMsg m = cueMsg(kSyncOpResume);
+  m.startAt = s_cue.startAt;
+  m.startPos = s_cue.startPos;
+  SyncNet::sendCue(m);
+  return true;
+}
+
+void Sync::noteStopped() {
+  if (s_cue.active) {
+    CueMsg m = cueMsg(kSyncOpStop);
+    m.at = SyncNet::masterUs();
+    SyncNet::sendCue(m);
+    leaveCue();
+  }
+  clearSnap();
+  s_stopSticky = true;
+  s_waitGroup = 0;
+  s_launchArmed = false;
+  Playback::setLoop(true);
 }
 
 void Sync::releaseToLive() {
+  leaveCue();
   clearSnap();
-  s_releaseLive = true;
-  s_releaseSticky = false;
-  s_follow = false;
-  s_master = false;
-  s_waitMaster = false;
-  s_cuePlay = false;
-  s_loggedFollow = false;
-  Playback::setHold(false);
+  s_liveRelease = true;
+  s_waitGroup = 0;
   Playback::setLoop(true);
   LOG_V("sync", "release to live");
 }
 
-void Sync::noteStopped() {
+void Sync::playUngrouped() {
+  leaveCue();
   clearSnap();
-  s_releaseLive = true;
-  s_releaseSticky = true;
-  s_follow = false;
-  s_master = false;
-  s_waitMaster = false;
-  s_cuePlay = false;
-  s_loggedFollow = false;
-  Playback::setLoop(true);
-  LOG_V("sync", "stop");
+  s_waitGroup = 0;
+  s_launchArmed = false;
+  s_stopSticky = false;
+  s_restoring = true;
 }
 
-void Sync::noteLocalPause() {
-  s_pendingLocal = true;
-  becomeMaster();
-  emitNow(kCueOpPause);
+bool Sync::inCue() { return s_cue.active; }
+
+bool Sync::waitingForCue() { return s_waitGroup != 0 && !s_cue.active; }
+
+bool Sync::isLauncher() {
+  return s_cue.active && s_cue.launcher == SyncNet::selfId();
 }
 
-void Sync::noteAutoStart() {
-  if (s_armMasterPlay) {
-    return;
-  }
-  if (!s_group[0]) {
-    return;
-  }
-  if (s_waitMaster) {
-    return;
-  }
-  if (s_master) {
-    emitNow(kCueOpPlay);
-  }
-}
-
-bool Sync::waitingForMaster() { return s_waitMaster && !s_follow; }
-
-bool Sync::isMaster() { return s_master && !s_follow; }
+bool Sync::cuePaused() { return s_cue.active && s_cue.paused; }
 
 bool Sync::hasGroup() { return s_group[0] != '\0'; }
 

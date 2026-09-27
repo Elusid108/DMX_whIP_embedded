@@ -9,6 +9,7 @@ static constexpr uint8_t kSdMaxListDirs = 24;
 static constexpr uint8_t kSdMaxPlayFiles = 24;
 static constexpr uint8_t kSdMaxDepth = 6;
 static constexpr uint8_t kSdTitleLen = 49;
+static constexpr uint8_t kSdGroupLen = 40;
 
 class SdInfo {
 public:
@@ -39,6 +40,10 @@ public:
   static const char *markAt(uint8_t i);
   // FNV-1a of the sidecar sync group, parallel to fileAt. 0 = no group.
   static uint32_t groupHashAt(uint8_t i);
+  // Sidecar sync group string, parallel to fileAt ("" when none).
+  static const char *groupAt(uint8_t i);
+  // First listed file whose sidecar group hashes to hash, or -1.
+  static int findGroup(uint32_t hash);
   static uint32_t hashGroup(const char *group);
   static uint8_t dirCount();
   static const char *dirAt(uint8_t i);

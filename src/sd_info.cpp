@@ -36,6 +36,7 @@ static char s_files[kSdMaxListFiles][kSdPathLen];
 static char s_titles[kSdMaxListFiles][kSdTitleLen];
 static uint8_t s_marks[kSdMaxListFiles];
 static uint32_t s_groupHash[kSdMaxListFiles];
+static char s_groupStr[kSdMaxListFiles][kSdGroupLen];
 static char s_dirs[kSdMaxListDirs][kSdPathLen];
 
 static char s_pend[kSdMaxListDirs + 1][kSdPathLen];
@@ -334,6 +335,8 @@ static void loadTitlesLocked() {
   for (uint8_t i = 0; i < kSdMaxListFiles; ++i) {
     s_titles[i][0] = '\0';
     s_marks[i] = 0;
+    s_groupHash[i] = 0;
+    s_groupStr[i][0] = 0;
   }
   char side[kSdPathLen];
   char buf[768];
@@ -357,6 +360,7 @@ static void loadTitlesLocked() {
       continue;
     }
     s_groupHash[i] = SdInfo::hashGroup(group);
+    snprintf(s_groupStr[i], kSdGroupLen, "%s", group);
     char kind[8];
     if (extractJsonString(buf, "kind", kind, sizeof(kind)) &&
         strcmp(kind, "uni") == 0) {
@@ -652,6 +656,22 @@ const char *SdInfo::markAt(uint8_t i) {
 
 uint32_t SdInfo::groupHashAt(uint8_t i) {
   return i < s_nFiles ? s_groupHash[i] : 0;
+}
+
+const char *SdInfo::groupAt(uint8_t i) {
+  return i < s_nFiles ? s_groupStr[i] : "";
+}
+
+int SdInfo::findGroup(uint32_t hash) {
+  if (hash == 0) {
+    return -1;
+  }
+  for (uint8_t i = 0; i < s_nFiles; ++i) {
+    if (s_groupHash[i] == hash) {
+      return i;
+    }
+  }
+  return -1;
 }
 
 uint32_t SdInfo::hashGroup(const char *s) {

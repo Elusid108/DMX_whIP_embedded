@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>dmxwhip v0.36.1</title>
+<title>dmxwhip v0.43.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -84,6 +84,7 @@ body.editing #nameView{display:none}
 .playrow input{flex:1;min-width:0;width:auto;padding:2px 6px;margin:0;font-size:.85rem}
 .transport{justify-content:center;align-items:center}
 .tbtn{width:2.5rem;height:2.5rem;padding:6px;margin:0;display:inline-flex;align-items:center;justify-content:center}
+.tbtn.on{border-color:var(--accent);color:var(--accent)}
 .tbtn svg{width:18px;height:18px;fill:currentColor;display:block}
 .row{display:flex;flex-wrap:wrap;gap:6px;flex:0 0 auto}
 .row button{width:auto;margin:0;flex:0 0 auto}
@@ -203,6 +204,8 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <button id="stop" class="tbtn" type="button" aria-label="Stop"><svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg></button>
 <button id="next" class="tbtn" type="button" aria-label="Next"><svg viewBox="0 0 24 24"><path d="M15 6h2v12h-2zM6 6l8 6-8 6z"/></svg></button>
 <button id="del" class="tbtn" type="button" aria-label="Delete"><svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h5v2H3V5h5zm1 6h2v10h-2zm4 0h2v10h-2z"/></svg></button>
+<button id="strm" class="tbtn" type="button" aria-label="Stream to the group" title="Stream: play this full show here and send every node its part live (no SD needed on them)"><svg viewBox="0 0 24 24"><path d="M12 10a2 2 0 1 1 0 4 2 2 0 0 1 0-4zM7.8 7.8l1.4 1.4a4 4 0 0 0 0 5.6l-1.4 1.4a6 6 0 0 1 0-8.4zm8.4 0a6 6 0 0 1 0 8.4l-1.4-1.4a4 4 0 0 0 0-5.6zM5 5l1.4 1.4a8 8 0 0 0 0 11.2L5 19A10 10 0 0 1 5 5zm14 0a10 10 0 0 1 0 14l-1.4-1.4a8 8 0 0 0 0-11.2z"/></svg></button>
+<button id="dist" class="tbtn" type="button" aria-label="Distribute to the group" title="Distribute: slice this full show for every node on the network and send each its part"><svg viewBox="0 0 24 24"><path d="M11 3h2v6h-2zM5 13h14v2H5zm-2 4h4v4H3zm7 0h4v4h-4zm7 0h4v4h-4zM11 9h2v4h-2zM4 15h2v2H4zm14 0h2v2h-2zm-7 0h2v2h-2z"/></svg></button>
 </div>
 <div id="fileopts"><label class="lab" for="fileloop">Loop</label>
 <select id="fileloop"><option value="one">This file</option><option value="all">All in this folder</option></select></div>
@@ -274,8 +277,23 @@ button.pri{background:var(--accent);border-color:var(--accent);color:var(--bg)}
 <div class="row">
 <button class="pri" id="setupSave" type="button">Save</button>
 </div>
+<div class="mod lab">Show network</div>
+<label class="lab" for="snRole">Role</label>
+<select id="snRole"><option value="standalone">Standalone</option><option value="host">Show Host (runs the Wi-Fi)</option><option value="member">Member (joins the Show Host)</option></select>
+<div id="snFields">
+<label class="lab" for="snSsid">Show SSID</label>
+<input id="snSsid" maxlength="32" autocomplete="off">
+<label class="lab" for="snPass">Show password</label>
+<input id="snPass" type="password" maxlength="63" placeholder="8+ characters (empty keeps the saved one)" autocomplete="off">
+<label class="lab" for="snCh">Channel</label>
+<select id="snCh"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option selected>6</option><option>7</option><option>8</option><option>9</option><option>10</option><option>11</option></select>
 </div>
-<p id="ver" class="readout">dmxwhip v0.36.1</p>
+<p class="hint">The Show Host runs its own 2.4 GHz network at http://10.77.0.1 and keeps the show clock; members join it and fall back to the saved network. Saving reboots this node.</p>
+<div class="row">
+<button id="snSave" type="button">Save &amp; reboot</button>
+</div>
+</div>
+<p id="ver" class="readout">dmxwhip v0.43.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -715,7 +733,35 @@ function applyPlay(s){
   if(playPaused&&p.now) playnowEl.textContent='Paused '+fileTitle(p.now);
   else playnowEl.textContent=p.now?'Now '+fileTitle(p.now):'Now stopped';
 }
+let snDirty=false;
+function snShow(){
+  const role=document.getElementById('snRole').value;
+  document.getElementById('snFields').hidden=role==='standalone';
+  document.getElementById('snCh').parentNode&&(document.getElementById('snCh').disabled=role!=='host');
+}
+function applyShowNet(s){
+  const sn=s.shownet;
+  if(!sn||snDirty) return;
+  document.getElementById('snRole').value=sn.role||'standalone';
+  document.getElementById('snSsid').value=sn.ssid||'';
+  if(sn.ch) document.getElementById('snCh').value=String(sn.ch);
+  snShow();
+}
+function saveShowNet(){
+  const role=document.getElementById('snRole').value;
+  const btn=document.getElementById('snSave');
+  if(!window.confirm('Save the show network and reboot this node?')) return;
+  btn.disabled=true;
+  postForm('/shownet',{role,ssid:document.getElementById('snSsid').value.trim(),pass:document.getElementById('snPass').value,ch:document.getElementById('snCh').value}).then(async r=>{
+    const s=await r.json().catch(()=>({}));
+    if(!r.ok){btn.disabled=false;setNote(s.error||'Save failed','err');return;}
+    snDirty=false;
+    setNote(role==='host'?'Rebooting as Show Host. Join the show network, then open http://10.77.0.1':'Rebooting…');
+  }).catch(()=>{btn.disabled=false;dropHint();});
+}
 function applyLive(s){
+  applyShowNet(s);
+  applyDist(s);
   if(liveDirty) return;
   if(typeof s.fps==='number') fpsEl.value=String(s.fps);
   if(typeof s.buf==='number') bufEl.value=String(s.buf);
@@ -1457,6 +1503,8 @@ if(passEye) passEye.onclick=()=>{
   passEye.title=show?'Hide password':'Show password';
 };
 if(setupSave) setupSave.onclick=saveSetup;
+['snRole','snSsid','snPass','snCh'].forEach(id=>{const e=document.getElementById(id);if(e){e.oninput=e.onchange=()=>{snDirty=true;snShow();};}});
+document.getElementById('snSave').onclick=saveShowNet;
 mapSave.onclick=savePatch;
 if(mapAdd) mapAdd.onclick=addOutput;
 folderrepEl.onchange=showPlayOpts;
@@ -1501,6 +1549,60 @@ document.getElementById('pause').onclick=()=>postForm('/play',{action:'pause'}).
 document.getElementById('stop').onclick=()=>postForm('/play',{src:'stop'}).then(async r=>applyPlayPost(r)).catch(dropHint);
 document.getElementById('prev').onclick=()=>{const t=adjacent(-1);if(t){playDirty=true;playSrc='file';playPath=t;playSel=new Set([rowKey('file',t)]);playAnchor=rowKey('file',t);markPlaySel();showPlayOpts();postPlay('file',t);}};
 document.getElementById('next').onclick=()=>{const t=adjacent(1);if(t){playDirty=true;playSrc='file';playPath=t;playSel=new Set([rowKey('file',t)]);playAnchor=rowKey('file',t);markPlaySel();showPlayOpts();postPlay('file',t);}};
+document.getElementById('dist').onclick=()=>{
+  const paths=[];
+  playSel.forEach(k=>{
+    const i=k.indexOf('\t');
+    if(k.slice(0,i)==='file') paths.push(k.slice(i+1));
+  });
+  if(paths.length!==1){setNote('Select one full show to distribute.','err');return;}
+  if(!window.confirm('Slice '+fileTitle(paths[0])+' for every node on the network and send each its part? Their playback stops while it copies.')) return;
+  postForm('/distribute',{path:paths[0]}).then(async r=>{
+    const s=await r.json().catch(()=>({}));
+    if(!r.ok){setNote(s.error==='no peers'?'No other nodes heard on the network.':(s.error||'Distribute failed'),'err');return;}
+    setNote('Distributing…','ok');
+  }).catch(dropHint);
+};
+let streamOn=false;
+document.getElementById('strm').onclick=()=>{
+  if(streamOn){
+    postForm('/stream',{on:'0'}).then(async r=>{applyMeta(await r.json());setNote('Stream stopped.','ok');}).catch(dropHint);
+    return;
+  }
+  const paths=[];
+  playSel.forEach(k=>{
+    const i=k.indexOf('\t');
+    if(k.slice(0,i)==='file') paths.push(k.slice(i+1));
+  });
+  if(paths.length!==1){setNote('Select one full show to stream.','err');return;}
+  postForm('/stream',{path:paths[0],on:'1'}).then(async r=>{
+    const s=await r.json().catch(()=>({}));
+    if(!r.ok){setNote(s.error==='no peers'?'No other nodes heard on the network.':(s.error||'Stream failed'),'err');return;}
+    setNote('Streaming '+fileTitle(paths[0])+' to the group.','ok');
+    applyMeta(s);
+  }).catch(dropHint);
+};
+function applyStream(s){
+  const st=s.stream;
+  if(!st) return;
+  streamOn=!!st.on;
+  const b=document.getElementById('strm');
+  b.classList.toggle('on',streamOn);
+  b.title=streamOn?'Streaming to '+st.peers+' node(s). Press to stop.':'Stream: play this full show here and send every node its part live (no SD needed on them)';
+}
+function applyDist(s){
+  applyStream(s);
+  const d=s.dist;
+  if(!d||d.state==='idle') return;
+  if(d.state==='running'){
+    const pct=d.total?Math.round(100*d.sent/d.total):0;
+    setNote('Distributing to '+(d.peer||'…')+' ('+(d.i+1)+'/'+d.n+') '+pct+'%','ok');
+  }else if(d.state==='done'&&noteEl.textContent.indexOf('Distributing')===0){
+    setNote('Distributed: '+d.msg,'ok');
+  }else if(d.state==='error'&&noteEl.textContent.indexOf('Distributing')===0){
+    setNote('Distribute failed: '+d.msg,'err');
+  }
+}
 document.getElementById('del').onclick=()=>{
   const paths=[];
   playSel.forEach(k=>{

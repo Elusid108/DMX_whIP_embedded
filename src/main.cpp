@@ -96,17 +96,15 @@ void loop() {
     } else if (Playback::userPaused()) {
       // Hold last pixels; do not auto-resume.
     } else if (Playback::hasFile()) {
-      if (Sync::cueFollow()) {
-        if (Sync::cuePlaying()) {
-          Playback::play();
-        } else {
-          Playback::pause();
-          if (!Playback::running()) {
-            Playback::start();
-          }
+      if (Sync::inCue() || Sync::waitingForCue()) {
+        // The group schedule (or the wait for one) decides what shows; keep
+        // the reader bound and filling.
+        if (!Playback::running()) {
+          Playback::start();
         }
-      } else if (Sync::waitingForMaster()) {
-        // Wait for the elected master; fall back in Sync::service.
+        if (Sync::inCue() && !Playback::playing()) {
+          Playback::play();
+        }
       } else if (!Playback::running()) {
         if (LiveCfg::loss() == LiveLoss::Play) {
           if (s_livePreemptedPlay) {
@@ -115,7 +113,6 @@ void loop() {
           }
           Playback::start();
           Playback::play();
-          Sync::noteAutoStart();
         }
       } else if (!Playback::playing()) {
         Playback::play();
@@ -149,7 +146,7 @@ void loop() {
     mode = Mode::Test;
   } else if (Playback::hasFile() && !Playback::userPaused() &&
              (LiveCfg::loss() == LiveLoss::Play || Playback::playing() ||
-              Sync::cueFollow())) {
+              Sync::inCue())) {
     mode = Mode::Play;
   } else if (Playback::userPaused() || LiveCfg::loss() == LiveLoss::Hold) {
     mode = Mode::Hold;
@@ -177,7 +174,9 @@ void loop() {
     }
     break;
   case Mode::Play: {
-    const bool rolling = !Sync::cueFollow() || Sync::cuePlaying();
+    // A group schedule holds before its start and while paused; a slice
+    // waiting for its group's cue holds its last pixels.
+    const bool rolling = !Sync::waitingForCue();
     if (rolling && fpsDue && Playback::frameDue(now)) {
       memset(s_frame, 0, sizeof(s_frame));
       if (Playback::renderDue(s_frame, sizeof(s_frame), now)) {

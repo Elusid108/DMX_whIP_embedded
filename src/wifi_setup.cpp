@@ -2,6 +2,7 @@
 
 #include "board_profile.h"
 #include "board_types.h"
+#include "distribute.h"
 #include "identify.h"
 #include "led_bus.h"
 #include "led_test.h"
@@ -14,7 +15,9 @@
 #include "play_cfg.h"
 #include "playback.h"
 #include "sd_info.h"
+#include "show_net.h"
 #include "sync.h"
+#include "sync_net.h"
 #include "version.h"
 #include "generated/wifi_setup_html_gz.h"
 
@@ -24,6 +27,7 @@
 #include <SD.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #if CONFIG_IDF_TARGET_ESP32C5
 extern "C" void phy_bbpll_en_usb(bool en);
 #endif
@@ -81,6 +85,12 @@ static bool s_haveScan = false;
 static uint32_t s_connectStart = 0;
 static bool s_connectTimerArmed = false;
 static bool s_apUp = false;
+static bool s_dnsUp = false;
+// Member of a show network: which network the current attempt is for, and
+// when to try again after a failure (show SSID, then the venue, alternating).
+static bool s_memberOnShow = true;
+static uint32_t s_memberRetryAt = 0;
+static constexpr uint32_t kMemberRetryMs = 5000;
 static uint32_t s_apFailMs = 0;
 static volatile bool s_gotIp = false;
 static volatile bool s_discPending = false;
@@ -433,6 +443,25 @@ static void clearCreds() {
   LOG_V("wifi", "forgot saved network");
 }
 
+// Show Host: the show SSID on 10.77.0.1, DTIM 1 (group traffic is never held
+// for dozing stations), no captive DNS.
+static bool startShowHostAp() {
+  const char *pass = ShowNet::pass();
+  if (!WiFi.softAP(ShowNet::ssid(), pass[0] ? pass : nullptr,
+                   ShowNet::channel(), 0, kApMaxClients)) {
+    return false;
+  }
+  if (!WiFi.softAPConfig(kShowHostIp, kShowHostIp, kShowMask)) {
+    LOG_C("ap", "show softAPConfig failed");
+  }
+  wifi_config_t cfg = {};
+  if (esp_wifi_get_config(WIFI_IF_AP, &cfg) == ESP_OK) {
+    cfg.ap.dtim_period = 1;
+    esp_wifi_set_config(WIFI_IF_AP, &cfg);
+  }
+  return true;
+}
+
 static void startAp() {
   if (s_apUp) {
     return;
@@ -443,6 +472,18 @@ static void startAp() {
 #if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
   setRadioBand(WIFI_BAND_MODE_2G_ONLY);
 #endif
+  if (ShowNet::isHost()) {
+    if (!startShowHostAp()) {
+      LOG_C("ap", "show host softAP failed");
+      s_apFailMs = millis();
+      return;
+    }
+    s_apFailMs = 0;
+    s_apUp = true;
+    LOG_V("ap", "show host ssid=%s ch=%u ip=%s", ShowNet::ssid(),
+          ShowNet::channel(), WiFi.softAPIP().toString().c_str());
+    return;
+  }
   if (!WiFi.softAP(kApSsid, kApPass, 1, 0, kApMaxClients)) {
     LOG_C("ap", "softAP failed");
     s_apFailMs = millis();
@@ -455,6 +496,8 @@ static void startAp() {
   s_dns.setTTL(0);
   if (!s_dns.start(kDnsPort, "*", kApIp)) {
     LOG_C("ap", "dns failed");
+  } else {
+    s_dnsUp = true;
   }
   s_apUp = true;
 #if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
@@ -469,7 +512,10 @@ static void stopAp() {
   if (!s_apUp) {
     return;
   }
-  s_dns.stop();
+  if (s_dnsUp) {
+    s_dns.stop();
+    s_dnsUp = false;
+  }
   WiFi.softAPdisconnect(true);
   s_apUp = false;
   LOG_V("ap", "down (sta)");
@@ -482,6 +528,9 @@ static void failConnect(const char *why) {
   setError(why);
   LOG_C("wifi", "connect failed ssid=%s %s", s_pendingSsid.c_str(), s_error);
   startAp();
+  if (ShowNet::isMember()) {
+    s_memberRetryAt = millis() + kMemberRetryMs;
+  }
 }
 
 static void beginConnect(const String &ssid, const String &pass, int32_t ch,
@@ -694,8 +743,50 @@ static void appendOutputs(String &out) {
   out += '}';
 }
 
+static void appendHex(String &out, uint32_t v) {
+  char b[12];
+  snprintf(b, sizeof(b), "\"%08x\"", static_cast<unsigned>(v));
+  out += b;
+}
+
+// Shared network clock and the cue-bus roster.
+static void appendClock(String &out) {
+  out += "\"clock\":{\"id\":";
+  appendHex(out, SyncNet::selfId());
+  out += ",\"master\":";
+  appendHex(out, SyncNet::clockMasterId());
+  out += ",\"is_master\":";
+  out += SyncNet::isClockMaster() ? "true" : "false";
+  out += ",\"synced\":";
+  out += SyncNet::synced() ? "true" : "false";
+  out += ",\"rtt_us\":";
+  out += static_cast<unsigned>(SyncNet::rttUs());
+  out += ",\"peers\":[";
+  for (uint8_t i = 0; i < SyncNet::peerCount(); ++i) {
+    const SyncPeer *p = SyncNet::peerAt(i);
+    if (i) {
+      out += ',';
+    }
+    out += "{\"id\":";
+    appendHex(out, p->id);
+    out += ",\"name\":";
+    jsonEscape(out, String(p->name));
+    out += ",\"ip\":\"";
+    out += p->ip.toString();
+    out += "\",\"role\":";
+    out += static_cast<unsigned>(p->role);
+    out += ",\"api\":";
+    out += static_cast<unsigned>(p->api);
+    out += ",\"rtt_us\":";
+    out += static_cast<unsigned>(p->rttUs);
+    out += '}';
+  }
+  out += "]}";
+}
+
 static bool requestFromSoftAp() {
-  if (!s_apUp) {
+  // A Show Host's AP is the shared show network, not the private setup AP.
+  if (!s_apUp || ShowNet::isHost()) {
     return false;
   }
   const IPAddress from = s_server.client().remoteIP();
@@ -751,6 +842,16 @@ static void sendStatus(int code) {
     out += ",\"error\":";
     jsonEscape(out, String(s_error));
   }
+  out += ",\"shownet\":{\"role\":\"";
+  out += ShowNet::roleName();
+  out += "\",\"ssid\":";
+  jsonEscape(out, String(ShowNet::ssid()));
+  out += ",\"ch\":";
+  out += static_cast<unsigned>(ShowNet::channel());
+  out += "},";
+  Distribute::appendStatus(out);
+  out += ',';
+  StreamTx::appendStatus(out);
   out += ",\"bri\":";
   out += static_cast<unsigned>(LedCtrl::get());
   out += ',';
@@ -835,6 +936,13 @@ static void sendStatus(int code) {
     }
     jsonEscape(out, String(SdInfo::markAt(i)));
   }
+  out += "],\"groups\":[";
+  for (uint8_t i = 0; i < SdInfo::fileCount(); ++i) {
+    if (i) {
+      out += ',';
+    }
+    jsonEscape(out, String(SdInfo::groupAt(i)));
+  }
   out += "],\"dirs\":[";
   for (uint8_t i = 0; i < SdInfo::dirCount(); ++i) {
     if (i) {
@@ -852,10 +960,18 @@ static void sendStatus(int code) {
     jsonEscape(out, String(Sync::memberNameAt(i)));
   }
   out += "],\"master\":";
-  out += Sync::isMaster() ? "true" : "false";
+  out += Sync::isLauncher() ? "true" : "false";
   out += ",\"follow\":";
-  out += Sync::cueFollow() ? "true" : "false";
-  out += "}}}" ;
+  out += (Sync::inCue() && !Sync::isLauncher()) ? "true" : "false";
+  out += ",\"paused\":";
+  out += Sync::cuePaused() ? "true" : "false";
+  out += ",\"waiting\":";
+  out += Sync::waitingForCue() ? "true" : "false";
+  out += ",\"pos\":";
+  out += static_cast<unsigned>(Sync::inCue() ? Playback::showPosMs(millis()) : 0);
+  out += "}},";
+  appendClock(out);
+  out += '}';
   sendJson(code, out);
 }
 
@@ -1674,7 +1790,7 @@ static void jsonWriteEscaped(File &f, const char *s) {
 
 static bool writeSidecarName(const char *dmx, const char *name,
                              const char *group, const char *members,
-                             const char *kind) {
+                             const char *kind, uint32_t dur) {
   char side[kSdPathLen];
   if (!sidecarPath(dmx, side, sizeof(side))) {
     return false;
@@ -1682,6 +1798,7 @@ static bool writeSidecarName(const char *dmx, const char *name,
   char keepGroup[40] = {};
   char keepMembers[512] = {};
   char keepKind[8] = {};
+  uint32_t keepDur = 0;
   if ((!group || !group[0]) && SD.exists(side)) {
     File in = SD.open(side, FILE_READ);
     if (in) {
@@ -1713,6 +1830,11 @@ static bool writeSidecarName(const char *dmx, const char *name,
             memcpy(keepMembers, b, static_cast<size_t>(e - b + 1));
             keepMembers[e - b + 1] = '\0';
           }
+        }
+        const char *d = strstr(buf, "\"dur\"");
+        if (d && dur == 0) {
+          const char *c = strchr(d + 5, ':');
+          keepDur = c ? static_cast<uint32_t>(strtoul(c + 1, nullptr, 10)) : 0;
         }
         const char *k = strstr(buf, "\"kind\"");
         if (k) {
@@ -1763,6 +1885,11 @@ static bool writeSidecarName(const char *dmx, const char *name,
       f.print(",\"kind\":\"");
       jsonWriteEscaped(f, useKind);
       f.print("\"");
+    }
+    const uint32_t useDur = dur ? dur : keepDur;
+    if (useDur) {
+      f.print(",\"dur\":");
+      f.print(useDur);
     }
     f.print("}");
   }
@@ -2094,6 +2221,8 @@ static void handleMeta() {
   const String groupArg = s_server.arg("sync_group");
   const String membersArg = s_server.arg("sync_members");
   const String kindArg = s_server.arg("sync_kind");
+  const uint32_t durArg =
+      static_cast<uint32_t>(strtoul(s_server.arg("sync_dur").c_str(), nullptr, 10));
   if (!SdInfo::lock(2000)) {
     sendJson(503, "{\"error\":\"busy\"}");
     return;
@@ -2104,7 +2233,7 @@ static void handleMeta() {
     return;
   }
   const bool ok = writeSidecarName(path.c_str(), title, groupArg.c_str(),
-                                   membersArg.c_str(), kindArg.c_str());
+                                   membersArg.c_str(), kindArg.c_str(), durArg);
   SdInfo::unlock();
   if (!ok) {
     sendJson(500, "{\"error\":\"meta failed\"}");
@@ -2455,18 +2584,24 @@ static void handlePlay() {
     sendStatus(200);
     return;
   }
+  // Inside a group cue, pause / resume act on every member at one network
+  // time; otherwise they hold / continue this node only.
   if (srcArg == "pause" || actionArg == "pause") {
-    Playback::userPause();
-    Sync::noteLocalPause();
+    if (!Sync::noteLocalPause()) {
+      Playback::userPause();
+    }
     sendStatus(200);
     return;
   }
   if (srcArg == "resume" || actionArg == "resume") {
+    if (Sync::noteLocalResume()) {
+      sendStatus(200);
+      return;
+    }
     if (argOverride()) {
       Playback::setHold(true);
     }
     Playback::userResume();
-    Sync::noteLocalTrigger();
     sendStatus(200);
     return;
   }
@@ -2478,16 +2613,6 @@ static void handlePlay() {
   uint8_t n = 1;
   if (!readPlayForm(src, pathArg, fileLoop, folderRep, n)) {
     return;
-  }
-
-  if (Sync::cueFollow()) {
-    const bool sameFile = src == PlaySrc::File && Playback::path()[0] &&
-                          strcmp(Playback::path(), pathArg.c_str()) == 0;
-    if (!sameFile) {
-      Sync::noteSlaveLeave();
-      sendStatus(200);
-      return;
-    }
   }
 
   if (argOverride()) {
@@ -2633,6 +2758,105 @@ static void handleBand() {
   sendStatus(200);
 }
 
+// POST /distribute: path of a full show on this SD. Slices it for every
+// cue-bus peer's patch and uploads the slices (background; /status dist).
+static void handleDistribute() {
+  if (LiveInput::active() && !Playback::hold()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  String path = s_server.arg("path");
+  path.trim();
+  if (!validUploadPath(path.c_str())) {
+    sendJson(400, "{\"error\":\"bad path\"}");
+    return;
+  }
+  const char *err = nullptr;
+  if (!Distribute::start(path.c_str(), err)) {
+    String out = "{\"error\":";
+    jsonEscape(out, String(err ? err : "failed"));
+    out += '}';
+    sendJson(strcmp(err ? err : "", "busy") == 0 ? 409 : 400, out);
+    return;
+  }
+  sendStatus(200);
+}
+
+// POST /stream: on=1 plays the full show at path here and streams every
+// cue-bus peer its universes live; on=0 stops streaming.
+static void handleStream() {
+  if (s_server.arg("on") == "0") {
+    StreamTx::stop();
+    sendStatus(200);
+    return;
+  }
+  if (LiveInput::active() && !Playback::hold()) {
+    sendJson(503, "{\"error\":\"live\"}");
+    return;
+  }
+  String path = s_server.arg("path");
+  path.trim();
+  if (!validUploadPath(path.c_str())) {
+    sendJson(400, "{\"error\":\"bad path\"}");
+    return;
+  }
+  if (!PlayCfg::set(PlaySrc::File, path.c_str(), PlayFileLoop::One,
+                    PlayCfg::folderRep(), PlayCfg::folderN(), false, false)) {
+    sendJson(400, "{\"error\":\"bad play\"}");
+    return;
+  }
+  Sync::playUngrouped();
+  Playback::reload();
+  Playback::play();
+  const char *err = nullptr;
+  if (!StreamTx::start(path.c_str(), err)) {
+    String out = "{\"error\":";
+    jsonEscape(out, String(err ? err : "failed"));
+    out += '}';
+    sendJson(409, out);
+    return;
+  }
+  sendStatus(200);
+}
+
+// POST /shownet: role standalone|host|member, ssid, pass (empty keeps the
+// saved one for the same SSID), ch 1-13. Persists and reboots.
+static void handleShowNet() {
+  ShowRole role = ShowRole::Standalone;
+  if (!ShowNet::parseRole(s_server.arg("role").c_str(), role)) {
+    sendJson(400, "{\"error\":\"bad role\"}");
+    return;
+  }
+  String ssid = s_server.arg("ssid");
+  String pass = s_server.arg("pass");
+  ssid.trim();
+  const long ch = s_server.hasArg("ch") ? s_server.arg("ch").toInt() : 6;
+  if (role != ShowRole::Standalone) {
+    if (!ssid.length() || ssid.length() > 32) {
+      sendJson(400, "{\"error\":\"bad ssid\"}");
+      return;
+    }
+    if (!pass.length() && ssid == ShowNet::ssid()) {
+      pass = ShowNet::pass();
+    }
+    if (pass.length() && (pass.length() < 8 || pass.length() > 63)) {
+      sendJson(400, "{\"error\":\"password 8-63\"}");
+      return;
+    }
+    if (ch < 1 || ch > 13) {
+      sendJson(400, "{\"error\":\"bad channel\"}");
+      return;
+    }
+  }
+  if (!ShowNet::save(role, ssid.c_str(), pass.c_str(), static_cast<uint8_t>(ch))) {
+    sendJson(500, "{\"error\":\"save failed\"}");
+    return;
+  }
+  LOG_V("http", "shownet role=%s ssid=%s", ShowNet::roleName(), ShowNet::ssid());
+  sendStatus(200);
+  armReboot();
+}
+
 static void handleForget() {
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(false, false);
@@ -2736,9 +2960,12 @@ static void pollConnect() {
     uint8_t *bssid = WiFi.BSSID(mac);
     const int32_t ch = WiFi.channel();
     const uint8_t ghz = ch > 14 ? 5 : 2;
+    // The show network is the Show Host's own 2.4 GHz AP: no band policy, and
+    // it never replaces the saved venue network's BSSID.
+    const bool onShow = ShowNet::isMember() && WiFi.SSID() == ShowNet::ssid();
     const bool wrongFive = s_bandPref == WifiBandPref::FiveG && ghz != 5;
     const bool wrongTwo = s_bandPref == WifiBandPref::TwoG && ghz == 5;
-    if ((wrongFive || wrongTwo) && !s_pickBand) {
+    if ((wrongFive || wrongTwo) && !s_pickBand && !onShow) {
       LOG_C("wifi", "wrong band pref=%s link=%ug", bandPrefName(s_bandPref),
             static_cast<unsigned>(ghz));
       WiFi.setAutoReconnect(false);
@@ -2751,7 +2978,7 @@ static void pollConnect() {
       s_error[0] = '\0';
       LOG_V("wifi", "connected ssid=%s ip=%s", WiFi.SSID().c_str(),
             WiFi.localIP().toString().c_str());
-      if (bssid != nullptr) {
+      if (bssid != nullptr && !onShow) {
         saveBssid(bssid, ch, ghz);
       }
       s_staIpPending = true;
@@ -2813,6 +3040,10 @@ void WifiSetup::begin() {
   WiFi.setHostname(kApSsid);
   WiFi.onEvent(onWifiEvent);
 
+  ShowNet::begin();
+  if (ShowNet::isHost()) {
+    SyncNet::setRole(SyncRole::Host);
+  }
   loadBandPref();
   startAp();
 
@@ -2823,6 +3054,9 @@ void WifiSetup::begin() {
   s_server.on("/connect", HTTP_POST, handleConnect);
   s_server.on("/band", HTTP_POST, handleBand);
   s_server.on("/forget", HTTP_POST, handleForget);
+  s_server.on("/shownet", HTTP_POST, handleShowNet);
+  s_server.on("/distribute", HTTP_POST, handleDistribute);
+  s_server.on("/stream", HTTP_POST, handleStream);
   s_server.on("/brightness", HTTP_POST, handleBrightness);
   s_server.on("/pins", HTTP_POST, handlePins);
   s_server.on("/map", HTTP_POST, handleMap);
@@ -2877,6 +3111,12 @@ void WifiSetup::begin() {
   }
   if (ssid.length()) {
     s_savedSsid = ssid;
+  }
+  if (ShowNet::isMember()) {
+    // The show network first; the venue network is the fallback.
+    s_memberOnShow = true;
+    beginConnect(String(ShowNet::ssid()), String(ShowNet::pass()), 0, nullptr);
+  } else if (ssid.length()) {
     LOG_V("wifi", "saved ssid=%s", ssid.c_str());
     const bool savedOk =
         s_haveSavedBssid && postedBssidOk(s_bandPref, true, s_savedCh);
@@ -2900,7 +3140,18 @@ void WifiSetup::service() {
   }
   pollScan();
   pollConnect();
-  if (LiveCfg::park() && WiFi.status() == WL_CONNECTED) {
+  if (ShowNet::isMember() && s_connectStatus == ConnectStatus::Failed &&
+      s_memberRetryAt != 0 &&
+      static_cast<int32_t>(millis() - s_memberRetryAt) >= 0) {
+    s_memberRetryAt = 0;
+    s_memberOnShow = !s_memberOnShow || !s_savedSsid.length();
+    if (s_memberOnShow) {
+      beginConnect(String(ShowNet::ssid()), String(ShowNet::pass()), 0, nullptr);
+    } else {
+      beginConnect(s_savedSsid, s_savedPass, 0, nullptr);
+    }
+  }
+  if (!ShowNet::isHost() && LiveCfg::park() && WiFi.status() == WL_CONNECTED) {
     stopAp();
   } else {
     startAp();
@@ -2911,7 +3162,7 @@ void WifiSetup::service() {
       LiveInput::onStaGotIp();
     }
   }
-  if (s_apUp) {
+  if (s_dnsUp) {
     s_dns.processNextRequest();
   }
   s_server.handleClient();
