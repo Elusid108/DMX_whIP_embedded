@@ -13,10 +13,21 @@
 #include <WiFiUdp.h>
 #include <cstring>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+
+extern TaskHandle_t loopTaskHandle;
+
+static void onPlayFileNow(const char *path);
+static void playlistAdvanceNow();
+
 namespace {
 
 static constexpr uint32_t kCueJoinRetryMs = 2000;
 static constexpr uint32_t kPlayBurstGapMs = 4;
+// Followers free-run on their own clock between ticks, so the master only
+// needs a few ticks a second (was one per show frame).
+static constexpr uint32_t kTickGapMs = 100;
 static constexpr size_t kCueMaxPkt = 32;
 
 static WiFiUDP s_udp;
@@ -35,7 +46,6 @@ static bool s_loggedE131 = false;
 
 static bool s_follow = false;
 static bool s_cuePlay = true;
-static bool s_cuePulse = false;
 static bool s_hasTime = false;
 static bool s_hasFrame = false;
 static uint32_t s_targetMs = 0;
@@ -93,17 +103,7 @@ static bool s_armMasterPlay = false;
 static uint8_t s_playBurstLeft = 0;
 static uint32_t s_playBurstMs = 0;
 
-static uint32_t hashGroup(const char *s) {
-  uint32_t h = 2166136261u;
-  if (!s) {
-    return 0;
-  }
-  while (*s) {
-    h ^= static_cast<uint8_t>(*s++);
-    h *= 16777619u;
-  }
-  return h;
-}
+static uint32_t hashGroup(const char *s) { return SdInfo::hashGroup(s); }
 
 static bool sidecarPath(const char *dmx, char *out, size_t n) {
   if (!dmx || !out || n < 8) {
@@ -240,14 +240,13 @@ static bool sidecarGroupHash(const char *dmx, uint32_t &outHash) {
 }
 
 static bool findGroupFile(uint32_t want, char *out, size_t outLen) {
+  // The SD tree caches each sidecar's group hash; no card I/O here.
   const uint8_t listed = SdInfo::fileCount();
   for (uint8_t i = 0; i < listed; ++i) {
-    uint32_t h = 0;
-    const char *path = SdInfo::fileAt(i);
-    if (!sidecarGroupHash(path, h) || h != want) {
+    if (SdInfo::groupHashAt(i) != want) {
       continue;
     }
-    snprintf(out, outLen, "%s", path);
+    snprintf(out, outLen, "%s", SdInfo::fileAt(i));
     return true;
   }
   if (listed > 0) {
@@ -379,7 +378,8 @@ static bool ownPacket(const IPAddress &from) {
   if (sta && from == sta) {
     return true;
   }
-  return false;
+  const IPAddress ap = WiFi.softAPIP();
+  return (WiFi.getMode() & WIFI_AP) && ap && from == ap;
 }
 
 static bool magicOk(const uint8_t *p) {
@@ -406,7 +406,8 @@ static bool bindUnicast() {
 }
 
 static bool joinMcast() {
-  if (!s_up || WiFi.status() != WL_CONNECTED) {
+  const bool apUp = (WiFi.getMode() & WIFI_AP) != 0;
+  if (!s_up || (WiFi.status() != WL_CONNECTED && !apUp)) {
     return false;
   }
   const uint32_t now = millis();
@@ -454,7 +455,6 @@ static void leaveFollow() {
   s_cuePlay = true;
   s_hasTime = false;
   s_hasFrame = false;
-  s_cuePulse = false;
   s_lastSnapMs = 0xFFFFFFFFu;
   s_lastSnapFrame = 0xFFFFFFFFu;
   Playback::setHold(false);
@@ -586,8 +586,10 @@ static void emitNow(uint8_t op) {
   uint32_t t_us = 0;
   uint32_t frame = 0;
   const bool has = Playback::peekFrame(t_us, frame);
-  const uint32_t t_ms = has ? (t_us / 1000u) : 0;
-  emitCue(op, has, has, t_ms, frame);
+  // The show clock position (not the next queued frame) so followers anchor
+  // their own clock to this instant.
+  const uint32_t t_ms = has ? Playback::showPosMs(millis()) : 0;
+  emitCue(op, has, has, t_ms, has ? Playback::frameIndex() : 0);
 }
 
 static void startPlayBurst() {
@@ -615,8 +617,8 @@ static void onCue(const CuePacket &p) {
     s_cuePlay = true;
     applyPosition(p.flags, p.t_ms, p.frame, true);
     Playback::play();
-    if (hasPos) {
-      s_cuePulse = true;
+    if (p.flags & kCueFlagHasTime) {
+      Playback::syncTick(p.t_ms, s_cueMs);
     }
     if (rising) {
       LOG_V("sync", "cue play t_ms=%u frame=%u flags=%u",
@@ -639,8 +641,8 @@ static void onCue(const CuePacket &p) {
   }
   case kCueOpSeek:
     applyPosition(p.flags, p.t_ms, p.frame, true);
-    if (s_cuePlay && hasPos) {
-      s_cuePulse = true;
+    if (s_cuePlay && (p.flags & kCueFlagHasTime)) {
+      Playback::syncTick(p.t_ms, s_cueMs);
     }
     if (p.t_ms != s_loggedSeekMs || p.frame != s_loggedSeekFrame) {
       s_loggedSeekMs = p.t_ms;
@@ -652,8 +654,8 @@ static void onCue(const CuePacket &p) {
     break;
   case kCueOpTick:
     applyPosition(p.flags, p.t_ms, p.frame, first);
-    if (s_cuePlay && hasPos) {
-      s_cuePulse = true;
+    if (s_cuePlay && (p.flags & kCueFlagHasTime)) {
+      Playback::syncTick(p.t_ms, s_cueMs);
     }
     break;
   default:
@@ -742,6 +744,51 @@ static void parseCue(int n, const IPAddress &from) {
   onCue(p);
 }
 
+// The play task binds files and advances playlists. Sync state and the cue
+// socket belong to the Arduino loop task, so those calls are queued and run
+// from Sync::service() in order.
+enum class EvKind : uint8_t { PlayFile = 1, Advance = 2 };
+struct SyncEvt {
+  EvKind kind;
+  char path[kSdPathLen];
+};
+static constexpr UBaseType_t kEvDepth = 6;
+static QueueHandle_t s_evq = nullptr;
+
+static bool onLoopTask() {
+  return loopTaskHandle == nullptr ||
+         xTaskGetCurrentTaskHandle() == loopTaskHandle;
+}
+
+static void postEvent(EvKind kind, const char *path) {
+  if (s_evq == nullptr) {
+    s_evq = xQueueCreate(kEvDepth, sizeof(SyncEvt));
+    if (s_evq == nullptr) {
+      return;
+    }
+  }
+  SyncEvt e;
+  e.kind = kind;
+  snprintf(e.path, sizeof(e.path), "%s", path ? path : "");
+  if (xQueueSend(s_evq, &e, pdMS_TO_TICKS(50)) != pdTRUE) {
+    LOG_C("sync", "event queue full");
+  }
+}
+
+static void drainEvents() {
+  if (s_evq == nullptr) {
+    return;
+  }
+  SyncEvt e;
+  while (xQueueReceive(s_evq, &e, 0) == pdTRUE) {
+    if (e.kind == EvKind::PlayFile) {
+      onPlayFileNow(e.path);
+    } else {
+      playlistAdvanceNow();
+    }
+  }
+}
+
 } // namespace
 
 void Sync::begin() {
@@ -766,6 +813,8 @@ void Sync::service() {
   if (!s_up && s_begun) {
     bindUnicast();
   }
+
+  drainEvents();
 
   if (s_up) {
     for (;;) {
@@ -820,8 +869,7 @@ void Sync::service() {
   }
   if (s_master && !s_follow && Playback::playing() && s_playBurstLeft == 0 &&
       !s_armMasterPlay) {
-    const uint32_t gap = LiveCfg::showIntervalMs();
-    if (s_lastEmitMs == 0 || now - s_lastEmitMs >= gap) {
+    if (s_lastEmitMs == 0 || now - s_lastEmitMs >= kTickGapMs) {
       emitNow(kCueOpTick);
     }
   }
@@ -871,16 +919,6 @@ bool Sync::cuePlaying() { return s_cuePlay; }
 
 bool Sync::cueSocketUp() { return s_up; }
 
-bool Sync::hasCuePulse() { return s_follow && s_cuePlay && s_cuePulse; }
-
-bool Sync::takeCuePulse() {
-  if (!s_cuePulse) {
-    return false;
-  }
-  s_cuePulse = false;
-  return true;
-}
-
 bool Sync::cueHasTime() { return s_hasTime; }
 
 bool Sync::cueHasFrame() { return s_hasFrame; }
@@ -898,6 +936,15 @@ static void dropMasterArm() {
 }
 
 void Sync::onPlayFile(const char *path) {
+  if (!onLoopTask()) {
+    postEvent(EvKind::PlayFile, path);
+    return;
+  }
+  drainEvents();
+  onPlayFileNow(path);
+}
+
+static void onPlayFileNow(const char *path) {
   struct ClearRestore {
     bool arm;
     ~ClearRestore() {
@@ -930,30 +977,16 @@ void Sync::onPlayFile(const char *path) {
     s_cueBind = false;
     return;
   }
-  if (!SD.exists(side)) {
-    if (keepMaster) {
-      s_master = true;
-    }
-    dropMasterArm();
-    s_pendingLocal = false;
-    s_pendingHash = 0;
-    s_cueBind = false;
-    return;
-  }
-  File f = SD.open(side, FILE_READ);
-  if (!f) {
-    if (keepMaster) {
-      s_master = true;
-    }
-    dropMasterArm();
-    s_pendingLocal = false;
-    s_pendingHash = 0;
-    s_cueBind = false;
-    return;
-  }
   char buf[768];
-  const int n = f.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
-  f.close();
+  int n = 0;
+  if (SdInfo::lock(1000)) {
+    File f = SD.exists(side) ? SD.open(side, FILE_READ) : File();
+    if (f) {
+      n = f.read(reinterpret_cast<uint8_t *>(buf), sizeof(buf) - 1);
+      f.close();
+    }
+    SdInfo::unlock();
+  }
   if (n <= 0) {
     if (keepMaster) {
       s_master = true;
@@ -1006,6 +1039,15 @@ void Sync::onPlayFile(const char *path) {
 }
 
 void Sync::notePlaylistAdvance() {
+  if (!onLoopTask()) {
+    postEvent(EvKind::Advance, nullptr);
+    return;
+  }
+  drainEvents();
+  playlistAdvanceNow();
+}
+
+static void playlistAdvanceNow() {
   if (s_follow || s_takeoverOn || s_restoring) {
     return;
   }
@@ -1062,7 +1104,6 @@ void Sync::releaseToLive() {
   s_master = false;
   s_waitMaster = false;
   s_cuePlay = false;
-  s_cuePulse = false;
   s_loggedFollow = false;
   Playback::setHold(false);
   Playback::setLoop(true);
@@ -1077,7 +1118,6 @@ void Sync::noteStopped() {
   s_master = false;
   s_waitMaster = false;
   s_cuePlay = false;
-  s_cuePulse = false;
   s_loggedFollow = false;
   Playback::setLoop(true);
   LOG_V("sync", "stop");

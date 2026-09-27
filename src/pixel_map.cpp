@@ -81,6 +81,12 @@ static uint16_t s_outPxOff[kPatchMaxOutputs];
 static uint16_t s_outPxN[kPatchMaxOutputs];
 static uint8_t s_nOut = 1;
 static bool s_loaded = false;
+// Bumped on every map or brightness change; render caches key on it.
+static uint32_t s_gen = 1;
+// Global pixel index -> segment, rebuilt lazily for the current s_gen.
+static uint8_t s_pxSeg[kLedCountMax];
+static uint16_t s_segBase[kPatchMaxSegments];
+static uint32_t s_pxGen = 0;
 
 static const ChipRow *findChip(LedChipset id) {
   for (size_t i = 0; i < sizeof(kChips) / sizeof(kChips[0]); ++i) {
@@ -252,6 +258,7 @@ static PixelChan makeChan(const PixelMapCfg &m, uint16_t uniOff, uint16_t ch) {
 }
 
 static void rebuildGroups() {
+  ++s_gen;
   s_nOut = 0;
   memset(s_outOf, 0, sizeof(s_outOf));
   memset(s_outFirst, 0, sizeof(s_outFirst));
@@ -586,6 +593,7 @@ static void loadNvs() {
     loadLegacy(prefs);
   }
   prefs.end();
+  ++s_gen;
 }
 
 static void logCfg() {
@@ -1045,6 +1053,7 @@ bool PixelMap::setSegmentBrightness(uint8_t i, uint8_t bri, bool save) {
     return false;
   }
   s_seg[i].brightness = bri;
+  ++s_gen;
   if (save) {
     saveNvs();
   }
@@ -1082,22 +1091,38 @@ bool PixelMap::lookupRgb(uint16_t pixelIndex, PixelRgbAddr &out) {
   return true;
 }
 
-bool PixelMap::locatePixel(uint16_t globalIndex, uint8_t &seg, uint16_t &local) {
-  loadNvs();
+static void rebuildPixelIndex() {
+  s_pxGen = s_gen;
+  memset(s_pxSeg, 0xFF, sizeof(s_pxSeg));
   uint16_t acc = 0;
   for (uint8_t o = 0; o < s_nOut; ++o) {
     for (uint8_t i = 0; i < s_n; ++i) {
       if (s_outOf[i] != o) {
         continue;
       }
+      s_segBase[i] = acc;
       const uint16_t n = s_seg[i].pixelCount;
-      if (globalIndex < static_cast<uint16_t>(acc + n)) {
-        seg = i;
-        local = static_cast<uint16_t>(globalIndex - acc);
-        return true;
+      for (uint16_t p = 0; p < n && acc < kLedCountMax; ++p) {
+        s_pxSeg[acc++] = i;
       }
-      acc = static_cast<uint16_t>(acc + n);
     }
   }
-  return false;
+}
+
+bool PixelMap::locatePixel(uint16_t globalIndex, uint8_t &seg, uint16_t &local) {
+  loadNvs();
+  if (s_pxGen != s_gen) {
+    rebuildPixelIndex();
+  }
+  if (globalIndex >= kLedCountMax || s_pxSeg[globalIndex] == 0xFF) {
+    return false;
+  }
+  seg = s_pxSeg[globalIndex];
+  local = static_cast<uint16_t>(globalIndex - s_segBase[seg]);
+  return true;
+}
+
+uint32_t PixelMap::generation() {
+  loadNvs();
+  return s_gen;
 }

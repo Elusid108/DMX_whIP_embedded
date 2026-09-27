@@ -86,8 +86,9 @@ static uint8_t chanOf(char letter, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
   }
 }
 
-static uint8_t scaleSeg(uint8_t v, uint8_t bri) {
-  return static_cast<uint8_t>((static_cast<uint16_t>(v) * bri) / 255u);
+// v * bri / 255 without the divide (exact at 0 and 255, within 1 elsewhere).
+static inline uint8_t scaleSeg(uint8_t v, uint8_t bri) {
+  return static_cast<uint8_t>((static_cast<uint16_t>(v) * (bri + 1u)) >> 8);
 }
 
 static uint8_t onceBri(uint8_t segBri) {
@@ -97,13 +98,8 @@ static uint8_t onceBri(uint8_t segBri) {
   return segBri;
 }
 
-static void packPixel(uint16_t i, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
-                      uint8_t c) {
-  uint8_t seg = 0;
-  uint16_t local = 0;
-  if (!PixelMap::locatePixel(i, seg, local)) {
-    return;
-  }
+static void packPixelSeg(uint16_t i, uint8_t seg, uint8_t r, uint8_t g,
+                         uint8_t b, uint8_t w, uint8_t c) {
   const PixelMapCfg &m = PixelMap::segment(seg);
   const uint8_t n = m.channelsPerPixel;
   const char *ord = m.colorOrder;
@@ -122,6 +118,15 @@ static void packPixel(uint16_t i, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
   s_ch[i] = n;
   if (n >= 3) {
     s_leds[i] = CRGB(s_px[i][0], s_px[i][1], s_px[i][2]);
+  }
+}
+
+static void packPixel(uint16_t i, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
+                      uint8_t c) {
+  uint8_t seg = 0;
+  uint16_t local = 0;
+  if (PixelMap::locatePixel(i, seg, local)) {
+    packPixelSeg(i, seg, r, g, b, w, c);
   }
 }
 
@@ -437,7 +442,7 @@ void LedBus::setPacked(uint16_t i, const uint8_t *ch) {
   if (m.cct) {
     c = ch[o];
   }
-  packPixel(i, r, g, b, w, c);
+  packPixelSeg(i, seg, r, g, b, w, c);
 }
 
 void LedBus::setOutputPacked(uint8_t out, const uint8_t *ch, uint16_t len) {

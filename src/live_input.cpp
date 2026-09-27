@@ -90,14 +90,6 @@ static UniSlot *findSlot(LiveSource src, uint16_t universe, bool alloc) {
   return s;
 }
 
-static uint8_t slotByte(LiveSource src, uint16_t universe, uint16_t off) {
-  const UniSlot *s = findSlot(src, universe, false);
-  if (s == nullptr || !s->have || off >= kDmxUniverseSize) {
-    return 0;
-  }
-  return s->dmx[off];
-}
-
 static bool hasSlot(LiveSource src, uint16_t universe) {
   const UniSlot *s = findSlot(src, universe, false);
   return s != nullptr && s->have;
@@ -106,6 +98,11 @@ static bool hasSlot(LiveSource src, uint16_t universe) {
 static void packSeg(const PixelMapCfg &m, uint8_t seg, uint8_t *dst,
                     uint16_t &o) {
   const uint8_t ch = m.channelsPerPixel;
+  // Consecutive channels almost always share a universe: look the slot up
+  // once per universe change, not once per channel.
+  LiveSource cSrc = LiveSource::None;
+  uint16_t cUni = 0;
+  const UniSlot *cSlot = nullptr;
   for (uint16_t p = 0; p < m.pixelCount; ++p) {
     uint16_t uniOff = 0;
     uint16_t ch1 = 1;
@@ -139,7 +136,15 @@ static void packSeg(const PixelMapCfg &m, uint8_t seg, uint8_t *dst,
       const uint16_t slotUni =
           static_cast<uint16_t>(uni + abs / kDmxUniverseSize);
       const uint16_t slotOff = static_cast<uint16_t>(abs % kDmxUniverseSize);
-      dst[o++] = slotByte(src, slotUni, slotOff);
+      if (cSrc != src || cUni != slotUni) {
+        cSrc = src;
+        cUni = slotUni;
+        cSlot = findSlot(src, slotUni, false);
+        if (cSlot != nullptr && !cSlot->have) {
+          cSlot = nullptr;
+        }
+      }
+      dst[o++] = cSlot != nullptr ? cSlot->dmx[slotOff] : 0;
     }
   }
 }

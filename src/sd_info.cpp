@@ -16,7 +16,6 @@
 namespace {
 
 static constexpr uint32_t kSdPollMs = 1000;
-static constexpr uint32_t kSdListMs = 3000;
 static constexpr uint32_t kSdLockForever = 0xFFFFFFFFu;
 
 static bool s_ok = false;
@@ -36,6 +35,7 @@ static uint8_t s_nDirs = 0;
 static char s_files[kSdMaxListFiles][kSdPathLen];
 static char s_titles[kSdMaxListFiles][kSdTitleLen];
 static uint8_t s_marks[kSdMaxListFiles];
+static uint32_t s_groupHash[kSdMaxListFiles];
 static char s_dirs[kSdMaxListDirs][kSdPathLen];
 
 static char s_pend[kSdMaxListDirs + 1][kSdPathLen];
@@ -356,6 +356,7 @@ static void loadTitlesLocked() {
     if (!extractJsonString(buf, "group", group, sizeof(group))) {
       continue;
     }
+    s_groupHash[i] = SdInfo::hashGroup(group);
     char kind[8];
     if (extractJsonString(buf, "kind", kind, sizeof(kind)) &&
         strcmp(kind, "uni") == 0) {
@@ -561,8 +562,11 @@ void SdInfo::service() {
   if (!s_ok) {
     return;
   }
+  // The tree is listed once per mount. Upload / rename / delete / order /
+  // meta call refreshTree(), so no periodic walk steals the card from the
+  // playback reader.
   const bool needUsage = !s_haveUsage && !s_exclusiveIo;
-  const bool needList = (s_lastList == 0) || (now - s_lastList >= kSdListMs);
+  const bool needList = s_lastList == 0;
   if (!needUsage && !needList) {
     return;
   }
@@ -575,7 +579,7 @@ void SdInfo::service() {
   }
   if (needList) {
     fillTreeLocked();
-    s_lastList = millis();
+    s_lastList = millis() | 1u;
   }
   unlock();
 }
@@ -619,7 +623,7 @@ void SdInfo::refreshTree() {
     return;
   }
   fillTreeLocked();
-  s_lastList = millis();
+  s_lastList = millis() | 1u;
   unlock();
 }
 
@@ -644,6 +648,22 @@ const char *SdInfo::markAt(uint8_t i) {
     return "split";
   }
   return "";
+}
+
+uint32_t SdInfo::groupHashAt(uint8_t i) {
+  return i < s_nFiles ? s_groupHash[i] : 0;
+}
+
+uint32_t SdInfo::hashGroup(const char *s) {
+  uint32_t h = 2166136261u;
+  if (!s) {
+    return 0;
+  }
+  while (*s) {
+    h ^= static_cast<uint8_t>(*s++);
+    h *= 16777619u;
+  }
+  return h;
 }
 
 uint8_t SdInfo::dirCount() { return s_nDirs; }

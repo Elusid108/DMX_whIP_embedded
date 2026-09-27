@@ -42,6 +42,21 @@ static bool s_mcast = false;
 static uint32_t s_bindMs = 0;
 static bool s_loggedFirst = false;
 
+// Extra universes joined with igmp_joingroup (beginMulticast owns the first).
+static uint16_t s_joined[kLiveUniSlots + 1];
+static uint8_t s_joinedN = 0;
+// Sync universe named by the data we accept (0 = source does not sync).
+static uint16_t s_syncUni = 0;
+static bool s_syncJoined = false;
+// E1.31 6.7.2 sequence check, per universe.
+struct SeqSlot {
+  uint16_t uni;
+  uint8_t seq;
+};
+static SeqSlot s_seqs[kLiveUniSlots];
+static uint8_t s_seqN = 0;
+static uint32_t s_outOfOrder = 0;
+
 static uint16_t rd16(const uint8_t *p) {
   return static_cast<uint16_t>((p[0] << 8) | p[1]);
 }
@@ -56,10 +71,32 @@ static IPAddress multicastGroup(uint16_t uni) {
   return IPAddress(kSacnMcastA, kSacnMcastB, sacnMcastC(uni), sacnMcastD(uni));
 }
 
+static void igmpGroup(uint16_t uni, bool join) {
+  const IPAddress g = multicastGroup(uni);
+  ip4_addr_t addr;
+  IP4_ADDR(&addr, g[0], g[1], g[2], g[3]);
+  if (join) {
+    igmp_joingroup(IP4_ADDR_ANY4, &addr);
+  } else {
+    igmp_leavegroup(IP4_ADDR_ANY4, &addr);
+  }
+}
+
+static void leaveExtras() {
+  for (uint8_t i = 0; i < s_joinedN; ++i) {
+    igmpGroup(s_joined[i], false);
+  }
+  s_joinedN = 0;
+  s_syncJoined = false;
+  s_syncUni = 0;
+  s_seqN = 0;
+}
+
 static bool joinMcast() {
   if (!s_up || WiFi.status() != WL_CONNECTED) {
     return false;
   }
+  leaveExtras();
   uint16_t unis[kLiveUniSlots];
   const uint8_t n = PixelMap::collectSacnUniverses(unis, kLiveUniSlots);
   const uint16_t start = n ? unis[0] : PixelMap::firstSacnUniverse();
@@ -75,15 +112,47 @@ static bool joinMcast() {
     return false;
   }
   s_mcast = true;
-  for (uint8_t i = 1; i < n; ++i) {
-    const IPAddress extra = multicastGroup(unis[i]);
-    ip4_addr_t addr;
-    IP4_ADDR(&addr, extra[0], extra[1], extra[2], extra[3]);
-    igmp_joingroup(IP4_ADDR_ANY4, &addr);
+  for (uint8_t i = 1; i < n && s_joinedN < kLiveUniSlots; ++i) {
+    igmpGroup(unis[i], true);
+    s_joined[s_joinedN++] = unis[i];
   }
   LOG_V("sacn", "mcast %s:%u uni=%u n=%u", group.toString().c_str(), kSacnPort,
         start, n);
   return true;
+}
+
+// E1.31 6.7.2: drop a packet whose sequence is 0..-19 behind the last one.
+static bool seqAccept(uint16_t uni, uint8_t seq) {
+  for (uint8_t i = 0; i < s_seqN; ++i) {
+    if (s_seqs[i].uni != uni) {
+      continue;
+    }
+    const int8_t d = static_cast<int8_t>(seq - s_seqs[i].seq);
+    if (d <= 0 && d > -20) {
+      return false;
+    }
+    s_seqs[i].seq = seq;
+    return true;
+  }
+  if (s_seqN < kLiveUniSlots) {
+    s_seqs[s_seqN++] = {uni, seq};
+  }
+  return true;
+}
+
+static void noteSyncUni(uint16_t syncUni) {
+  if (syncUni == s_syncUni) {
+    return;
+  }
+  if (s_syncJoined) {
+    igmpGroup(s_syncUni, false);
+    s_syncJoined = false;
+  }
+  s_syncUni = syncUni;
+  if (syncUni != 0 && s_mcast) {
+    igmpGroup(syncUni, true);
+    s_syncJoined = true;
+  }
 }
 
 static void parsePacket(int n, const IPAddress &from) {
@@ -103,6 +172,10 @@ static void parsePacket(int n, const IPAddress &from) {
       return;
     }
     const uint16_t uni = rd16(s_pkt + 45);
+    // Only the sync universe our accepted data names may fence the output.
+    if (s_syncUni == 0 || uni != s_syncUni) {
+      return;
+    }
     ++s_syncOk;
     Sync::onE131Sync(uni);
     return;
@@ -120,7 +193,9 @@ static void parsePacket(int n, const IPAddress &from) {
     return;
   }
   const uint8_t options = s_pkt[112];
-  if (options & 0x80) {
+  // Preview data (0x80) is not for output. Stream_Terminated (0x40) carries
+  // no levels; the live timeout ends the stream.
+  if (options & 0xC0) {
     return;
   }
   const uint16_t uni = rd16(s_pkt + 113);
@@ -128,6 +203,11 @@ static void parsePacket(int n, const IPAddress &from) {
     ++s_wrongUni;
     return;
   }
+  if (!seqAccept(uni, s_pkt[111])) {
+    ++s_outOfOrder;
+    return;
+  }
+  noteSyncUni(rd16(s_pkt + 109));
   const uint16_t propCount = rd16(s_pkt + 123);
   if (propCount < 2) {
     return;
@@ -186,6 +266,7 @@ void SacnRx::stop() {
   if (!s_up) {
     return;
   }
+  leaveExtras();
   s_udp.stop();
   s_up = false;
   s_mcast = false;
@@ -197,6 +278,7 @@ void SacnRx::onStaGotIp() {
     return;
   }
   if (s_up) {
+    leaveExtras();
     s_udp.stop();
     s_up = false;
     s_mcast = false;
@@ -232,11 +314,13 @@ void SacnRx::service() {
   if (now - s_statMs >= kStatMs) {
     s_statMs = now;
     if (s_pkts > 0 || s_dmxOk > 0 || s_syncOk > 0) {
-      LOG_V("sacn", "rx pkts=%u dmx=%u sync=%u uni=%u seq=%u skip_uni=%u",
+      LOG_V("sacn",
+            "rx pkts=%u dmx=%u sync=%u uni=%u seq=%u skip_uni=%u ooo=%u",
             static_cast<unsigned>(s_pkts), static_cast<unsigned>(s_dmxOk),
             static_cast<unsigned>(s_syncOk),
             PixelMap::firstSacnUniverse(), s_seq,
-            static_cast<unsigned>(s_wrongUni));
+            static_cast<unsigned>(s_wrongUni),
+            static_cast<unsigned>(s_outOfOrder));
     }
   }
 }

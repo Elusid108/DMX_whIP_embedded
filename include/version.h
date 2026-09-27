@@ -2,5 +2,5 @@
 
 #include <stdint.h>
 
-static constexpr char kFirmwareVersion[] = "0.35.0";
+static constexpr char kFirmwareVersion[] = "0.36.0";
 static constexpr uint16_t kFirmwareApi = 1;

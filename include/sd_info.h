@@ -37,6 +37,9 @@ public:
   static const char *titleAt(uint8_t i);
   // "" , "split", or "uni". Parallel to fileAt. Missing kind on a group is split.
   static const char *markAt(uint8_t i);
+  // FNV-1a of the sidecar sync group, parallel to fileAt. 0 = no group.
+  static uint32_t groupHashAt(uint8_t i);
+  static uint32_t hashGroup(const char *group);
   static uint8_t dirCount();
   static const char *dirAt(uint8_t i);
 

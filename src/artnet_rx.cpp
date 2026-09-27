@@ -202,11 +202,13 @@ static void sendPollReply(const IPAddress &from) {
 
   buildPollReply(ip);
 
+  // Art-Net 4 replies unicast to the poller. The directed broadcast stays as
+  // a fallback for controllers that poll from a port they do not listen on;
+  // the limited broadcast (a third copy on the same subnet) is gone.
   IPAddress dests[3];
   uint8_t n = 0;
   addDest(dests, n, from);
   addDest(dests, n, directedBcast(ip));
-  addDest(dests, n, IPAddress(255, 255, 255, 255));
 
   bool ok = false;
   bool uniOk = false;
@@ -226,14 +228,12 @@ static void sendPollReply(const IPAddress &from) {
     ++s_replies;
   }
 
+  // Later polls show up in the 5 s rx counters; one line per poll was noise.
   if (!s_loggedFirstPoll) {
     s_loggedFirstPoll = true;
     LOG_V("artnet", "poll from=%s reply ip=%s uni=%u dests=%u unicast=%u",
           from.toString().c_str(), ip.toString().c_str(),
           PixelMap::firstArtNetUniverse(), n, uniOk ? 1u : 0u);
-  } else {
-    LOG_V("artnet", "poll from=%s reply ip=%s", from.toString().c_str(),
-          ip.toString().c_str());
   }
 }
 

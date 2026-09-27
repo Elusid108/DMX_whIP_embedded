@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.35.0**
+Version: **0.36.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -266,6 +266,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.36.0** — SD playback follows the file clock (a take plays at its recorded speed at any show FPS), and a universe recorded a millisecond late no longer blanks the rest of the frame. Grouped followers run on their own clock between 10 Hz cue ticks instead of drawing only when a packet lands. No more SD rescan every 3 s during playback, and a foreign cue no longer reads every sidecar. Pause holds the last pixels. Uploads go to a temp file and replace the target only when complete, in large blocks. The portal is served gzipped with an ETag (68 KB → 18 KB). `/status` omits the saved password except to SoftAP clients. SoftAP takes up to 10 clients. sACN drops out-of-order and stream-terminated packets and only fences on its own sync universe. ArtPollReply no longer sends a third limited-broadcast copy
 - **0.35.0** — Setup **No signal** chooses Play (resume the show), Hold (keep the last frame), or Black when a stream stops. The C5 DevKit image is DIO at 40 MHz so the ROM can boot
 - **0.34.0** — Patch no longer warns when the pixel count is not the onboard panel size. Setup keeps the network list and the version from covering each other. Each output can toggle Rainbow, Cycle, or Ends (`POST /test`) while idle
 - **0.33.0** — `[env:xiao-c5]` Seeed Studio XIAO ESP32-C5 (USB CDC, 8 MB PSRAM). Default data GPIO 1, clock GPIO 0, SD CS/SCK/MISO/MOSI 12/8/9/10. A clocked IC may use GPIO 0

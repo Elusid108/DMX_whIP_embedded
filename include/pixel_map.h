@@ -189,4 +189,6 @@ public:
                           uint16_t &ch1);
   static bool lookupRgb(uint16_t pixelIndex, PixelRgbAddr &out);
   static bool locatePixel(uint16_t globalIndex, uint8_t &seg, uint16_t &local);
+  // Changes whenever the map or a segment brightness changes.
+  static uint32_t generation();
 };

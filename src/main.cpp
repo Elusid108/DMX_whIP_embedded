@@ -126,63 +126,90 @@ void loop() {
   WifiSetup::service();
   SdInfo::service();
 
+  // Render. LedBus::show() only when pixels changed (plus a 1 s keepalive so
+  // a glitched strip heals); a held playback frame is not re-sent every tick.
+  enum class Mode : uint8_t { Live, Ident, Test, Play, Hold, Black };
+  static Mode prevMode = Mode::Black;
   static uint32_t lastShow = 0;
+  static bool haveFrame = false;
   const uint32_t now = millis();
   const bool fpsDue = (now - lastShow >= LiveCfg::showIntervalMs());
   const bool syncLive = live && Sync::liveSyncActive();
   const bool liveFence = syncLive && Sync::hasLiveFence();
-  const bool cuePulse = !live && Sync::hasCuePulse();
-
-  if (!fpsDue && !liveFence && !cuePulse) {
-    yield();
-    return;
-  }
   if (liveFence) {
     Sync::takeLiveFence();
   }
-  if (cuePulse) {
-    Sync::takeCuePulse();
-  }
-  if (fpsDue) {
-    lastShow = now;
-  }
 
+  Mode mode = Mode::Black;
   if (live) {
-    if (syncLive) {
-      if (liveFence) {
-        LiveInput::renderLeds();
-      }
-    } else {
-      LiveInput::renderLeds();
-    }
+    mode = Mode::Live;
   } else if (Identify::active()) {
-    Identify::render(now);
+    mode = Mode::Ident;
   } else if (LedTest::active()) {
-    LedTest::render(now);
+    mode = Mode::Test;
   } else if (Playback::hasFile() && !Playback::userPaused() &&
              (LiveCfg::loss() == LiveLoss::Play || Playback::playing() ||
               Sync::cueFollow())) {
-    if (Sync::cueFollow()) {
-      if (cuePulse && Sync::cuePlaying() &&
-          (Sync::cueHasTime() || Sync::cueHasFrame())) {
-        memset(s_frame, 0, sizeof(s_frame));
-        if (Playback::catchTick(s_frame, sizeof(s_frame), Sync::cueTargetMs(),
-                                Sync::cueTargetFrame(), Sync::cueHasTime(),
-                                Sync::cueHasFrame())) {
-          renderPacked(s_frame, static_cast<uint16_t>(sizeof(s_frame)));
-        }
-      }
-    } else if (fpsDue) {
-      uint32_t t_us = 0;
-      if (Playback::peek(t_us)) {
-        memset(s_frame, 0, sizeof(s_frame));
-        if (Playback::copyFrame(s_frame, sizeof(s_frame))) {
-          renderPacked(s_frame, static_cast<uint16_t>(sizeof(s_frame)));
-        }
-      }
-    }
-  } else if (fpsDue && LiveCfg::loss() != LiveLoss::Hold) {
-    LedBus::clear();
+    mode = Mode::Play;
+  } else if (Playback::userPaused() || LiveCfg::loss() == LiveLoss::Hold) {
+    mode = Mode::Hold;
   }
-  LedBus::show();
+  const bool entered = mode != prevMode;
+  prevMode = mode;
+
+  bool drew = false;
+  switch (mode) {
+  case Mode::Live:
+    if (syncLive ? liveFence : fpsDue) {
+      drew = LiveInput::renderLeds();
+    }
+    break;
+  case Mode::Ident:
+    if (fpsDue) {
+      Identify::render(now);
+      drew = true;
+    }
+    break;
+  case Mode::Test:
+    if (fpsDue) {
+      LedTest::render(now);
+      drew = true;
+    }
+    break;
+  case Mode::Play: {
+    const bool rolling = !Sync::cueFollow() || Sync::cuePlaying();
+    if (rolling && fpsDue && Playback::frameDue(now)) {
+      memset(s_frame, 0, sizeof(s_frame));
+      if (Playback::renderDue(s_frame, sizeof(s_frame), now)) {
+        haveFrame = true;
+        renderPacked(s_frame, static_cast<uint16_t>(sizeof(s_frame)));
+        drew = true;
+      }
+    } else if (rolling && fpsDue && Playback::available() == 0) {
+      // Flags the underrun and pauses the show clock.
+      Playback::renderDue(s_frame, sizeof(s_frame), now);
+    }
+    if (!drew && entered && haveFrame) {
+      renderPacked(s_frame, static_cast<uint16_t>(sizeof(s_frame)));
+      drew = true;
+    }
+    break;
+  }
+  case Mode::Hold:
+    break;
+  case Mode::Black:
+    if (entered || now - lastShow >= 1000) {
+      LedBus::clear();
+      haveFrame = false;
+      drew = true;
+    }
+    break;
+  }
+
+  if (drew || now - lastShow >= 1000) {
+    lastShow = now;
+    LedBus::show();
+  } else {
+    yield();
+  }
 }

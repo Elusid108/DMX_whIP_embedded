@@ -16,7 +16,7 @@
 #include "sd_info.h"
 #include "sync.h"
 #include "version.h"
-#include "wifi_setup_html.h"
+#include "generated/wifi_setup_html_gz.h"
 
 #include <Arduino.h>
 #include <DNSServer.h>
@@ -55,6 +55,9 @@ static constexpr uint32_t kScanDwellMs = 75;
 static constexpr uint32_t kDisconnectGraceMs = 800;
 static constexpr uint32_t kRebootDelayMs = 300;
 static constexpr int kMaxNets = 40;
+// Arduino defaults the SoftAP to 4 stations; a phone, a PC and a few nodes
+// need more.
+static constexpr int kApMaxClients = 10;
 static constexpr char kPrefsNs[] = "wifi";
 
 static WebServer s_server(kHttpPort);
@@ -88,6 +91,14 @@ static uint32_t s_rebootAt = 0;
 
 static File s_uploadFile;
 static char s_uploadPath[kSdPathLen];
+// Uploads land in a temp file (renamed over the target only on success) and
+// reach the card in large blocks instead of ~1.4 KB HTTP chunks.
+static constexpr char kUploadTmp[] = "/.whip-upload.tmp";
+static constexpr size_t kUploadBufPsram = 32768;
+static constexpr size_t kUploadBufMin = 4096;
+static uint8_t *s_uploadBuf = nullptr;
+static size_t s_uploadBufCap = 0;
+static size_t s_uploadBufLen = 0;
 static uint32_t s_uploadBytes = 0;
 static bool s_uploadOk = false;
 static bool s_uploadLocked = false;
@@ -131,12 +142,21 @@ static void sendJson(int code, const String &body) {
   s_server.send(code, "application/json", body);
 }
 
+// The portal is pre-gzipped at build time (scripts/gzip_portal.py). no-cache
+// still revalidates every load, so a new firmware's page is never stale; an
+// unchanged page costs a 304.
 static void sendPage() {
-  s_server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  s_server.sendHeader("Pragma", "no-cache");
-  s_server.sendHeader("Expires", "0");
+  s_server.sendHeader("Cache-Control", "no-cache");
+  s_server.sendHeader("ETag", kWifiSetupHtmlEtag);
   s_server.sendHeader("Connection", "close");
-  s_server.send_P(200, "text/html", kWifiSetupHtml);
+  if (s_server.header("If-None-Match") == kWifiSetupHtmlEtag) {
+    s_server.send(304);
+    return;
+  }
+  s_server.sendHeader("Content-Encoding", "gzip");
+  s_server.send_P(200, "text/html",
+                  reinterpret_cast<const char *>(kWifiSetupHtmlGz),
+                  kWifiSetupHtmlGzLen);
 }
 
 static void handleCaptive() {
@@ -423,7 +443,7 @@ static void startAp() {
 #if defined(SOC_WIFI_SUPPORT_5G) && SOC_WIFI_SUPPORT_5G
   setRadioBand(WIFI_BAND_MODE_2G_ONLY);
 #endif
-  if (!WiFi.softAP(kApSsid, kApPass)) {
+  if (!WiFi.softAP(kApSsid, kApPass, 1, 0, kApMaxClients)) {
     LOG_C("ap", "softAP failed");
     s_apFailMs = millis();
     return;
@@ -674,6 +694,15 @@ static void appendOutputs(String &out) {
   out += '}';
 }
 
+static bool requestFromSoftAp() {
+  if (!s_apUp) {
+    return false;
+  }
+  const IPAddress from = s_server.client().remoteIP();
+  const IPAddress ap = WiFi.softAPIP();
+  return from[0] == ap[0] && from[1] == ap[1] && from[2] == ap[2];
+}
+
 static void sendStatus(int code) {
   String out;
   out.reserve(12288);
@@ -702,7 +731,9 @@ static void sendStatus(int code) {
   if (s_savedSsid.length()) {
     out += ",\"saved\":";
     jsonEscape(out, s_savedSsid);
-    if (s_savedPass.length()) {
+    // The saved password is for the portal on the node's own SoftAP only;
+    // never hand it to anyone on the shared network.
+    if (s_savedPass.length() && requestFromSoftAp()) {
       out += ",\"pass\":";
       jsonEscape(out, s_savedPass);
     }
@@ -1788,6 +1819,22 @@ static void resetUploadState() {
   s_uploadPath[0] = '\0';
 }
 
+static bool flushUploadBuf() {
+  if (s_uploadBufLen == 0) {
+    return true;
+  }
+  const size_t n = s_uploadBufLen;
+  s_uploadBufLen = 0;
+  return s_uploadFile && s_uploadFile.write(s_uploadBuf, n) == n;
+}
+
+static void freeUploadBuf() {
+  free(s_uploadBuf);
+  s_uploadBuf = nullptr;
+  s_uploadBufCap = 0;
+  s_uploadBufLen = 0;
+}
+
 static void closeUploadFile() {
   if (s_uploadFile) {
     s_uploadFile.close();
@@ -1848,14 +1895,21 @@ static void handleUploadFile() {
     }
     snprintf(s_uploadPath, sizeof(s_uploadPath), "%s", path.c_str());
     Playback::park();
-    delay(80);
     if (!SdInfo::lock(2000)) {
       s_uploadError = "busy";
       return;
     }
     s_uploadLocked = true;
+    freeUploadBuf();
+    s_uploadBufCap = psramFound() ? kUploadBufPsram : kUploadBufMin;
+    s_uploadBuf = static_cast<uint8_t *>(psramFound() ? ps_malloc(s_uploadBufCap)
+                                                      : malloc(s_uploadBufCap));
+    if (s_uploadBuf == nullptr) {
+      s_uploadBufCap = 0;
+    }
     ensureUploadParents(s_uploadPath);
-    s_uploadFile = SD.open(s_uploadPath, FILE_WRITE);
+    SD.remove(kUploadTmp);
+    s_uploadFile = SD.open(kUploadTmp, FILE_WRITE);
     if (!s_uploadFile) {
       releaseUploadLock();
       s_uploadError = "write failed";
@@ -1868,7 +1922,25 @@ static void handleUploadFile() {
     if (s_uploadError || !s_uploadFile) {
       return;
     }
-    if (s_uploadFile.write(up.buf, up.currentSize) != up.currentSize) {
+    bool ok = true;
+    if (s_uploadBufCap == 0) {
+      ok = s_uploadFile.write(up.buf, up.currentSize) == up.currentSize;
+    } else {
+      size_t at = 0;
+      while (ok && at < up.currentSize) {
+        size_t take = s_uploadBufCap - s_uploadBufLen;
+        if (take > up.currentSize - at) {
+          take = up.currentSize - at;
+        }
+        memcpy(s_uploadBuf + s_uploadBufLen, up.buf + at, take);
+        s_uploadBufLen += take;
+        at += take;
+        if (s_uploadBufLen == s_uploadBufCap) {
+          ok = flushUploadBuf();
+        }
+      }
+    }
+    if (!ok) {
       s_uploadError = "write failed";
     } else {
       s_uploadBytes += up.currentSize;
@@ -1877,15 +1949,27 @@ static void handleUploadFile() {
     return;
   }
   if (up.status == UPLOAD_FILE_END || up.status == UPLOAD_FILE_ABORTED) {
-    closeUploadFile();
     const bool aborted = up.status == UPLOAD_FILE_ABORTED;
+    if (!aborted && !s_uploadError && !flushUploadBuf()) {
+      s_uploadError = "write failed";
+    }
+    closeUploadFile();
+    freeUploadBuf();
     if (aborted && !s_uploadError) {
       s_uploadError = "aborted";
     }
-    if (s_uploadPath[0] && s_uploadError &&
-        (strcmp(s_uploadError, "write failed") == 0 ||
-         strcmp(s_uploadError, "aborted") == 0)) {
-      SD.remove(s_uploadPath);
+    // The previous file at the target path stays intact unless the new one
+    // arrived whole.
+    if (s_uploadLocked) {
+      if (s_uploadPath[0] && !s_uploadError) {
+        if (SD.exists(s_uploadPath)) {
+          SD.remove(s_uploadPath);
+        }
+        if (!SD.rename(kUploadTmp, s_uploadPath)) {
+          s_uploadError = "write failed";
+        }
+      }
+      SD.remove(kUploadTmp);
     }
     releaseUploadLock();
     if (!s_uploadError && !aborted) {
@@ -2764,6 +2848,8 @@ void WifiSetup::begin() {
   s_server.on("/redirect", HTTP_GET, handleCaptive);
   s_server.on("/success.txt", HTTP_GET, handleCaptive);
   s_server.onNotFound(handleNotFound);
+  static const char *kHdrs[] = {"If-None-Match"};
+  s_server.collectHeaders(kHdrs, 1);
   s_server.begin();
   LOG_V("http", "listen :%u", kHttpPort);
 

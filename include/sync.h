@@ -104,8 +104,6 @@ public:
   static bool cueFollow();
   static bool cuePlaying();
   static bool cueSocketUp();
-  static bool hasCuePulse();
-  static bool takeCuePulse();
   static bool cueHasTime();
   static bool cueHasFrame();
   static uint32_t cueTargetMs();

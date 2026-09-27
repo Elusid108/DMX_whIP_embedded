@@ -42,7 +42,8 @@ static TaskHandle_t s_task = nullptr;
 static File s_file;
 static volatile bool s_fileOpen = false;
 
-static Slot s_ring[kPlayRingSlots];
+static Slot *s_ring = nullptr;
+static uint8_t s_slots = 0;
 static uint8_t s_head = 0;
 static uint8_t s_tail = 0;
 static uint8_t s_count = 0;
@@ -77,6 +78,30 @@ static uint32_t s_tUs = 0;
 static uint32_t s_outFrame = 0;
 static uint32_t s_payload = 0;
 static uint32_t s_dmxOff = 0;
+
+// Show clock: showPos = now + s_clkOff while armed. Local playback anchors
+// on the first frame after start/seek/underrun; a follower anchors on the
+// lowest-latency cue tick of the last kTickWin ticks (max of t_ms - now).
+static constexpr uint8_t kTickWin = 8;
+static constexpr int32_t kTickResetMs = 500;
+static constexpr uint32_t kRewindSlackMs = 200;
+static bool s_clkArmed = false;
+static bool s_clkExt = false;
+static int32_t s_clkOff = 0;
+static uint32_t s_lastShownMs = 0;
+static uint32_t s_lastGapMs = 0;
+static int32_t s_tickOff[kTickWin];
+static uint8_t s_tickN = 0;
+static uint8_t s_tickI = 0;
+
+// Sequential SD reads go through one block buffer (one lock per block
+// instead of two per 522-byte record).
+static constexpr uint32_t kReadBufPsram = 16384;
+static constexpr uint32_t kReadBufMin = 4096;
+static uint8_t *s_rbuf = nullptr;
+static uint32_t s_rbufCap = 0;
+static uint32_t s_rbufPos = 0;
+static uint32_t s_rbufLen = 0;
 
 static SeekKind s_seekKind = SeekKind::None;
 static volatile bool s_seekBusy = false;
@@ -154,9 +179,15 @@ static bool frameForThisNode(uint32_t universe, uint16_t protocol) {
   return universe >= startUni && universe <= lastUni;
 }
 
+// Records are one universe each, stamped with their own arrival ms. A frame
+// is every record within kAsmWindowMs of the first, until a universe repeats.
+// s_asmRgb keeps the last value of every universe across frames, so a
+// universe that lands a millisecond late never blanks the others.
+static constexpr uint32_t kAsmWindowMs = 4;
 static bool s_asmActive = false;
 static uint32_t s_asmTs = 0;
 static uint32_t s_asmIndex = 0;
+static uint32_t s_asmSeen = 0;
 static uint8_t s_asmRgb[kPlayMaxPayload];
 static bool s_pendingHave = false;
 static DmxrecFramePrefix s_pendingPrefix;
@@ -165,25 +196,40 @@ static uint32_t s_pendingIndex = 0;
 
 static void clearAssembler() {
   s_asmActive = false;
+  s_asmSeen = 0;
   s_pendingHave = false;
   memset(s_asmRgb, 0, sizeof(s_asmRgb));
+}
+
+static uint32_t asmBit(uint32_t universe, uint16_t protocol) {
+  const uint32_t startUni = playStartUniverse(protocol);
+  const uint32_t i = universe - startUni +
+                     (protocol == kDmxrecProtoSacn ? 16u : 0u);
+  return i < 32 ? (1u << i) : 0;
 }
 
 static void copyUniIntoAsm(uint32_t universe, uint16_t protocol,
                            const uint8_t *dmx, uint32_t want) {
   const uint32_t startUni = playStartUniverse(protocol);
   const uint32_t off = dmxStartOff();
-  if (startUni == 0xFFFFFFFFu || want == 0) {
+  if (startUni == 0xFFFFFFFFu || want == 0 || universe < startUni) {
     return;
   }
-  for (uint32_t i = 0; i < want; ++i) {
-    const uint32_t abs = off + i;
-    const uint32_t uni = startUni + (abs / kDmxrecDmxBytes);
-    const uint32_t slot = abs % kDmxrecDmxBytes;
-    if (uni == universe) {
-      s_asmRgb[i] = dmx[slot];
-    }
+  // This universe covers absolute bytes [base, base + 512) of the window.
+  const uint32_t base = (universe - startUni) * kDmxrecDmxBytes;
+  const uint32_t from = base > off ? base - off : 0;
+  const uint32_t endAbs = base + kDmxrecDmxBytes;
+  if (endAbs <= off) {
+    return;
   }
+  uint32_t to = endAbs - off;
+  if (to > want) {
+    to = want;
+  }
+  if (from >= to) {
+    return;
+  }
+  memcpy(s_asmRgb + from, dmx + (off + from - base), to - from);
 }
 
 static char asciiLower(char c) {
@@ -247,11 +293,19 @@ static void unlockPlay() {
   }
 }
 
+static void clearClockLocked() {
+  s_clkArmed = false;
+  s_clkExt = false;
+  s_tickN = 0;
+  s_tickI = 0;
+}
+
 static void resetRingLocked() {
   s_head = 0;
   s_tail = 0;
   s_count = 0;
   s_underrun = false;
+  clearClockLocked();
 }
 
 static void noteUnderrunLocked() {
@@ -264,6 +318,7 @@ static void noteUnderrunLocked() {
 }
 
 static void closeFile() {
+  s_rbufLen = 0;
   if (!s_fileOpen) {
     return;
   }
@@ -301,39 +356,82 @@ static bool openFileAt(uint32_t off) {
     return false;
   }
   s_fileOpen = true;
+  s_off = off;
+  s_rbufLen = 0;
   SdInfo::setExclusiveIo(true);
   SdInfo::unlock();
   return true;
 }
 
+// Refill the block buffer at s_off. Caller checked s_fileOpen.
+static bool refillReadBuf() {
+  if (!SdInfo::lock(1000)) {
+    return false;
+  }
+  bool ok = s_file.position() == s_off || s_file.seek(s_off);
+  int got = 0;
+  if (ok) {
+    got = s_file.read(s_rbuf, s_rbufCap);
+  }
+  SdInfo::unlock();
+  if (!ok || got <= 0) {
+    s_rbufLen = 0;
+    return false;
+  }
+  s_rbufPos = s_off;
+  s_rbufLen = static_cast<uint32_t>(got);
+  return true;
+}
+
+// Sequential read at s_off through the block buffer.
 static bool sdRead(void *dst, size_t n) {
   if (!s_fileOpen || n == 0) {
     return n == 0;
   }
-  if (!SdInfo::lock(1000)) {
-    return false;
+  uint8_t *out = static_cast<uint8_t *>(dst);
+  while (n > 0) {
+    if (s_off < s_rbufPos || s_off >= s_rbufPos + s_rbufLen) {
+      if (!refillReadBuf()) {
+        return false;
+      }
+    }
+    const uint32_t at = s_off - s_rbufPos;
+    uint32_t take = s_rbufLen - at;
+    if (take > n) {
+      take = static_cast<uint32_t>(n);
+    }
+    memcpy(out, s_rbuf + at, take);
+    out += take;
+    n -= take;
+    s_off += take;
   }
-  const size_t got = s_file.read(static_cast<uint8_t *>(dst), n);
-  const uint32_t pos = s_file.position();
-  SdInfo::unlock();
-  if (got != n) {
-    return false;
-  }
-  s_off = pos;
   return true;
 }
 
+// Position the next sequential read. The buffer stays valid if it covers off.
 static bool sdSeek(uint32_t off) {
   if (!s_fileOpen) {
     return false;
   }
+  s_off = off;
+  return true;
+}
+
+// Small random read (binary seek probes) without refilling the block buffer.
+static bool sdReadAt(uint32_t off, void *dst, size_t n) {
+  if (!s_fileOpen) {
+    return false;
+  }
+  if (off >= s_rbufPos && off + n <= s_rbufPos + s_rbufLen) {
+    memcpy(dst, s_rbuf + (off - s_rbufPos), n);
+    return true;
+  }
   if (!SdInfo::lock(1000)) {
     return false;
   }
-  const bool ok = s_file.seek(off);
-  if (ok) {
-    s_off = s_file.position();
-  }
+  const bool ok = s_file.seek(off) &&
+                  s_file.read(static_cast<uint8_t *>(dst), n) ==
+                      static_cast<int>(n);
   SdInfo::unlock();
   return ok;
 }
@@ -351,6 +449,7 @@ static bool emitAssembler() {
   s_readTUs = s_asmTs * 1000u;
   s_readFrame = s_asmIndex;
   s_asmActive = false;
+  s_asmSeen = 0;
   return true;
 }
 
@@ -391,7 +490,11 @@ static ReadResult readOneFrame() {
       }
     }
 
-    if (s_asmActive && prefix.t_ms != s_asmTs) {
+    const bool mine = frameForThisNode(prefix.universe, prefix.protocol);
+    const uint32_t bit = mine ? asmBit(prefix.universe, prefix.protocol) : 0;
+    if (s_asmActive &&
+        (prefix.t_ms < s_asmTs || prefix.t_ms - s_asmTs >= kAsmWindowMs ||
+         (s_asmSeen & bit) != 0)) {
       s_pendingHave = true;
       s_pendingPrefix = prefix;
       memcpy(s_pendingDmx, dmx, sizeof(dmx));
@@ -400,7 +503,7 @@ static ReadResult readOneFrame() {
       return ReadResult::Ok;
     }
 
-    if (!frameForThisNode(prefix.universe, prefix.protocol)) {
+    if (!mine) {
       if (s_asmActive) {
         continue;
       }
@@ -411,18 +514,18 @@ static ReadResult readOneFrame() {
     const uint32_t want = s_payload;
     unlockPlay();
     if (!s_asmActive) {
-      memset(s_asmRgb, 0, sizeof(s_asmRgb));
       s_asmActive = true;
       s_asmTs = prefix.t_ms;
       s_asmIndex = index;
     }
+    s_asmSeen |= bit;
     copyUniIntoAsm(prefix.universe, prefix.protocol, dmx, want);
   }
 }
 
 static bool ringFull() {
   lockPlay();
-  const bool full = s_count >= kPlayRingSlots;
+  const bool full = s_count >= s_slots;
   unlockPlay();
   return full;
 }
@@ -433,13 +536,13 @@ static void pushReadFrame() {
     unlockPlay();
     return;
   }
-  if (s_count < kPlayRingSlots) {
+  if (s_count < s_slots) {
     Slot &s = s_ring[s_head];
     s.t_us = s_readTUs;
     s.frame = s_readFrame;
     s.size = s_readSize;
     memcpy(s.rgb, s_readRgb, s_readSize);
-    s_head = static_cast<uint8_t>((s_head + 1) % kPlayRingSlots);
+    s_head = static_cast<uint8_t>((s_head + 1) % s_slots);
     s_count = static_cast<uint8_t>(s_count + 1);
     s_matchedPass += 1;
   }
@@ -471,10 +574,7 @@ static bool wrapShow() {
 }
 
 static bool readPrefixAt(uint32_t index, DmxrecFramePrefix &prefix) {
-  if (!sdSeek(dmxrecFrameOffset(index))) {
-    return false;
-  }
-  return sdRead(&prefix, sizeof(prefix));
+  return sdReadAt(dmxrecFrameOffset(index), &prefix, sizeof(prefix));
 }
 
 // First record whose t_ms is at or after want. Records are fixed size, so
@@ -988,8 +1088,26 @@ void Playback::begin() {
   if (s_mu == nullptr) {
     s_mu = xSemaphoreCreateMutex();
   }
-  LOG_V("play", "ring slots=%u payload=%u (DMXREC; no FastLED)", kPlayRingSlots,
-        kPlayMaxPayload);
+  if (s_ring == nullptr) {
+    const bool psram = psramFound();
+    s_slots = psram ? kPlayRingSlotsPsram : kPlayRingSlotsMin;
+    s_rbufCap = psram ? kReadBufPsram : kReadBufMin;
+    const size_t ringBytes = sizeof(Slot) * s_slots;
+    if (psram) {
+      s_ring = static_cast<Slot *>(ps_malloc(ringBytes));
+      s_rbuf = static_cast<uint8_t *>(ps_malloc(s_rbufCap));
+    }
+    if (s_ring == nullptr) {
+      s_slots = kPlayRingSlotsMin;
+      s_ring = static_cast<Slot *>(malloc(sizeof(Slot) * s_slots));
+    }
+    if (s_rbuf == nullptr) {
+      s_rbufCap = kReadBufMin;
+      s_rbuf = static_cast<uint8_t *>(malloc(s_rbufCap));
+    }
+  }
+  LOG_V("play", "ring slots=%u payload=%u rbuf=%u (DMXREC; no FastLED)",
+        s_slots, kPlayMaxPayload, static_cast<unsigned>(s_rbufCap));
   tryBindPlaylist();
   if (s_task == nullptr) {
     const BaseType_t ok =
@@ -1191,22 +1309,11 @@ bool Playback::cueNeedsSeek(uint32_t t_ms) {
   return false;
 }
 
-bool Playback::cueQueued(uint32_t t_ms) {
-  lockPlay();
-  if (s_count == 0) {
-    unlockPlay();
-    return false;
-  }
-  const uint32_t oldest = s_ring[s_tail].t_us / 1000u;
-  const uint8_t newestI =
-      static_cast<uint8_t>((s_head + kPlayRingSlots - 1) % kPlayRingSlots);
-  const uint32_t newest = s_ring[newestI].t_us / 1000u;
-  unlockPlay();
-  return t_ms >= oldest && t_ms <= newest;
-}
-
 void Playback::play() {
   lockPlay();
+  if (!s_playing) {
+    clearClockLocked();
+  }
   s_parked = false;
   s_playing = true;
   s_userPaused = false;
@@ -1216,6 +1323,9 @@ void Playback::play() {
 
 void Playback::pause() {
   lockPlay();
+  if (s_playing) {
+    clearClockLocked();
+  }
   s_playing = false;
   unlockPlay();
 }
@@ -1303,34 +1413,35 @@ bool Playback::peekFrame(uint32_t &t_us, uint32_t &frame) {
   const Slot &s = s_ring[s_tail];
   t_us = s.t_us;
   frame = s.frame;
-  s_tUs = t_us;
-  s_outFrame = frame;
   unlockPlay();
   return true;
 }
 
-const uint8_t *Playback::peekPayload(size_t &n, uint32_t &t_us) {
-  lockPlay();
-  if (s_count == 0) {
-    if (s_run) {
-      noteUnderrunLocked();
-    }
-    unlockPlay();
-    n = 0;
-    t_us = 0;
-    return nullptr;
+// Caller holds s_mu and s_count > 0.
+static bool headDueLocked(uint32_t nowMs) {
+  if (!s_clkArmed) {
+    return true;
   }
-  const Slot &s = s_ring[s_tail];
-  n = s.size;
-  t_us = s.t_us;
-  s_tUs = t_us;
-  s_outFrame = s.frame;
-  const uint8_t *p = s.rgb;
-  unlockPlay();
-  return p;
+  const uint32_t head = s_ring[s_tail].t_us / 1000u;
+  const int64_t pos = static_cast<int64_t>(nowMs) + s_clkOff;
+  if (!s_clkExt && head + kRewindSlackMs < s_lastShownMs) {
+    // Loop back to the top of the show: hold the last frame for one gap.
+    s_clkOff = static_cast<int32_t>(static_cast<int64_t>(head) - nowMs -
+                                    static_cast<int64_t>(s_lastGapMs));
+    s_lastShownMs = head;
+    return s_lastGapMs == 0;
+  }
+  return static_cast<int64_t>(head) <= pos;
 }
 
-bool Playback::copyFrame(uint8_t *rgb, size_t n, uint32_t *t_us) {
+bool Playback::frameDue(uint32_t nowMs) {
+  lockPlay();
+  const bool due = s_count > 0 && headDueLocked(nowMs);
+  unlockPlay();
+  return due;
+}
+
+bool Playback::renderDue(uint8_t *rgb, size_t n, uint32_t nowMs) {
   if (!rgb) {
     return false;
   }
@@ -1338,69 +1449,84 @@ bool Playback::copyFrame(uint8_t *rgb, size_t n, uint32_t *t_us) {
   if (s_count == 0) {
     if (s_run) {
       noteUnderrunLocked();
+      // Pause the clock; the next frame re-anchors (never invent frames).
+      if (!s_clkExt) {
+        s_clkArmed = false;
+      }
     }
     unlockPlay();
     return false;
   }
-  const Slot &s = s_ring[s_tail];
-  if (n < s.size) {
+  if (!s_clkArmed) {
+    s_clkOff = static_cast<int32_t>(
+        static_cast<int64_t>(s_ring[s_tail].t_us / 1000u) - nowMs);
+    s_clkArmed = true;
+  }
+  const Slot *last = nullptr;
+  while (s_count > 0 && headDueLocked(nowMs)) {
+    last = &s_ring[s_tail];
+    s_tail = static_cast<uint8_t>((s_tail + 1) % s_slots);
+    s_count = static_cast<uint8_t>(s_count - 1);
+    const uint32_t t = last->t_us / 1000u;
+    if (t > s_lastShownMs && t - s_lastShownMs < 1000) {
+      s_lastGapMs = t - s_lastShownMs;
+    }
+    s_lastShownMs = t;
+  }
+  if (last == nullptr || n < last->size) {
     unlockPlay();
     return false;
   }
-  memcpy(rgb, s.rgb, s.size);
-  s_tUs = s.t_us;
-  s_outFrame = s.frame;
-  if (t_us) {
-    *t_us = s_tUs;
-  }
-  s_tail = static_cast<uint8_t>((s_tail + 1) % kPlayRingSlots);
-  s_count = static_cast<uint8_t>(s_count - 1);
+  // The slot stays intact until the reader wraps onto it; copy under lock.
+  memcpy(rgb, last->rgb, last->size);
+  s_tUs = last->t_us;
+  s_outFrame = last->frame;
   s_underrun = false;
   unlockPlay();
   return true;
 }
 
-bool Playback::catchTick(uint8_t *rgb, size_t n, uint32_t t_ms, uint32_t frame,
-                         bool hasTime, bool hasFrame) {
-  if (!rgb || (!hasTime && !hasFrame)) {
-    return false;
-  }
-  const uint32_t target_us = t_ms * 1000u;
+void Playback::syncTick(uint32_t t_ms, uint32_t nowMs) {
+  const int32_t sample =
+      static_cast<int32_t>(static_cast<int64_t>(t_ms) - nowMs);
   lockPlay();
-  while (s_count > 0) {
-    const Slot &s = s_ring[s_tail];
-    bool behind = false;
-    if (hasTime) {
-      behind = s.t_us < target_us;
-    } else if (hasFrame) {
-      behind = s.frame < frame;
+  if (s_clkExt && s_tickN > 0) {
+    const int32_t d = sample - s_clkOff;
+    if (d > kTickResetMs || d < -kTickResetMs) {
+      s_tickN = 0;
+      s_tickI = 0;
     }
-    if (!behind) {
-      break;
+  }
+  s_tickOff[s_tickI] = sample;
+  s_tickI = static_cast<uint8_t>((s_tickI + 1) % kTickWin);
+  if (s_tickN < kTickWin) {
+    s_tickN = static_cast<uint8_t>(s_tickN + 1);
+  }
+  // The tick that arrived fastest reads the latest show time for its
+  // arrival instant: take the max offset of the window.
+  int32_t best = s_tickOff[(s_tickI + kTickWin - 1) % kTickWin];
+  for (uint8_t i = 0; i < s_tickN; ++i) {
+    if (s_tickOff[i] > best) {
+      best = s_tickOff[i];
     }
-    s_tail = static_cast<uint8_t>((s_tail + 1) % kPlayRingSlots);
-    s_count = static_cast<uint8_t>(s_count - 1);
   }
-  if (s_count == 0) {
-    if (s_run) {
-      noteUnderrunLocked();
-    }
-    unlockPlay();
-    return false;
-  }
-  const Slot &s = s_ring[s_tail];
-  if (n < s.size) {
-    unlockPlay();
-    return false;
-  }
-  memcpy(rgb, s.rgb, s.size);
-  s_tUs = s.t_us;
-  s_outFrame = s.frame;
-  s_tail = static_cast<uint8_t>((s_tail + 1) % kPlayRingSlots);
-  s_count = static_cast<uint8_t>(s_count - 1);
-  s_underrun = false;
+  s_clkOff = best;
+  s_clkArmed = true;
+  s_clkExt = true;
   unlockPlay();
-  return true;
+}
+
+uint32_t Playback::showPosMs(uint32_t nowMs) {
+  lockPlay();
+  uint32_t pos = s_lastShownMs;
+  if (s_clkArmed) {
+    const int64_t p = static_cast<int64_t>(nowMs) + s_clkOff;
+    pos = p > 0 ? static_cast<uint32_t>(p) : 0;
+  } else if (s_count > 0) {
+    pos = s_ring[s_tail].t_us / 1000u;
+  }
+  unlockPlay();
+  return pos;
 }
 
 bool Playback::seekMs(uint32_t t_ms) {
@@ -1426,7 +1552,7 @@ bool Playback::seekMs(uint32_t t_ms) {
   if (s_count > 0) {
     const uint32_t oldest = s_ring[s_tail].t_us / 1000u;
     const uint8_t newestI =
-        static_cast<uint8_t>((s_head + kPlayRingSlots - 1) % kPlayRingSlots);
+        static_cast<uint8_t>((s_head + s_slots - 1) % s_slots);
     const uint32_t newest = s_ring[newestI].t_us / 1000u;
     if (t_ms >= oldest && t_ms <= newest) {
       unlockPlay();
@@ -1459,18 +1585,6 @@ bool Playback::seekFrame(uint32_t index) {
   s_seekFrame = index;
   s_landedReqFrame = 0xFFFFFFFFu;
   resetRingLocked();
-  unlockPlay();
-  return true;
-}
-
-bool Playback::pop() {
-  lockPlay();
-  if (s_count == 0) {
-    unlockPlay();
-    return false;
-  }
-  s_tail = static_cast<uint8_t>((s_tail + 1) % kPlayRingSlots);
-  s_count = static_cast<uint8_t>(s_count - 1);
   unlockPlay();
   return true;
 }

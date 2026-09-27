@@ -9,13 +9,16 @@
 // drive LEDs. Console owns the fixture patch; this node copies its universe
 // 1:1 onto the strip (N pixels × chips, GPIO from the board profile).
 //
-// Live is drop-to-latest. Playback pauses the output clock on underrun and
-// does not invent frames. Do not mix those policies. The show clock is the
-// cue bus (t_ms / frame index), not local millis(), once a cue is heard.
+// Live is drop-to-latest. Playback is time-based: a frame shows when its
+// DMXREC t_ms is due on the show clock. The clock anchors on the first frame
+// after a start, seek, or underrun (pause on underrun, never invent frames),
+// or on cue-bus ticks while following.
 //
-// FastLED.show() only in main. Peek/copyFrame consume the reader ring.
+// FastLED.show() only in main. renderDue consumes the reader ring.
 
-static constexpr uint8_t kPlayRingSlots = 4;
+// Ring depth. PSRAM boards get the deep ring so SD latency never shows.
+static constexpr uint8_t kPlayRingSlotsMin = 4;
+static constexpr uint8_t kPlayRingSlotsPsram = 32;
 static constexpr uint16_t kPlayMaxPixels = kLedCountMax;
 static constexpr uint8_t kPlayMaxChips = kMaxChannelsPerPixel;
 static constexpr uint16_t kPlayMaxPayload =
@@ -55,9 +58,6 @@ public:
   // Move an in-flight cue seek onto the newest show t_ms, or seek now.
   static void nudgeCue(uint32_t t_ms);
 
-  // True when t_ms falls inside the frames already queued.
-  static bool cueQueued(uint32_t t_ms);
-
   // True when a tick should binary-seek. False when the reader is already
   // near t_ms or a seek is in progress. Play and Seek skip this and call
   // nudgeCue directly.
@@ -75,22 +75,24 @@ public:
   static bool peek(uint32_t &t_us);
   static bool peekFrame(uint32_t &t_us, uint32_t &frame);
 
-  // Pointer into the ring; valid until pop() or copyFrame(). Null if empty.
-  static const uint8_t *peekPayload(size_t &n, uint32_t &t_us);
+  // True when the head frame is due on the show clock (or the clock is not
+  // anchored yet and a frame is waiting).
+  static bool frameDue(uint32_t nowMs);
 
-  // Copy RGB payload and pop. Fills t_us when non-null. False if empty or n
-  // is smaller than the payload.
-  static bool copyFrame(uint8_t *rgb, size_t n, uint32_t *t_us = nullptr);
+  // Pop every frame due at nowMs and copy the newest into rgb. False when
+  // nothing is due or on underrun (holds last output; no invent).
+  static bool renderDue(uint8_t *rgb, size_t n, uint32_t nowMs);
 
-  // Catch the cue: skip frames behind t_ms and/or file index, copy the first
-  // at-or-after the tick. False on underrun (holds last output; no invent).
-  static bool catchTick(uint8_t *rgb, size_t n, uint32_t t_ms, uint32_t frame,
-                        bool hasTime, bool hasFrame);
+  // Follower: a cue tick says the master's show clock read t_ms. Anchors the
+  // local clock on the lowest-latency tick of a short window.
+  static void syncTick(uint32_t t_ms, uint32_t nowMs);
+
+  // Show position on the local clock (ms). Head frame time when unanchored.
+  static uint32_t showPosMs(uint32_t nowMs);
 
   static bool seekMs(uint32_t t_ms);
   static bool seekFrame(uint32_t index);
 
-  static bool pop();
   static uint32_t tUs();
   static uint32_t frameIndex();
   static uint16_t fps();
