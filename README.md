@@ -62,6 +62,12 @@ The companion identifies and provisions a board over its USB serial port (115200
 
 Try it: `python scripts/whip_serial.py COM11 id` (PlatformIO's Python has pyserial).
 
+## Release bundle (all boards, one version)
+
+`python scripts/release.py` builds every `[env:*]` with `custom_release = yes` and writes `dist/whip-<ver>/` plus `dist/whip-<ver>.zip` (`dist/` is gitignored). Each board gets a folder named by its board id with `bootloader.bin`, `partitions.bin`, `firmware.bin` and `firmware.factory.bin` (one image for address 0). `manifest.json` lists every board with its chip, flash mode / freq / size, NVS / otadata / app offsets and each file's offset, size and sha256; the app part carries its `WHIPFW:` tag. The companion flashes and OTA-updates from this bundle, picking each board's image by board id.
+
+Nothing is typed twice: board id, version and API come from each image's tag, chip and flash settings from its header, offsets from the built partition table. The run stops if any image's version differs from `include/version.h`, if two envs build the same board, or if an image does not fit its app slot. `--no-build` packages the existing builds; `-e <env>` limits it to some envs. New boards: add `custom_release = yes` to the env.
+
 ## Adding a board
 
 This section is the starter. Platform is pinned **pioarduino** in the common `[esp32]` section of [`platformio.ini`](platformio.ini) (Arduino 3.3.x / IDF 5.5.x). Official PlatformIO `espressif32` does not support C5 / C6 / P4.
@@ -70,7 +76,8 @@ This section is the starter. Platform is pinned **pioarduino** in the common `[e
 2. Add `include/boards/<id>.h` (or keep a `board_*.h` next to [`include/board_matrix.h`](include/board_matrix.h)) and a `-DBOARD_PROFILE_<ID>` flag. [`include/boards/select.h`](include/boards/select.h) includes that header or `#error`.
 3. The profile owns: `id` / `chip` / `flashClass`, GPIO max, reserved pins (USB, flash, PSRAM, later ETH), default LED/SD (or SDMMC later), `BoardRadio` (`wifi` / `eth` / `hosted`), `kCpuCount`, `kServiceCore`. Flash / PSRAM / USB CDC stay compile-time flags on the env.
 4. Pins the user can change stay NVS overlays (`POST /pins`, `POST /map`). Do not compile one firmware per Amazon SKU.
-5. Companion `firmware/catalog.json` must match `id` / `chip` / defaults when that env is flashed from the app. One firmware **artifact** (chip + flash + PSRAM + USB class) can back many SKUs via pin overlays.
+5. Add `custom_release = yes` to the env so `scripts/release.py` packages it.
+6. Companion `firmware/catalog.json` must match `id` / `chip` / defaults when that env is flashed from the app. One firmware **artifact** (chip + flash + PSRAM + USB class) can back many SKUs via pin overlays.
 
 ### Bring-up set (inventory)
 
