@@ -16,6 +16,11 @@
 namespace {
 
 static constexpr uint32_t kSdPollMs = 1000;
+// A failed mount blocks ~1 s (two 500 ms card-select timeouts), so with no
+// card the retry backs off 2 s → 30 s instead of starving the main loop
+// (HTTP, ArtPoll). Reset on a successful mount or remount().
+static constexpr uint32_t kSdRetryMinMs = 2000;
+static constexpr uint32_t kSdRetryMaxMs = 30000;
 static constexpr uint32_t kSdLockForever = 0xFFFFFFFFu;
 
 static bool s_ok = false;
@@ -27,6 +32,8 @@ static uint32_t s_freeMb = 0;
 static uint32_t s_lastPoll = 0;
 static uint32_t s_lastList = 0;
 static bool s_loggedFail = false;
+static uint32_t s_retryMs = kSdRetryMinMs;
+static uint32_t s_lastTry = 0;
 static volatile bool s_exclusiveIo = false;
 static SemaphoreHandle_t s_mu = nullptr;
 
@@ -468,6 +475,7 @@ static bool tryMount() {
   s_haveUsage = false;
   s_ok = true;
   s_loggedFail = false;
+  s_retryMs = kSdRetryMinMs;
   LOG_V("sd", "mount OK type=%s size_MB=%u", s_type,
         static_cast<unsigned>(s_sizeMb));
   s_lastList = 0;
@@ -495,6 +503,7 @@ void SdInfo::begin() {
   }
   const bool mounted = tryMount();
   unlock();
+  s_lastTry = millis();
   if (mounted) {
     return;
   }
@@ -512,6 +521,8 @@ bool SdInfo::remount() {
   SPI.end();
   clearCache();
   s_loggedFail = false;
+  s_retryMs = kSdRetryMinMs;
+  s_lastTry = millis();
   beginBus();
   const bool mounted = tryMount();
   unlock();
@@ -548,12 +559,18 @@ void SdInfo::service() {
       }
       root.close();
     } else {
+      if (now - s_lastTry < s_retryMs) {
+        unlock();
+        return;
+      }
       SD.end();
       const bool ok = tryMount();
       unlock();
+      s_lastTry = millis();
       if (ok) {
         return;
       }
+      s_retryMs = s_retryMs >= kSdRetryMaxMs / 2 ? kSdRetryMaxMs : s_retryMs * 2;
       if (!s_loggedFail) {
         LOG_C("sd", "mount failed");
         s_loggedFail = true;

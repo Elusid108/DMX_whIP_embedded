@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.52.0**
+Version: **0.52.1**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -303,6 +303,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.52.1** — With no SD card (or a mis-wired one) the node retried the mount every second, and each try blocks about a second, so the portal and `/status` stopped answering. Failed mounts now back off 2 s → 30 s; a card inserted later is still found, and Remount SD retries at once
 - **0.52.0** — `[env:xiao-c3]` and `[env:xiao-c6]` Seeed Studio XIAO ESP32-C3 / C6 (4 MB flash, no PSRAM, USB CDC, `partitions/whip_4mb.csv`). Same XIAO silk wiring (data D0, clock D1, SD D7–D10). 2 outputs each; the C6 keeps GPIO 3 and 14 for its RF switch
 - **0.51.0** — `[env:xiao-s3]` Seeed Studio XIAO ESP32-S3 (8 MB flash, 8 MB OPI PSRAM, USB CDC, `partitions/whip_8mb.csv`). Wired by XIAO silk like the XIAO C5: data D0 (GPIO 1), clock D1 (GPIO 2), SD D7–D10 (CS 44, SCK 7, MISO 8, MOSI 9). S3 caps: 8 outputs
 - **0.50.0** — Advanced patch: header is now 13 channels (strobe colour and strobe intensity after the strobe, folder before clip), so console patches move; the strobe's off phase shows the strobe colour at the strobe intensity (0 = blackout as before). Folder + clip pick the n-th look in the n-th SD folder (A-Z, read from the card, 255 x 255). New **Basic** mode: intensity, strobe, hue shift, folder, clip only
