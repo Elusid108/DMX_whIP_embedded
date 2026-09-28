@@ -7,7 +7,7 @@ static const char kWifiSetupHtml[] PROGMEM = R"WIFIHTML(<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>dmxwhip v0.49.0</title>
+<title>dmxwhip v0.50.0</title>
 <style>
 :root{--bg:#09090b;--chrome:#18181b;--border:#27272a;--text:#e4e4e7;--muted:#71717a;--accent:#22d3ee}
 html,body{height:100%;height:100dvh;margin:0;overflow:hidden}
@@ -272,6 +272,7 @@ body{max-width:60rem;padding:14px 20px}
 <label class="tog"><input id="fxEn" type="checkbox"> Enabled</label>
 <label class="lab" for="fxMode">Mode</label>
 <select id="fxMode">
+<option value="basic">Basic</option>
 <option value="dim">Dim + FX</option>
 <option value="rgb">RGB + FX</option>
 <option value="full">Full</option>
@@ -287,6 +288,7 @@ body{max-width:60rem;padding:14px 20px}
 <p class="fxerr" id="fxErr"></p>
 <details open><summary class="lab">Channel map</summary><div class="fxmapw"><table class="fxmap" id="fxHdr"></table></div></details>
 <div class="mod lab">Sub-fixtures</div>
+<p class="hint" id="fxBasicNote" hidden>Basic mode has no sub-fixtures. Any you group are kept for the other modes.</p>
 <div id="fxSubs"></div>
 <div class="mod lab">Pixels</div>
 <div class="fxbar">
@@ -393,7 +395,7 @@ body{max-width:60rem;padding:14px 20px}
 <div id="fwRows"></div>
 </div>
 </div>
-<p id="ver" class="readout">dmxwhip v0.49.0</p>
+<p id="ver" class="readout">dmxwhip v0.50.0</p>
 <script>
 const list=document.getElementById('list');
 const plist=document.getElementById('plist');
@@ -1018,7 +1020,10 @@ function applyChrome(s){
   applyBand(s);
 }
 // ---------------------------------------------------------------- advanced patch
-const FX_HDR=[['Master dimmer','0-255 · open until first raised'],['Strobe','0-9 open · 10-255 = 1-25 Hz'],['Hue shift','0 none · 1-255 round the colour wheel'],['Filter red','Red removed · 0 none'],['Filter green','Green removed · 0 none'],['Filter blue','Blue removed · 0 none'],['Add red','Red added · 0 none'],['Add green','Green added · 0 none'],['Add blue','Blue added · 0 none'],['Clip select','0 normal playback · n = n-th look on the SD']];
+const FXH={dim:['Master dimmer','0-255 · open until first raised'],int:['Intensity','0-255 · open until first raised'],strobe:['Strobe','0-9 open · 10-255 = 1-25 Hz'],hue:['Hue shift','0 none · 1-255 round the colour wheel'],folder:['Folder','0 SD root · n = n-th folder (A-Z)'],clip:['Clip','0 normal playback · n = n-th look in the folder (A-Z)']};
+const FX_HDR=[FXH.dim,FXH.strobe,['Strobe colour','0 white · 1-255 round the colour wheel'],['Strobe intensity','Off-phase level of the strobe colour · 0 blackout'],FXH.hue,['Filter red','Red removed · 0 none'],['Filter green','Green removed · 0 none'],['Filter blue','Blue removed · 0 none'],['Add red','Red added · 0 none'],['Add green','Green added · 0 none'],['Add blue','Blue added · 0 none'],FXH.folder,FXH.clip];
+const FX_HDR_BASIC=[FXH.int,FXH.strobe,FXH.hue,FXH.folder,FXH.clip];
+function fxHdr(){return fx.mode==='basic'?FX_HDR_BASIC:FX_HDR;}
 const fxEls={};
 ['pxTabMain','pxTabAdv','pxMainBox','fxBox','fxEn','fxMode','fxModeHint','fxProto','fxUni','fxCh','fxFoot','fxErr','fxHdr','fxSubs','fxTree','fxSel','fxGroup','fxAddTo','fxAdd','fxUngroup','fxLocate','fxClear','fxSave'].forEach(id=>{fxEls[id]=document.getElementById(id);});
 let fxView=false;
@@ -1088,7 +1093,7 @@ function fxLayout(){
   const base=Math.max(0,(fx.ch|0)-1);
   const lay={addr:null,footprint:0,unis:1,err:''};
   if(fx.mode==='full'){
-    let pos=base+10;
+    let pos=base+fxHdr().length;
     if(pos>512) lay.err='The header does not fit after this channel.';
     lay.addr=new Array(fxPx.length);
     fxPx.forEach((p,g)=>{
@@ -1100,7 +1105,7 @@ function fxLayout(){
     lay.footprint=pos-base;
     if(!lay.err&&lay.unis>6) lay.err='Full mode needs more than 6 universes. Use a reduced mode or fewer pixels.';
   }else{
-    lay.footprint=10+fxPer()*fx.subs.length;
+    lay.footprint=fxHdr().length+fxPer()*fx.subs.length;
     if(base+lay.footprint>512) lay.err='The fixture does not fit in the universe from this channel.';
   }
   return lay;
@@ -1115,7 +1120,7 @@ function fxChText(rel,n){
 function fxSubCh(k){
   const per=fxPer();
   if(!per) return '—';
-  return fxChText((fx.ch|0)-1+10+per*k,per);
+  return fxChText((fx.ch|0)-1+fxHdr().length+per*k,per);
 }
 function fxPixelCh(g,lay){
   if(fx.mode==='full') return lay.addr&&lay.addr[g]!=null?fxChText(lay.addr[g],fxPx[g].cpp):'—';
@@ -1124,10 +1129,11 @@ function fxPixelCh(g,lay){
 }
 function fxFootText(lay){
   const base=(fx.ch|0);
-  const name=fx.mode==='full'?'Full':(fx.mode==='rgb'?'RGB + FX':'Dim + FX');
+  const name={basic:'Basic',dim:'Dim + FX',rgb:'RGB + FX',full:'Full'}[fx.mode]||'Dim + FX';
+  const hl=fxHdr().length;
   const math=fx.mode==='full'
-    ?'10 + '+fxPx.length+' px'
-    :'10 + '+fxPer()+'×'+fx.subs.length;
+    ?hl+' + '+fxPx.length+' px'
+    :(fx.mode==='basic'?String(hl):hl+' + '+fxPer()+'×'+fx.subs.length);
   const last=base-1+lay.footprint-1;
   const endU=(fx.uni|0)+Math.floor(last/512);
   return name+' · '+math+' = '+lay.footprint+' ch · '+(fx.proto==='sacn'?'sACN':'Art-Net')+' '+(fx.uni|0)+'.'+base+'–'+endU+'.'+(last%512+1)+(lay.unis>1?' · '+lay.unis+' universes':'');
@@ -1208,9 +1214,10 @@ function fxSelText(){
   fxEls.fxClear.disabled=!has;
 }
 const FX_MODE_HINT={
+  basic:'Five channels over what the node already plays: intensity, strobe, hue shift, folder and clip. No sub-fixtures. It uses its own universe, which never takes over playback; with no console the show plays untouched.',
   dim:'Overlays what the node already plays: its SD show, a synced group, or the live stream on its main patch. The console adds the header effects and a dimmer + strobe per sub-fixture (2 ch each); with no sub-fixtures it is a pure overlay. It uses its own universe, which never takes over playback; with no console the show plays untouched.',
   rgb:'The console colours each sub-fixture (dim, strobe, red, green, blue, 5 ch each). The node’s own show is not used, and pixels in no sub-fixture stay dark.',
-  full:'The console drives every LED directly after the 10 header channels, in each strip’s colour order. It continues into the next universes without splitting a pixel (up to 6).'
+  full:'The console drives every LED directly after the 13 header channels: red, green, blue (then white, warm white) per pixel, whatever order the strip wires them in. It continues into the next universes without splitting a pixel (up to 6).'
 };
 // Channel span as text: 21-25, U3: 1-40, U2: 500 - U3: 20 (same as the
 // companion's fixture.js spanText).
@@ -1224,14 +1231,15 @@ function fxSpan(a,b){
 // Every channel's function: header, then one row per sub-fixture or segment.
 function fxMapRows(lay){
   const base=Math.max(0,(fx.ch|0)-1);
-  const rows=FX_HDR.map((h,i)=>[fxSpan(base+i,base+i),h[0],h[1]]);
+  const rows=fxHdr().map((h,i)=>[fxSpan(base+i,base+i),h[0],h[1]]);
   if(fx.mode==='full'){
     if(!lay.addr) return rows;
     let g=0;
     (fxOuts||[]).forEach((o,oi)=>(o.segs||[]).forEach((seg,si)=>{
       const n=seg.count||0,cpp=seg.ch_px||(3+(seg.white?1:0)+(seg.cct?1:0));
       if(n){
-        let ord=String(seg.order||'').toLowerCase();
+        // DMX is R, G, B[, W][, warm W]; the chip order is only the wire order.
+        let ord='rgb'+((seg.white!=null?seg.white:cpp>=4)?'w':'')+((seg.cct!=null?seg.cct:cpp>=5)?'c':'');
         if(ord.length!==cpp) ord='rgbwc'.slice(0,cpp);
         rows.push([fxSpan(lay.addr[g],lay.addr[g+n-1]+cpp-1),'Out '+(oi+1)+' Seg '+(si+1),
           'px '+g+'-'+(g+n-1)+' · '+cpp+' ch each ('+ord.split('').map(c=>c==='c'?'WW':c.toUpperCase()).join(', ')+')']);
@@ -1241,8 +1249,9 @@ function fxMapRows(lay){
     return rows;
   }
   const per=fxPer(),f=fx.mode==='rgb'?'Dim, Strobe, Red, Green, Blue':'Dim, Strobe';
+  if(!per) return rows;
   fx.subs.forEach((s,k)=>{
-    const r=base+10+per*k;
+    const r=base+fxHdr().length+per*k;
     rows.push([fxSpan(r,r+per-1),s.name||('Sub '+(k+1)),f+' · '+fxPixelsOf(k).length+' px']);
   });
   return rows;
@@ -1250,6 +1259,7 @@ function fxMapRows(lay){
 function fxRender(){
   const lay=fxLayout();
   fxEls.fxModeHint.textContent=FX_MODE_HINT[fx.mode]||'';
+  document.getElementById('fxBasicNote').hidden=fx.mode!=='basic';
   fxEls.fxFoot.textContent=fxFootText(lay);
   fxEls.fxErr.textContent=lay.err||fxServerErr||'';
   const base=(fx.ch|0);
