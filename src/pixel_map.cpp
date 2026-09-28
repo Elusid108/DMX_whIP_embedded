@@ -458,15 +458,12 @@ static void saveNvs() {
   (void)copySeg0Mirror;
 }
 
-static bool loadBlob(Preferences &prefs) {
+// v1 blob (NVS "pmap"/"blob", also the serial pmap command) -> tmp[].
+// False when the blob is malformed or does not normalize for this board.
+static bool parseBlob(const uint8_t *raw, size_t nread, PixelMapCfg *tmp,
+                      uint8_t &nOut) {
   const size_t need = 2 + sizeof(SegBlob);
-  const size_t got = prefs.getBytesLength("blob");
-  if (got < need) {
-    return false;
-  }
-  uint8_t raw[2 + sizeof(SegBlob) * kPatchMaxSegments];
-  const size_t nread = prefs.getBytes("blob", raw, sizeof(raw));
-  if (nread < need || raw[0] != kBlobVer || raw[1] < 1 ||
+  if (raw == nullptr || nread < need || raw[0] != kBlobVer || raw[1] < 1 ||
       raw[1] > kPatchMaxSegments) {
     return false;
   }
@@ -474,7 +471,6 @@ static bool loadBlob(Preferences &prefs) {
   if (nread < 2 + n * sizeof(SegBlob)) {
     return false;
   }
-  PixelMapCfg tmp[kPatchMaxSegments];
   for (uint8_t i = 0; i < n; ++i) {
     SegBlob b;
     memcpy(&b, raw + 2 + i * sizeof(SegBlob), sizeof(b));
@@ -501,6 +497,21 @@ static bool loadBlob(Preferences &prefs) {
     applyDerived(tmp[i]);
   }
   if (!normalize(tmp, n)) {
+    return false;
+  }
+  nOut = n;
+  return true;
+}
+
+static bool loadBlob(Preferences &prefs) {
+  if (prefs.getBytesLength("blob") < 2 + sizeof(SegBlob)) {
+    return false;
+  }
+  uint8_t raw[2 + sizeof(SegBlob) * kPatchMaxSegments];
+  const size_t nread = prefs.getBytes("blob", raw, sizeof(raw));
+  PixelMapCfg tmp[kPatchMaxSegments];
+  uint8_t n = 0;
+  if (!parseBlob(raw, nread, tmp, n)) {
     return false;
   }
   memcpy(s_seg, tmp, sizeof(PixelMapCfg) * n);
@@ -1010,6 +1021,15 @@ bool PixelMap::set(const PixelMapSet &in, bool save) {
   }
   logCfg();
   return true;
+}
+
+bool PixelMap::setBlob(const uint8_t *raw, size_t len, bool save) {
+  PixelMapCfg tmp[kPatchMaxSegments];
+  uint8_t n = 0;
+  if (!parseBlob(raw, len, tmp, n)) {
+    return false;
+  }
+  return setAll(tmp, n, save);
 }
 
 bool PixelMap::setAll(const PixelMapCfg *segs, uint8_t n, bool save) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "boards/select.h"
@@ -184,6 +185,8 @@ public:
   static uint8_t usedSlots();
   static bool set(const PixelMapSet &in, bool save);
   static bool setAll(const PixelMapCfg *segs, uint8_t n, bool save);
+  // Same v1 blob the companion writes to NVS "pmap"/"blob".
+  static bool setBlob(const uint8_t *raw, size_t len, bool save);
   static bool setAllProtos(SegProto proto, bool save);
   static bool setSegmentBrightness(uint8_t i, uint8_t bri, bool save);
   static bool pixelOrigin(uint16_t pixelIndex, uint16_t &uniOff, uint16_t &ch1);

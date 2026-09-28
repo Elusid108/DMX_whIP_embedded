@@ -19,6 +19,7 @@ static char s_dump[kLogStoreSize];
 static size_t s_used = 0;
 static bool s_overflow = false;
 static bool s_hostSeen = false;
+static bool s_quiet = false;
 static SemaphoreHandle_t s_mu = nullptr;
 static TaskHandle_t s_task = nullptr;
 
@@ -135,10 +136,16 @@ void Log::print(LogLevel msgLevel, const char *tag, const char *fmt, ...) {
 
   lockStore();
   appendLine(line);
-  const bool live = s_hostSeen && static_cast<bool>(Serial);
-  unlockStore();
-
-  if (live) {
+  if (s_hostSeen && !s_quiet && static_cast<bool>(Serial)) {
     Serial.println(line);
   }
+  unlockStore();
+}
+
+void Log::setQuiet(bool on) { s_quiet = on; }
+
+void Log::writeLine(const char *line) {
+  lockStore();
+  Serial.println(line);
+  unlockStore();
 }

@@ -18,6 +18,7 @@
 #include "pixel_map.h"
 #include "play_cfg.h"
 #include "sd_info.h"
+#include "serial_cmd.h"
 #include "sync.h"
 #include "version.h"
 #include "wifi_setup.h"
@@ -82,6 +83,7 @@ void setup() {
 
 void loop() {
   Log::service();
+  SerialCmd::service();
   LedBus::service();
   LiveInput::service();
   Sync::service();

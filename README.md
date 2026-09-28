@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.52.1**
+Version: **0.53.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -45,6 +45,22 @@ Prove the **pipeline** here with 64 pixels. Retarget with **Adding a board**. Sh
 - Caps: 2 outputs (2 RMT TX channels), 24 segments, 1024 pixels. Wi-Fi is 2.4 GHz only.
 - C3 reserved: flash 11–17, USB 18/19. GPIO 2, 8 and 9 are strapping pins: an LED line or module that pulls one low at reset can stop the board booting.
 - C6 reserved: RF switch 3 (power) and 14 (antenna select, driven by the core), USB 12/13, flash 24–30.
+
+## USB serial commands
+
+The companion identifies and provisions a board over its USB serial port (115200) without Wi-Fi. One request per line, `whip <cmd> [args]`; the reply is exactly one line starting `@whip ` followed by JSON (log lines around it are ignored). See [`include/serial_cmd.h`](include/serial_cmd.h).
+
+| Command | Reply / effect |
+| --- | --- |
+| `id` | `tag`, `board`, `chip`, `fam`, `ver`, `api`, `name`, `short`, `mac`, `net` |
+| `get` | `id` fields + `bri`, `sd{cs,mosi,clk,miso}`, `ssid`, `play{src,path}` (startup playlist) |
+| `set {json}` | any of `name`, `short`, `bri`, `sd{…}`, `play{src,path}`; replies like `get` |
+| `wifi {"ssid":…,"pass":…}` | saved, used from the next boot (`reboot:true`) |
+| `pmap <base64>` | v1 pixel-map blob (same bytes as NVS `pmap`/`blob`), applied now |
+| `quiet 0\|1` | stop / resume log lines on Serial |
+| `reboot` | reply, then restart |
+
+Try it: `python scripts/whip_serial.py COM11 id` (PlatformIO's Python has pyserial).
 
 ## Adding a board
 
@@ -303,6 +319,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.53.0** — USB serial commands: `whip id` / `get` / `set` / `wifi` / `pmap` / `quiet` / `reboot`, one `@whip {json}` reply line each, so the companion can tell which board is on a COM port and provision it without Wi-Fi. `scripts/whip_serial.py` sends one from a PC. Log lines and replies no longer split each other
 - **0.52.1** — With no SD card (or a mis-wired one) the node retried the mount every second, and each try blocks about a second, so the portal and `/status` stopped answering. Failed mounts now back off 2 s → 30 s; a card inserted later is still found, and Remount SD retries at once
 - **0.52.0** — `[env:xiao-c3]` and `[env:xiao-c6]` Seeed Studio XIAO ESP32-C3 / C6 (4 MB flash, no PSRAM, USB CDC, `partitions/whip_4mb.csv`). Same XIAO silk wiring (data D0, clock D1, SD D7–D10). 2 outputs each; the C6 keeps GPIO 3 and 14 for its RF switch
 - **0.51.0** — `[env:xiao-s3]` Seeed Studio XIAO ESP32-S3 (8 MB flash, 8 MB OPI PSRAM, USB CDC, `partitions/whip_8mb.csv`). Wired by XIAO silk like the XIAO C5: data D0 (GPIO 1), clock D1 (GPIO 2), SD D7–D10 (CS 44, SCK 7, MISO 8, MOSI 9). S3 caps: 8 outputs

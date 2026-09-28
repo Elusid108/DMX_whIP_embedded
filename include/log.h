@@ -15,6 +15,10 @@ public:
   static LogLevel level();
   static void print(LogLevel msgLevel, const char *tag, const char *fmt, ...);
   static void service();
+  // Quiet stops log lines on Serial (they are still stored for replay).
+  static void setQuiet(bool on);
+  // One whole line on Serial, never split by a log line from another task.
+  static void writeLine(const char *line);
 
 private:
   static LogLevel s_level;

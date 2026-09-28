@@ -3297,6 +3297,12 @@ void WifiSetup::begin() {
   }
 }
 
+void WifiSetup::saveCredentials(const char *ssid, const char *pass) {
+  saveCreds(String(ssid ? ssid : ""), String(pass ? pass : ""), true);
+}
+
+const char *WifiSetup::savedSsid() { return s_savedSsid.c_str(); }
+
 void WifiSetup::service() {
   if (!s_connectTimerArmed) {
     s_connectTimerArmed = true;

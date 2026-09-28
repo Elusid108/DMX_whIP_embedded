@@ -12,4 +12,7 @@ class WifiSetup {
 public:
   static void begin();
   static void service();
+  // STA credentials to NVS (the serial wifi command). Used from the next boot.
+  static void saveCredentials(const char *ssid, const char *pass);
+  static const char *savedSsid();
 };
