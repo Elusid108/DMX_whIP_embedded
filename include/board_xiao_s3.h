@@ -1,0 +1,46 @@
+#pragma once
+
+#include <stdint.h>
+
+#include "board_types.h"
+#include "log.h"
+
+// Seeed Studio XIAO ESP32-S3 (8 MB flash + 8 MB OPI PSRAM, native USB CDC).
+// Silk as every XIAO: D0 data GPIO1, D1 clock GPIO2, D7–D10 SD CS/SCK/MISO/MOSI.
+#define WHIP_BOARD_ID "seeed-xiao-esp32-s3"
+static constexpr char kBoardId[] = WHIP_BOARD_ID;
+static constexpr char kBoardChip[] = "esp32s3";
+static constexpr char kBoardFlashClass[] = "8mb-psram8-opi-cdc";
+static constexpr uint8_t kGpioMax = 48;
+static constexpr uint8_t kCpuCount = 2;
+static constexpr uint8_t kServiceCore = 1;
+static constexpr BoardRadio kRadioKind = BoardRadio::Wifi;
+
+static inline bool boardReservedGpio(uint8_t pin) {
+  // USB 19/20; flash 26–32 and OPI PSRAM 33–37.
+  if (pin == 19 || pin == 20) {
+    return true;
+  }
+  if (pin >= 26 && pin <= 37) {
+    return true;
+  }
+  return false;
+}
+
+static constexpr uint8_t kLedPin = 1;
+static constexpr uint8_t kMatrixWidth = 0;
+static constexpr uint8_t kMatrixHeight = 0;
+static constexpr uint16_t kLedCount = 64;
+static constexpr uint8_t kBrightnessDefault = 10;
+static constexpr uint8_t kBrightnessWarn = 0;
+static constexpr uint8_t kPatchMaxOutputs = 8;
+static constexpr uint8_t kPatchMaxSegments = 24;
+static constexpr uint8_t kLiveUniSlots = 16;
+
+// SPI microSD (not SDMMC). 3.3 V module only.
+static constexpr uint8_t kSdCs = 44;
+static constexpr uint8_t kSdMosi = 9;
+static constexpr uint8_t kSdClk = 7;
+static constexpr uint8_t kSdMiso = 8;
+static constexpr uint32_t kSdSpiHz = 4000000;
+static constexpr LogLevel kLogLevelDefault = LogLevel::Verbose;

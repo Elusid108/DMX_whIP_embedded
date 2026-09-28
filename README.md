@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.50.0**
+Version: **0.52.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -32,6 +32,20 @@ Prove the **pipeline** here with 64 pixels. Retarget with **Adding a board**. Sh
 - microSD SPI: CS **12** (D7), SCK **8** (D8), MISO **9** (D9), MOSI **10** (D10). 3.3 V only.
 - Same C5 caps (2 outputs, 24 segments, 1024 pixels). Reserved: USB 13/14, flash/PSRAM 15–22. Upload: `pio run -e xiao-c5 -t upload` on that board’s COM port.
 
+## Seeed XIAO ESP32-S3 (`[env:xiao-s3]`)
+
+- MCU: ESP32-S3 — **8MB QIO flash, 8MB OPI PSRAM** (`seeed_xiao_esp32s3`, `qio_opi`), native USB CDC. `partitions/whip_8mb.csv`: same offsets as `default_8MB.csv` (two 3.19 MB OTA app slots, 1.5 MB `spiffs` config).
+- Same silk wiring as every XIAO: LED data GPIO **1** (D0), clock GPIO **2** (D1); microSD SPI CS **44** (D7), SCK **7** (D8), MISO **8** (D9), MOSI **9** (D10). Count **64**, GRB, brightness **10/255**, no overheat banner.
+- S3 caps (8 outputs, 24 segments, 1024 pixels). Reserved: USB 19/20, flash 26–32, OPI PSRAM 33–37. Upload: `pio run -e xiao-s3 -t upload` on that board’s COM port.
+
+## Seeed XIAO ESP32-C3 / C6 (`[env:xiao-c3]`, `[env:xiao-c6]`)
+
+- MCU: ESP32-C3 / ESP32-C6 — **4MB flash, no PSRAM**, single core, native USB CDC (`seeed_xiao_esp32c3` / `seeed_xiao_esp32c6`). `partitions/whip_4mb.csv` like the Matrix (two 1.875 MB OTA app slots). Without PSRAM playback uses the small ring (4 slots, 4 KB read buffer); free heap is `/api/stats` `heap`.
+- Same silk wiring as every XIAO. C3: data GPIO **2** (D0), clock **3** (D1), SD CS **20** / SCK **8** / MISO **9** / MOSI **10**. C6: data GPIO **0**, clock **1**, SD CS **17** / SCK **19** / MISO **20** / MOSI **18**. Count **64**, GRB, brightness **10/255**.
+- Caps: 2 outputs (2 RMT TX channels), 24 segments, 1024 pixels. Wi-Fi is 2.4 GHz only.
+- C3 reserved: flash 11–17, USB 18/19. GPIO 2, 8 and 9 are strapping pins: an LED line or module that pulls one low at reset can stop the board booting.
+- C6 reserved: RF switch 3 (power) and 14 (antenna select, driven by the core), USB 12/13, flash 24–30.
+
 ## Adding a board
 
 This section is the starter. Platform is pinned **pioarduino** in the common `[esp32]` section of [`platformio.ini`](platformio.ini) (Arduino 3.3.x / IDF 5.5.x). Official PlatformIO `espressif32` does not support C5 / C6 / P4.
@@ -48,6 +62,9 @@ This section is the starter. Platform is pinned **pioarduino** in the common `[e
 - ESP32-C5-DevKitC-1-N8R4 — `[env:c5]`
 - Next: ESP32-C6-DevKitC-1-N8 (8MB flash, no PSRAM)
 - Seeed XIAO ESP32-C5 — `[env:xiao-c5]` (data 1, clock 0, SD 12/8/9/10)
+- Seeed XIAO ESP32-S3 — `[env:xiao-s3]` (data 1, clock 2, SD 44/7/8/9)
+- Seeed XIAO ESP32-C3 — `[env:xiao-c3]` (data 2, clock 3, SD 20/8/9/10)
+- Seeed XIAO ESP32-C6 — `[env:xiao-c6]` (data 0, clock 1, SD 17/19/20/18)
 - ESP32-P4-POE-ETH — Waveshare P4 PoE ETH family until the exact SKU is confirmed. [ESP32-P4-WIFI6-POE-ETH](https://www.waveshare.com/wiki/ESP32-P4-WIFI6-POE-ETH) is P4 + onboard C6-MINI-1 (SDIO ESP-Hosted) + IP101 10/100 + PoE header. First P4 bring-up is **Ethernet-only**; hosted Wi-Fi is later.
 
 ### Wide catalog and Custom (companion, later)
@@ -133,6 +150,8 @@ Multi-board (queued — do not start unless asked)
 - [ ] `[env:c6]` ESP32-C6-DevKitC-1-N8
 - [x] `[env:c5]` ESP32-C5-DevKitC-1-N8R4 — implemented (25 px GPIO 24, SD 10/7/6/2; not verified)
 - [x] `[env:xiao-c5]` Seeed XIAO ESP32-C5 — implemented (data GPIO 1, clock GPIO 0, SD 12/10/8/9; not verified)
+- [x] `[env:xiao-s3]` Seeed XIAO ESP32-S3 — implemented (data GPIO 1, clock GPIO 2, SD 44/9/7/8; verified boots)
+- [x] `[env:xiao-c3]` / `[env:xiao-c6]` Seeed XIAO ESP32-C3 / C6 — implemented (silk D0/D1, SD D7–D10; not verified)
 - [x] Dual-band STA scan/connect (C5 / XIAO C5); SoftAP stays 2.4 GHz — implemented (Band filter + BSSID join; not verified)
 - [ ] `NetIf` so UDP/HTTP do not call `WiFi.*` directly
 - [ ] `[env:p4-eth]` Ethernet DHCP + portal/ArtPoll on LAN IP (confirm exact P4 SKU)
@@ -284,6 +303,8 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.52.0** — `[env:xiao-c3]` and `[env:xiao-c6]` Seeed Studio XIAO ESP32-C3 / C6 (4 MB flash, no PSRAM, USB CDC, `partitions/whip_4mb.csv`). Same XIAO silk wiring (data D0, clock D1, SD D7–D10). 2 outputs each; the C6 keeps GPIO 3 and 14 for its RF switch
+- **0.51.0** — `[env:xiao-s3]` Seeed Studio XIAO ESP32-S3 (8 MB flash, 8 MB OPI PSRAM, USB CDC, `partitions/whip_8mb.csv`). Wired by XIAO silk like the XIAO C5: data D0 (GPIO 1), clock D1 (GPIO 2), SD D7–D10 (CS 44, SCK 7, MISO 8, MOSI 9). S3 caps: 8 outputs
 - **0.50.0** — Advanced patch: header is now 13 channels (strobe colour and strobe intensity after the strobe, folder before clip), so console patches move; the strobe's off phase shows the strobe colour at the strobe intensity (0 = blackout as before). Folder + clip pick the n-th look in the n-th SD folder (A-Z, read from the card, 255 x 255). New **Basic** mode: intensity, strobe, hue shift, folder, clip only
 - **0.49.0** — Advanced patch: clip select back at 0 returns the node to its startup playlist (session only). The portal editor describes each mode in full, notes that 0 is "no effect", and shows a channel map (every header channel with its values, then one row per sub-fixture or, in Full, per segment with its colour order)
 - **0.48.0** — Advanced patch: 0 now means "no effect" on every fixture channel, so channels a console leaves unpatched are released. Colour filter R/G/B is now the amount removed (0 none, was multiply with 255 = pass); the master and each sub-fixture dimmer stay open until the console first sends them above 0, then act as normal dimmers until the fixture universe goes quiet
