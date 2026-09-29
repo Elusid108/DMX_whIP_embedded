@@ -2,6 +2,7 @@
 
 #include "log.h"
 #include "pixel_map.h"
+#include "platform.h"
 
 #include <Preferences.h>
 
@@ -44,6 +45,12 @@ static void loadNvs() {
   s_clk = loadPin(prefs, "sd_clk", kSdClk);
   s_miso = loadPin(prefs, "sd_miso", kSdMiso);
   prefs.end();
+  if (!Platform::sdPinsOk(s_mosi, s_clk, s_miso)) {
+    s_cs = kSdCs;
+    s_mosi = kSdMosi;
+    s_clk = kSdClk;
+    s_miso = kSdMiso;
+  }
 }
 
 static void saveNvs() {
@@ -142,6 +149,9 @@ bool BoardProfile::setSdPins(uint8_t cs, uint8_t mosi, uint8_t clk, uint8_t miso
   }
   if (cs == mosi || cs == clk || cs == miso || mosi == clk || mosi == miso ||
       clk == miso) {
+    return false;
+  }
+  if (!Platform::sdPinsOk(mosi, clk, miso)) {
     return false;
   }
   loadNvs();

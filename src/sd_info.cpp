@@ -3,6 +3,7 @@
 #include "board_profile.h"
 #include "live_input.h"
 #include "log.h"
+#include "platform.h"
 
 #include <SD.h>
 #include <SPI.h>
@@ -534,6 +535,13 @@ static void beginBus() {
         BoardProfile::sdMosi(), BoardProfile::sdClk(), BoardProfile::sdMiso(),
         static_cast<unsigned>(BoardProfile::sdSpiHz()));
 #if defined(ARDUINO_ARCH_RP2040)
+  // The core halts on a pin SPI0 cannot use, or on a change while running.
+  SPI.end();
+  if (!Platform::sdPinsOk(BoardProfile::sdMosi(), BoardProfile::sdClk(),
+                          BoardProfile::sdMiso())) {
+    LOG_C("sd", "SPI0 cannot use these pins");
+    return;
+  }
   SPI.setSCK(BoardProfile::sdClk());
   SPI.setTX(BoardProfile::sdMosi());
   SPI.setRX(BoardProfile::sdMiso());

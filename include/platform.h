@@ -17,5 +17,10 @@ namespace Platform {
 void uniqueId(char *out, size_t n);
 // Restart the chip now.
 void restart();
+// True when the SD card's SPI bus can use these pins. An ESP32 routes SPI to
+// any pin. RP2040 / RP2350 SPI0 has fixed choices (SCK 2/6/18/22, MOSI
+// 3/7/19/23, MISO 0/4/16/20), and its core halts the board on any other pin,
+// so every SD pin change is checked here first.
+bool sdPinsOk(uint8_t mosi, uint8_t clk, uint8_t miso);
 
 } // namespace Platform

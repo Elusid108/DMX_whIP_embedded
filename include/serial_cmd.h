@@ -14,6 +14,7 @@
 //                      play{src,path} (startup playlist)
 //   wifi {ssid,pass}   saved; used from the next boot (reply reboot:true)
 //   pmap <base64>      v1 pixel-map blob (same bytes as NVS pmap/blob)
+//   test <mode> [out]  LED test pattern on one output: rainbow, cycle, ends, off
 //   quiet 0|1          stop / resume log lines on Serial
 //   reboot             reply, then restart
 class SerialCmd {

@@ -29,6 +29,20 @@ void uniqueId(char *out, size_t n) {
            id[4], id[5]);
 }
 
+bool sdPinsOk(uint8_t mosi, uint8_t clk, uint8_t miso) {
+#if defined(ARDUINO_ARCH_RP2040)
+  const bool sck = clk == 2 || clk == 6 || clk == 18 || clk == 22;
+  const bool tx = mosi == 3 || mosi == 7 || mosi == 19 || mosi == 23;
+  const bool rx = miso == 0 || miso == 4 || miso == 16 || miso == 20;
+  return sck && tx && rx;
+#else
+  (void)mosi;
+  (void)clk;
+  (void)miso;
+  return true;
+#endif
+}
+
 void restart() {
 #if defined(ARDUINO_ARCH_RP2040)
   rp2040.reboot();

@@ -8,6 +8,7 @@
 
 #include "board_profile.h"
 #include "button.h"
+#include "identify.h"
 #include "led_bus.h"
 #include "led_ctrl.h"
 #include "led_test.h"
@@ -335,6 +336,60 @@ static void cmdQuiet(const char *arg) {
   send(out);
 }
 
+// test <rainbow|cycle|ends|off> [output]: the portal's LED test patterns,
+// for boards with no portal and for checking wiring without an SD card.
+static void cmdTest(char *arg) {
+  char *outArg = arg;
+  while (*outArg && *outArg != ' ') {
+    ++outArg;
+  }
+  if (*outArg) {
+    *outArg++ = '\0';
+  }
+  LedTestMode mode = LedTestMode::Off;
+  if (strcmp(arg, "rainbow") == 0) {
+    mode = LedTestMode::Rainbow;
+  } else if (strcmp(arg, "cycle") == 0) {
+    mode = LedTestMode::Cycle;
+  } else if (strcmp(arg, "ends") == 0) {
+    mode = LedTestMode::Ends;
+  } else if (strcmp(arg, "off") != 0) {
+    fail("test", "bad mode");
+    return;
+  }
+  const long out = *outArg ? strtol(outArg, nullptr, 10) : 0;
+  if (out < 0 || out >= PixelMap::outputCount() || out >= kPatchMaxOutputs) {
+    fail("test", "bad output");
+    return;
+  }
+  if (LiveInput::active()) {
+    fail("test", "live");
+    return;
+  }
+  if (mode != LedTestMode::Off) {
+    Identify::cancel();
+  }
+  if (!LedTest::set(static_cast<uint8_t>(out), mode)) {
+    fail("test", "bad output");
+    return;
+  }
+  if (LedTest::active() && Playback::playing()) {
+    Playback::pause();
+  }
+  String reply;
+  begin(reply, "test", true);
+  reply += ",\"mode\":";
+  putStr(reply, LedTest::modeName(static_cast<uint8_t>(out)));
+  reply += ",\"out\":";
+  reply += static_cast<unsigned>(out);
+  reply += ",\"px\":";
+  reply += static_cast<unsigned>(PixelMap::outputPixelCount(static_cast<uint8_t>(out)));
+  reply += ",\"pin\":";
+  reply += static_cast<unsigned>(
+      PixelMap::segment(PixelMap::firstSegmentOfOutput(static_cast<uint8_t>(out))).dataGpio);
+  send(reply);
+}
+
 static void cmdReboot() {
   String out;
   begin(out, "reboot", true);
@@ -377,6 +432,8 @@ static void runLine(char *line) {
     cmdPmap(arg);
   } else if (strcmp(cmd, "quiet") == 0) {
     cmdQuiet(arg);
+  } else if (strcmp(cmd, "test") == 0) {
+    cmdTest(arg);
   } else if (strcmp(cmd, "reboot") == 0) {
     cmdReboot();
   } else {

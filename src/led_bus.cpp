@@ -2,13 +2,17 @@
 
 #include "clocked_tx.h"
 #include "identify.h"
+#include "led_out.h"
 #include "log.h"
 #include "pixel_map.h"
 
 #include <Arduino.h>
 #include <FastLED.h>
 
-#include "platforms/esp/32/rmt_5/idf5_rmt.h"
+// Shared by every board: the frame buffers, pixel packing (colour order,
+// brightness, white / CCT channels), the clocked-chip frame encoding and the
+// pin bookkeeping. The bits leave through LedOut (clockless) or ClockedTx
+// (clocked), each with an ESP32 and an RP2040 / RP2350 implementation.
 
 namespace {
 
@@ -18,57 +22,11 @@ static uint8_t s_ch[kLedCountMax];
 static bool s_begun = false;
 static bool s_applyPending = false;
 
-class RuntimeClockless : public CPixelLEDController<RGB> {
-public:
-  RuntimeClockless() = default;
-  ~RuntimeClockless() { release(); }
+static const LedFrame s_frame = {s_leds, s_px, s_ch};
 
-  void release() {
-    delete s_rmt;
-    s_rmt = nullptr;
-  }
-
-  void rebind(int pin, int t1, int t2, int t3) {
-    release();
-    s_rmt = new fl::RmtController5(pin, t1, t2, t3,
-                                   fl::RmtController5::DMA_AUTO);
-  }
-
-  bool bound() const { return s_rmt != nullptr; }
-
-  void init() override {}
-
-  fl::u16 getMaxRefreshRate() const override { return 400; }
-
-protected:
-  void showPixels(PixelController<RGB> &pixels) override {
-    if (s_rmt == nullptr) {
-      return;
-    }
-    PixelIterator iterator = pixels.as_iterator(this->getRgbw());
-    s_rmt->loadPixelData(iterator);
-    s_rmt->showPixels();
-  }
-
-private:
-  fl::RmtController5 *s_rmt = nullptr;
-};
-
-static RuntimeClockless s_ctrl[kPatchMaxOutputs];
 static int s_boundPin[kPatchMaxOutputs];
 static int s_boundClk[kPatchMaxOutputs];
 static LedWire s_boundWire[kPatchMaxOutputs];
-
-static void timings(LedChipset chip, int &t1, int &t2, int &t3) {
-  uint8_t a = 2;
-  uint8_t b = 5;
-  uint8_t c = 3;
-  PixelMap::clocklessUnits(chip, a, b, c);
-  // Chip table stores old FastLED FMUL units (125 ns). RMT5 wants ns.
-  t1 = static_cast<int>(a) * 125;
-  t2 = static_cast<int>(b) * 125;
-  t3 = static_cast<int>(c) * 125;
-}
 
 static uint8_t chanOf(char letter, uint8_t r, uint8_t g, uint8_t b, uint8_t w,
                       uint8_t c) {
@@ -256,42 +214,8 @@ static bool outputWide(uint8_t out) {
 }
 
 static void showClockless(uint8_t out) {
-  const uint16_t n = PixelMap::outputPixelCount(out);
-  const uint16_t off = PixelMap::outputPixelOffset(out);
-  if (n == 0 || !s_ctrl[out].bound()) {
-    return;
-  }
-  if (!outputWide(out)) {
-    s_ctrl[out].setLeds(s_leds + off, static_cast<int>(n));
-    s_ctrl[out].showLeds(255);
-    return;
-  }
-  static uint8_t scratch[kLedCountMax * 3];
-  memset(scratch, 0, sizeof(scratch));
-  uint32_t o = 0;
-  const uint32_t cap = sizeof(scratch);
-  for (uint16_t p = 0; p < n && o < cap; ++p) {
-    const uint8_t ch = s_ch[off + p] ? s_ch[off + p] : 3;
-    const uint32_t take = ch;
-    if (o + take > cap) {
-      break;
-    }
-    memcpy(scratch + o, s_px[off + p], take);
-    o += take;
-  }
-  const uint16_t fake = static_cast<uint16_t>((o + 2u) / 3u);
-  memcpy(s_leds + off, scratch,
-         fake * 3u > (kLedCountMax - off) * 3u ? (kLedCountMax - off) * 3u
-                                               : fake * 3u);
-  s_ctrl[out].setLeds(s_leds + off, static_cast<int>(fake > n ? n : fake));
-  if (fake > n) {
-    s_ctrl[out].setLeds(s_leds + off, static_cast<int>(fake));
-  }
-  s_ctrl[out].showLeds(255);
-  for (uint16_t p = 0; p < n; ++p) {
-    s_leds[off + p] = CRGB(s_px[off + p][0], s_px[off + p][1], s_px[off + p][2]);
-  }
-  s_ctrl[out].setLeds(s_leds + off, static_cast<int>(n));
+  LedOut::show(out, s_frame, PixelMap::outputPixelOffset(out),
+               PixelMap::outputPixelCount(out), outputWide(out));
 }
 
 static bool pinsUnchanged() {
@@ -308,7 +232,7 @@ static bool pinsUnchanged() {
         s_boundClk[o] != static_cast<int>(m.clockGpio)) {
       return false;
     }
-    if (wire == LedWire::Clockless && !s_ctrl[o].bound()) {
+    if (wire == LedWire::Clockless && !LedOut::bound(o)) {
       return false;
     }
   }
@@ -338,8 +262,8 @@ void LedBus::apply() {
     for (uint8_t o = 0; o < n; ++o) {
       const uint16_t count = PixelMap::outputPixelCount(o);
       const uint16_t off = PixelMap::outputPixelOffset(o);
-      if (s_boundWire[o] == LedWire::Clockless && s_ctrl[o].bound()) {
-        s_ctrl[o].setLeds(s_leds + off, static_cast<int>(count));
+      if (s_boundWire[o] == LedWire::Clockless) {
+        LedOut::setRange(o, s_frame, off, count);
       }
     }
     LOG_V("led", "bus %u out (pins unchanged)", n);
@@ -348,9 +272,7 @@ void LedBus::apply() {
 
   ClockedTx::wait();
   for (uint8_t o = 0; o < kPatchMaxOutputs; ++o) {
-    if (s_ctrl[o].bound()) {
-      s_ctrl[o].release();
-    }
+    LedOut::release(o);
     if (s_boundWire[o] != LedWire::Clockless && s_boundPin[o] >= 0 &&
         s_boundClk[o] >= 0) {
       ClockedTx::release(static_cast<uint8_t>(s_boundPin[o]),
@@ -376,17 +298,12 @@ void LedBus::apply() {
             m.dataGpio, m.clockGpio, count, PixelMap::chipsetName(m.chipset));
       continue;
     }
-    int t1 = 0;
-    int t2 = 0;
-    int t3 = 0;
-    timings(m.chipset, t1, t2, t3);
-    s_ctrl[o].rebind(static_cast<int>(m.dataGpio), t1, t2, t3);
-    if (!s_ctrl[o].bound()) {
-      LOG_C("led", "rmt rebind failed pin=%u", m.dataGpio);
+    if (!LedOut::bind(o, m.dataGpio, m.chipset)) {
+      LOG_C("led", "output bind failed pin=%u", m.dataGpio);
       s_boundPin[o] = -1;
       continue;
     }
-    s_ctrl[o].setLeds(s_leds + off, static_cast<int>(count));
+    LedOut::setRange(o, s_frame, off, count);
     LOG_V("led", "out%u rebind pin=%u count=%u chip=%s", o, m.dataGpio, count,
           PixelMap::chipsetName(m.chipset));
   }
