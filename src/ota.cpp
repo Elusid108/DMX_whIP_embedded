@@ -23,13 +23,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define WHIP_STR2(x) #x
-#define WHIP_STR(x) WHIP_STR2(x)
-
-// Build tag: the companion and the OTA handler read the board and version of
-// an image by finding this string in the .bin.
-extern "C" __attribute__((used)) const char kWhipFwTag[] =
-    "WHIPFW:" WHIP_BOARD_ID ":" WHIP_FW_VERSION ":" WHIP_STR(WHIP_FW_API) ";";
+// Build tag (WHIPFW:<board>:<ver>:<api>;) lives in fw_tag.cpp.
+extern "C" const char kWhipFwTag[];
 
 // Hold off the core's boot-time "mark valid": Ota::service() decides once the
 // network is up (see ota.h).

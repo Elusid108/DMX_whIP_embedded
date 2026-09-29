@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "board_profile.h"
+#include "button.h"
 #include "fixture.h"
 #include "identify.h"
 #include "led_bus.h"
@@ -54,7 +55,9 @@ static void renderPacked(const uint8_t *d, uint16_t len) {
 
 void setup() {
   Serial.begin(115200);
+#if !defined(ARDUINO_ARCH_RP2040)
   Serial.setTxBufferSize(4096);
+#endif
   Log::begin(115200, kLogLevelDefault);
   LOG_V("boot", "%s v%s", BoardProfile::id(), kFirmwareVersion);
   LOG_V("log", "level=%u (0=off 1=critical 2=verbose)",
@@ -71,6 +74,7 @@ void setup() {
   PlayCfg::begin();
   Playback::begin();
   Sync::begin();
+  Button::begin();
 
   LedBus::begin();
   LedCtrl::begin();
@@ -84,6 +88,7 @@ void setup() {
 void loop() {
   Log::service();
   SerialCmd::service();
+  Button::service();
   LedBus::service();
   LiveInput::service();
   Sync::service();

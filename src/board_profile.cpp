@@ -13,6 +13,7 @@ static uint8_t s_cs = kSdCs;
 static uint8_t s_mosi = kSdMosi;
 static uint8_t s_clk = kSdClk;
 static uint8_t s_miso = kSdMiso;
+static uint8_t s_btn = kGpioUnset;
 static bool s_loaded = false;
 
 static uint8_t loadPin(Preferences &prefs, const char *key, uint8_t fallback) {
@@ -32,10 +33,12 @@ static void loadNvs() {
   s_mosi = kSdMosi;
   s_clk = kSdClk;
   s_miso = kSdMiso;
+  s_btn = kGpioUnset;
   Preferences prefs;
   if (!prefs.begin(kPrefsNs, true)) {
     return;
   }
+  s_btn = loadPin(prefs, "btn", kGpioUnset);
   s_cs = loadPin(prefs, "sd_cs", kSdCs);
   s_mosi = loadPin(prefs, "sd_mosi", kSdMosi);
   s_clk = loadPin(prefs, "sd_clk", kSdClk);
@@ -53,6 +56,7 @@ static void saveNvs() {
   prefs.putUChar("sd_mosi", s_mosi);
   prefs.putUChar("sd_clk", s_clk);
   prefs.putUChar("sd_miso", s_miso);
+  prefs.putUChar("btn", s_btn);
   prefs.end();
 }
 
@@ -110,6 +114,25 @@ uint8_t BoardProfile::sdMiso() {
 uint32_t BoardProfile::sdSpiHz() { return kSdSpiHz; }
 
 bool BoardProfile::validGpio(uint8_t pin) { return pin <= gpioMax(); }
+
+uint8_t BoardProfile::buttonPin() {
+  loadNvs();
+  return s_btn;
+}
+
+bool BoardProfile::setButtonPin(uint8_t pin, bool save) {
+  loadNvs();
+  if (pin != kGpioUnset &&
+      (!validGpio(pin) || reservedGpio(pin) || pin == s_cs || pin == s_mosi ||
+       pin == s_clk || pin == s_miso || pin == PixelMap::cfg().dataGpio)) {
+    return false;
+  }
+  s_btn = pin;
+  if (save) {
+    saveNvs();
+  }
+  return true;
+}
 
 bool BoardProfile::setSdPins(uint8_t cs, uint8_t mosi, uint8_t clk, uint8_t miso,
                              bool save) {

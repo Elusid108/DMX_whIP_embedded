@@ -12,6 +12,10 @@
 #include "board_xiao_c3.h"
 #elif defined(BOARD_PROFILE_XIAO_C6)
 #include "board_xiao_c6.h"
+#elif defined(BOARD_PROFILE_XIAO_RP2040)
+#include "board_xiao_rp2040.h"
+#elif defined(BOARD_PROFILE_XIAO_RP2350)
+#include "board_xiao_rp2350.h"
 #else
 #error Define BOARD_PROFILE_* (see README Adding a board)
 #endif

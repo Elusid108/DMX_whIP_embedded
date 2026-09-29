@@ -65,7 +65,9 @@ void Log::begin(uint32_t baud, LogLevel level) {
   if (s_mu == nullptr) {
     s_mu = xSemaphoreCreateMutex();
   }
+#if !defined(ARDUINO_ARCH_RP2040)
   Serial.setTxBufferSize(4096);
+#endif
   Serial.begin(baud);
   if (s_task == nullptr) {
     xTaskCreatePinnedToCore(logServiceTask, "logsvc", 4096, nullptr, 1, &s_task,

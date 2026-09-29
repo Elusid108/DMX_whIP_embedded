@@ -876,7 +876,13 @@ static void sendStatus(int code) {
   out += static_cast<unsigned>(BoardProfile::sdClk());
   out += ",\"miso\":";
   out += static_cast<unsigned>(BoardProfile::sdMiso());
-  out += "}}";
+  out += "},\"btn\":";
+  if (BoardProfile::buttonPin() == kGpioUnset) {
+    out += "null";
+  } else {
+    out += static_cast<unsigned>(BoardProfile::buttonPin());
+  }
+  out += '}';
   out += ",\"proto\":";
   jsonEscape(out, String(PixelMap::protoSummary()));
   out += ",\"fps\":";

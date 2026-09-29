@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.53.0**
+Version: **0.54.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -53,8 +53,8 @@ The companion identifies and provisions a board over its USB serial port (115200
 | Command | Reply / effect |
 | --- | --- |
 | `id` | `tag`, `board`, `chip`, `fam`, `ver`, `api`, `name`, `short`, `mac`, `net` |
-| `get` | `id` fields + `bri`, `sd{cs,mosi,clk,miso}`, `ssid`, `play{src,path}` (startup playlist) |
-| `set {json}` | any of `name`, `short`, `bri`, `sd{…}`, `play{src,path}`; replies like `get` |
+| `get` | `id` fields + `bri`, `sd{cs,mosi,clk,miso}`, `btn`, `ssid`, `play{src,path}` (startup playlist) |
+| `set {json}` | any of `name`, `short`, `bri`, `btn` (-1 = none), `sd{…}`, `play{src,path}`; replies like `get` |
 | `wifi {"ssid":…,"pass":…}` | saved, used from the next boot (`reboot:true`) |
 | `pmap <base64>` | v1 pixel-map blob (same bytes as NVS `pmap`/`blob`), applied now |
 | `quiet 0\|1` | stop / resume log lines on Serial |
@@ -67,6 +67,13 @@ Try it: `python scripts/whip_serial.py COM11 id` (PlatformIO's Python has pyseri
 `python scripts/release.py` builds every `[env:*]` with `custom_release = yes` and writes `dist/whip-<ver>/` plus `dist/whip-<ver>.zip` (`dist/` is gitignored). Each board gets a folder named by its board id with `bootloader.bin`, `partitions.bin`, `firmware.bin` and `firmware.factory.bin` (one image for address 0). `manifest.json` lists every board with its chip, flash mode / freq / size, NVS / otadata / app offsets and each file's offset, size and sha256; the app part carries its `WHIPFW:` tag. The companion flashes and OTA-updates from this bundle, picking each board's image by board id.
 
 Nothing is typed twice: board id, version and API come from each image's tag, chip and flash settings from its header, offsets from the built partition table. The run stops if any image's version differs from `include/version.h`, if two envs build the same board, or if an image does not fit its app slot. `--no-build` packages the existing builds; `-e <env>` limits it to some envs. New boards: add `custom_release = yes` to the env.
+
+## Seeed XIAO RP2040 / RP2350 (`[env:xiao-rp2040]`, `[env:xiao-rp2350]`) — standalone player
+
+- No radio, so no Art-Net / sACN, portal, cue bus or OTA. The node plays its startup playlist from SD and drives LEDs; the companion flashes it by UF2 over USB and sets it up over USB serial (`whip …` commands, same as the ESP boards; `fam` is `rp`, `mac` is the flash unique id).
+- Platform: [maxgerhardt/platform-raspberrypi](https://github.com/maxgerhardt/platform-raspberrypi) with the earlephilhower core (FreeRTOS SMP on), common `[rp]` section. `build_src_filter` leaves out the network, OTA, live input, sync, fixture and ESP LED driver files; [`src/rp_stubs.cpp`](src/rp_stubs.cpp) answers for them ("nothing on"). `include/compat_rp/` gives the shared code what the ESP32 core had: `freertos/*.h` paths, `xTaskCreatePinnedToCore`, `psramFound` / `ps_malloc` (none), and a `Preferences` that keeps each key as a LittleFS file (`/kv/<ns>/<key>`, [`src/rp_prefs.cpp`](src/rp_prefs.cpp)). Shared JSON readers moved to [`src/json_lite.cpp`](src/json_lite.cpp); the build tag to [`src/fw_tag.cpp`](src/fw_tag.cpp); `Platform::uniqueId` / `restart` to [`src/platform.cpp`](src/platform.cpp).
+- Same silk wiring as every XIAO: LED data GPIO **26** (D0), clock **27** (D1); microSD on SPI0, CS **1** (D7), SCK **2** (D8), MISO **4** (D9), MOSI **3** (D10). 4 outputs, 24 segments, 1024 pixels. Every GPIO 0–29 is free (flash is on its own pins).
+- **F4 state: builds, not run on hardware.** [`src/led_bus_rp.cpp`](src/led_bus_rp.cpp) keeps the pixel buffer but drives nothing yet (PIO driver in F5); SD mounts through the core's SD / SDFS (F5 verifies playback); `whip.cfg` on the SD and the UF2 flow are F6 / C5.
 
 ## Adding a board
 
@@ -88,6 +95,7 @@ This section is the starter. Platform is pinned **pioarduino** in the common `[e
 - Seeed XIAO ESP32-S3 — `[env:xiao-s3]` (data 1, clock 2, SD 44/7/8/9)
 - Seeed XIAO ESP32-C3 — `[env:xiao-c3]` (data 2, clock 3, SD 20/8/9/10)
 - Seeed XIAO ESP32-C6 — `[env:xiao-c6]` (data 0, clock 1, SD 17/19/20/18)
+- Seeed XIAO RP2040 / RP2350 — `[env:xiao-rp2040]` / `[env:xiao-rp2350]` (data 26, clock 27, SD 1/2/4/3; standalone, UF2)
 - ESP32-P4-POE-ETH — Waveshare P4 PoE ETH family until the exact SKU is confirmed. [ESP32-P4-WIFI6-POE-ETH](https://www.waveshare.com/wiki/ESP32-P4-WIFI6-POE-ETH) is P4 + onboard C6-MINI-1 (SDIO ESP-Hosted) + IP101 10/100 + PoE header. First P4 bring-up is **Ethernet-only**; hosted Wi-Fi is later.
 
 ### Wide catalog and Custom (companion, later)
@@ -326,6 +334,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.54.0** — `[env:xiao-rp2040]` and `[env:xiao-rp2350]` build (standalone player skeleton: SD + LEDs + serial commands, no radio; LEDs not driven yet). Play / pause button: a push button from any free GPIO to GND (internal pull-up) pauses and resumes SD playback, the whole group inside a synced cue like the portal's Pause. Pin in NVS `board`/`btn` (none by default), set from the companion Flash tab or serial `whip set {"btn":N}`; `/status` `pins.btn`. Ignored during live input
 - **0.53.0** — USB serial commands: `whip id` / `get` / `set` / `wifi` / `pmap` / `quiet` / `reboot`, one `@whip {json}` reply line each, so the companion can tell which board is on a COM port and provision it without Wi-Fi. `scripts/whip_serial.py` sends one from a PC. Log lines and replies no longer split each other
 - **0.52.1** — With no SD card (or a mis-wired one) the node retried the mount every second, and each try blocks about a second, so the portal and `/status` stopped answering. Failed mounts now back off 2 s → 30 s; a card inserted later is still found, and Remount SD retries at once
 - **0.52.0** — `[env:xiao-c3]` and `[env:xiao-c6]` Seeed Studio XIAO ESP32-C3 / C6 (4 MB flash, no PSRAM, USB CDC, `partitions/whip_4mb.csv`). Same XIAO silk wiring (data D0, clock D1, SD D7–D10). 2 outputs each; the C6 keeps GPIO 3 and 14 for its RF switch

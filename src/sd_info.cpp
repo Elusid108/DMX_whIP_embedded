@@ -15,6 +15,50 @@
 
 namespace {
 
+// The two SD libraries differ: ESP32 SD takes (cs, spi, hz) and reports the
+// card type / size / usage itself; the RP core's SD (SdFat under SDFS) takes
+// (cs, hz, spi), routes SPI0 pins with setSCK/TX/RX, and reports usage
+// through SDFS.info().
+#if defined(ARDUINO_ARCH_RP2040)
+enum : uint8_t { CARD_NONE = 0, CARD_MMC = 0xFE, CARD_SD = 1, CARD_SDHC = 3 };
+
+static bool mountCard() {
+  return SD.begin(BoardProfile::sdCs(), BoardProfile::sdSpiHz(), SPI);
+}
+
+// SdFat: 1 = SD1, 2 = SD2 (both standard capacity), 3 = SDHC / SDXC.
+static uint8_t cardTypeNow() {
+  const uint8_t t = SD.type();
+  return t == 2 ? static_cast<uint8_t>(CARD_SD) : t;
+}
+
+static uint64_t cardBytes() { return SD.size64(); }
+
+static void cardUsage(uint64_t &total, uint64_t &used) {
+  FSInfo info;
+  if (SDFS.info(info)) {
+    total = info.totalBytes;
+    used = info.usedBytes;
+  } else {
+    total = 0;
+    used = 0;
+  }
+}
+#else
+static bool mountCard() {
+  return SD.begin(BoardProfile::sdCs(), SPI, BoardProfile::sdSpiHz());
+}
+
+static uint8_t cardTypeNow() { return SD.cardType(); }
+
+static uint64_t cardBytes() { return SD.cardSize(); }
+
+static void cardUsage(uint64_t &total, uint64_t &used) {
+  total = SD.totalBytes();
+  used = SD.usedBytes();
+}
+#endif
+
 static constexpr uint32_t kSdPollMs = 1000;
 // A failed mount blocks ~1 s (two 500 ms card-select timeouts), so with no
 // card the retry backs off 2 s → 30 s instead of starving the main loop
@@ -392,8 +436,9 @@ static void fillUsageLocked() {
     return;
   }
   const uint64_t card = static_cast<uint64_t>(s_sizeMb) * 1024ULL * 1024ULL;
-  const uint64_t total = SD.totalBytes();
-  const uint64_t used = SD.usedBytes();
+  uint64_t total = 0;
+  uint64_t used = 0;
+  cardUsage(total, used);
   s_usedMb = static_cast<uint32_t>(used / (1024ULL * 1024ULL));
   const uint64_t cap = total ? total : card;
   s_freeMb = cap > used
@@ -458,17 +503,17 @@ static void clearCache() {
 // Caller holds s_mu. Mount only — usedBytes() and the tree walk run later
 // from service() so setup() does not stall the STA handshake.
 static bool tryMount() {
-  if (!SD.begin(BoardProfile::sdCs(), SPI, BoardProfile::sdSpiHz())) {
+  if (!mountCard()) {
     return false;
   }
-  const uint8_t cardType = SD.cardType();
+  const uint8_t cardType = cardTypeNow();
   if (cardType == CARD_NONE) {
     SD.end();
     return false;
   }
 
   s_type = sdCardTypeName(cardType);
-  const uint64_t card = SD.cardSize();
+  const uint64_t card = cardBytes();
   s_sizeMb = static_cast<uint32_t>(card / (1024ULL * 1024ULL));
   s_usedMb = 0;
   s_freeMb = 0;
@@ -488,8 +533,14 @@ static void beginBus() {
   LOG_V("sd", "spi cs=%u mosi=%u clk=%u miso=%u hz=%u", BoardProfile::sdCs(),
         BoardProfile::sdMosi(), BoardProfile::sdClk(), BoardProfile::sdMiso(),
         static_cast<unsigned>(BoardProfile::sdSpiHz()));
+#if defined(ARDUINO_ARCH_RP2040)
+  SPI.setSCK(BoardProfile::sdClk());
+  SPI.setTX(BoardProfile::sdMosi());
+  SPI.setRX(BoardProfile::sdMiso());
+#else
   SPI.begin(BoardProfile::sdClk(), BoardProfile::sdMiso(), BoardProfile::sdMosi(),
             BoardProfile::sdCs());
+#endif
 }
 
 void SdInfo::begin() {

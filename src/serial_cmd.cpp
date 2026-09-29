@@ -1,27 +1,29 @@
 #include "serial_cmd.h"
 
 #include <Arduino.h>
-#include <WiFi.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include "board_profile.h"
+#include "button.h"
 #include "led_bus.h"
 #include "led_ctrl.h"
 #include "led_test.h"
 #include "live_input.h"
 #include "log.h"
-#include "mbedtls/base64.h"
-#include "net_http.h"
+#include "json_lite.h"
 #include "node_id.h"
+#include "platform.h"
 #include "pixel_map.h"
 #include "play_cfg.h"
 #include "playback.h"
 #include "sd_info.h"
 #include "version.h"
+#if WHIP_HAS_NET
 #include "wifi_setup.h"
+#endif
 
 extern "C" const char kWhipFwTag[];
 
@@ -75,23 +77,54 @@ static void fail(const char *cmd, const char *error) {
   send(out);
 }
 
-static void macString(char *out, size_t n) {
-  uint8_t mac[6] = {0};
-  WiFi.macAddress(mac);
-  snprintf(out, n, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2],
-           mac[3], mac[4], mac[5]);
+// Standard base64 (padding optional). False on a bad character or overflow.
+static bool base64Decode(const char *in, uint8_t *out, size_t cap, size_t &n) {
+  uint32_t acc = 0;
+  int bits = 0;
+  n = 0;
+  for (const char *p = in; *p && *p != '='; ++p) {
+    const char c = *p;
+    int v;
+    if (c >= 'A' && c <= 'Z') {
+      v = c - 'A';
+    } else if (c >= 'a' && c <= 'z') {
+      v = c - 'a' + 26;
+    } else if (c >= '0' && c <= '9') {
+      v = c - '0' + 52;
+    } else if (c == '+') {
+      v = 62;
+    } else if (c == '/') {
+      v = 63;
+    } else {
+      return false;
+    }
+    acc = (acc << 6) | static_cast<uint32_t>(v);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      if (n >= cap) {
+        return false;
+      }
+      out[n++] = static_cast<uint8_t>(acc >> bits);
+    }
+  }
+  return true;
 }
 
 static void appendId(String &out) {
   char mac[18];
-  macString(mac, sizeof(mac));
+  Platform::uniqueId(mac, sizeof(mac));
   out += ",\"tag\":";
   putStr(out, kWhipFwTag);
   out += ",\"board\":";
   putStr(out, BoardProfile::id());
   out += ",\"chip\":";
   putStr(out, BoardProfile::chip());
+#if defined(ARDUINO_ARCH_RP2040)
+  out += ",\"fam\":\"rp\",\"ver\":";
+#else
   out += ",\"fam\":\"esp\",\"ver\":";
+#endif
   putStr(out, kFirmwareVersion);
   out += ",\"api\":";
   out += static_cast<unsigned>(kFirmwareApi);
@@ -101,7 +134,7 @@ static void appendId(String &out) {
   putStr(out, NodeId::shortName());
   out += ",\"mac\":";
   putStr(out, mac);
-  out += ",\"net\":true";
+  out += WHIP_HAS_NET ? ",\"net\":true" : ",\"net\":false";
 }
 
 static void cmdId() {
@@ -122,8 +155,16 @@ static void cmdGet() {
            BoardProfile::sdCs(), BoardProfile::sdMosi(), BoardProfile::sdClk(),
            BoardProfile::sdMiso());
   out += sd;
+  out += ",\"btn\":";
+  if (BoardProfile::buttonPin() == kGpioUnset) {
+    out += "null";
+  } else {
+    out += static_cast<unsigned>(BoardProfile::buttonPin());
+  }
+#if WHIP_HAS_NET
   out += ",\"ssid\":";
   putStr(out, WifiSetup::savedSsid());
+#endif
   out += ",\"play\":{\"src\":";
   putStr(out, PlayCfg::bootSrcName());
   out += ",\"path\":";
@@ -157,6 +198,9 @@ static void cmdSet(const char *json) {
   const bool hasShort =
       NetHttp::jsonStr(json, end, "short", shortName, sizeof(shortName));
   const long bri = NetHttp::jsonInt(json, end, "bri", -1);
+  // btn: GPIO number, or -1 / 255 for none. Absent = unchanged.
+  const bool hasBtn = NetHttp::findKey(json, end, "btn") != nullptr;
+  const long btn = NetHttp::jsonInt(json, end, "btn", -1);
   const char *sd = NetHttp::findKey(json, end, "sd");
   const char *play = NetHttp::findKey(json, end, "play");
 
@@ -205,6 +249,14 @@ static void cmdSet(const char *json) {
   if (bri != -1) {
     LedCtrl::set(static_cast<uint8_t>(bri), true);
   }
+  if (hasBtn) {
+    const uint8_t pin = (btn < 0 || btn > 254) ? kGpioUnset : static_cast<uint8_t>(btn);
+    if (!BoardProfile::setButtonPin(pin, true)) {
+      fail("set", "bad btn");
+      return;
+    }
+    Button::begin();
+  }
   if (sd != nullptr) {
     if (!BoardProfile::setSdPins(static_cast<uint8_t>(pins[0]),
                                  static_cast<uint8_t>(pins[1]),
@@ -227,6 +279,11 @@ static void cmdSet(const char *json) {
 }
 
 static void cmdWifi(const char *json) {
+#if !WHIP_HAS_NET
+  (void)json;
+  fail("wifi", "no radio");
+  return;
+#else
   const char *end = json + strlen(json);
   char ssid[33] = {0};
   char pass[65] = {0};
@@ -242,6 +299,7 @@ static void cmdWifi(const char *json) {
   putStr(out, ssid);
   out += ",\"reboot\":true";
   send(out);
+#endif
 }
 
 static void cmdPmap(const char *b64) {
@@ -251,10 +309,7 @@ static void cmdPmap(const char *b64) {
   }
   uint8_t raw[2 + 24 * 19];
   size_t n = 0;
-  if (mbedtls_base64_decode(raw, sizeof(raw), &n,
-                            reinterpret_cast<const unsigned char *>(b64),
-                            strlen(b64)) != 0 ||
-      !PixelMap::setBlob(raw, n, true)) {
+  if (!base64Decode(b64, raw, sizeof(raw), n) || !PixelMap::setBlob(raw, n, true)) {
     fail("pmap", "bad map");
     return;
   }
@@ -286,7 +341,7 @@ static void cmdReboot() {
   send(out);
   Serial.flush();
   delay(100);
-  ESP.restart();
+  Platform::restart();
 }
 
 static void runLine(char *line) {

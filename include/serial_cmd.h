@@ -9,8 +9,8 @@
 // come before or after it on the same port; the companion ignores them.
 //
 //   id                 {ok,cmd,tag,board,chip,fam,ver,api,name,short,mac,net}
-//   get                id fields + bri, sd{cs,mosi,clk,miso}, ssid, play{src,path}
-//   set {json}         any of name, short, bri, sd{cs,mosi,clk,miso},
+//   get                id fields + bri, sd{cs,mosi,clk,miso}, btn, ssid, play{src,path}
+//   set {json}         any of name, short, bri, btn (-1 = none), sd{cs,mosi,clk,miso},
 //                      play{src,path} (startup playlist)
 //   wifi {ssid,pass}   saved; used from the next boot (reply reboot:true)
 //   pmap <base64>      v1 pixel-map blob (same bytes as NVS pmap/blob)

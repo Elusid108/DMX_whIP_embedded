@@ -32,4 +32,8 @@ public:
   static bool validGpio(uint8_t pin);
   static bool setSdPins(uint8_t cs, uint8_t mosi, uint8_t clk, uint8_t miso,
                         bool save);
+  // Play / pause push button (pin to GND, internal pull-up). kGpioUnset = none.
+  // NVS "board"/"btn". Rejected when reserved or an SD / LED data pin.
+  static uint8_t buttonPin();
+  static bool setButtonPin(uint8_t pin, bool save);
 };
