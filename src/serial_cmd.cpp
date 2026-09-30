@@ -112,6 +112,42 @@ static bool base64Decode(const char *in, uint8_t *out, size_t cap, size_t &n) {
   return true;
 }
 
+static void base64Encode(const uint8_t *in, size_t n, String &out) {
+  static const char kAlphabet[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  for (size_t i = 0; i < n; i += 3) {
+    const uint32_t b0 = in[i];
+    const uint32_t b1 = i + 1 < n ? in[i + 1] : 0;
+    const uint32_t b2 = i + 2 < n ? in[i + 2] : 0;
+    const uint32_t v = (b0 << 16) | (b1 << 8) | b2;
+    out += kAlphabet[(v >> 18) & 63];
+    out += kAlphabet[(v >> 12) & 63];
+    out += i + 1 < n ? kAlphabet[(v >> 6) & 63] : '=';
+    out += i + 2 < n ? kAlphabet[v & 63] : '=';
+  }
+}
+
+// "map":[{...}]: every segment of the pixel patch, readable.
+static void appendMap(String &out) {
+  out += ",\"map\":[";
+  const uint8_t n = PixelMap::segmentCount();
+  for (uint8_t i = 0; i < n; ++i) {
+    const PixelMapCfg &m = PixelMap::segment(i);
+    char seg[200];
+    snprintf(seg, sizeof(seg),
+             "%s{\"out\":%u,\"chip\":\"%s\",\"order\":\"%s\",\"data\":%u,"
+             "\"clk\":%u,\"count\":%u,\"uni\":%u,\"sacn\":%u,\"ch\":%u,"
+             "\"bri\":%u,\"proto\":\"%s\"}",
+             i ? "," : "", PixelMap::outputOfSegment(i),
+             PixelMap::chipsetName(m.chipset), PixelMap::colorOrderName(i),
+             m.dataGpio, m.clockGpio, m.pixelCount, m.startArtNetUniverse,
+             m.startSacnUniverse, m.startChannel, m.brightness,
+             PixelMap::protoName(m.proto));
+    out += seg;
+  }
+  out += ']';
+}
+
 static void appendId(String &out) {
   char mac[18];
   Platform::uniqueId(mac, sizeof(mac));
@@ -171,6 +207,7 @@ static void cmdGet() {
   out += ",\"path\":";
   putStr(out, PlayCfg::bootPath());
   out += '}';
+  appendMap(out);
   send(out);
 }
 
@@ -303,7 +340,29 @@ static void cmdWifi(const char *json) {
 #endif
 }
 
+// pmap with no argument: the patch as the blob pmap takes, to copy it to
+// another board, plus the readable list.
+static void cmdPmapRead() {
+  uint8_t raw[PixelMap::kBlobMaxBytes];
+  const size_t n = PixelMap::getBlob(raw, sizeof(raw));
+  String out;
+  begin(out, "pmap", n > 0);
+  out += ",\"segs\":";
+  out += static_cast<unsigned>(PixelMap::segmentCount());
+  out += ",\"px\":";
+  out += static_cast<unsigned>(PixelMap::totalPixels());
+  out += ",\"blob\":\"";
+  base64Encode(raw, n, out);
+  out += '"';
+  appendMap(out);
+  send(out);
+}
+
 static void cmdPmap(const char *b64) {
+  if (b64[0] == '\0') {
+    cmdPmapRead();
+    return;
+  }
   if (LiveInput::active()) {
     fail("pmap", "live");
     return;
@@ -390,6 +449,20 @@ static void cmdTest(char *arg) {
   send(reply);
 }
 
+// boot: restart into the USB drive that takes a UF2 (RP boards).
+static void cmdBoot() {
+#if defined(ARDUINO_ARCH_RP2040)
+  String out;
+  begin(out, "boot", true);
+  send(out);
+  Serial.flush();
+  delay(100);
+  Platform::bootloader();
+#else
+  fail("boot", "rp only");
+#endif
+}
+
 static void cmdReboot() {
   String out;
   begin(out, "reboot", true);
@@ -434,6 +507,8 @@ static void runLine(char *line) {
     cmdQuiet(arg);
   } else if (strcmp(cmd, "test") == 0) {
     cmdTest(arg);
+  } else if (strcmp(cmd, "boot") == 0) {
+    cmdBoot();
   } else if (strcmp(cmd, "reboot") == 0) {
     cmdReboot();
   } else {

@@ -187,6 +187,10 @@ public:
   static bool setAll(const PixelMapCfg *segs, uint8_t n, bool save);
   // Same v1 blob the companion writes to NVS "pmap"/"blob".
   static bool setBlob(const uint8_t *raw, size_t len, bool save);
+  // The map as that blob; bytes written, 0 when cap is too small
+  // (kBlobMaxBytes always fits).
+  static size_t getBlob(uint8_t *out, size_t cap);
+  static constexpr size_t kBlobMaxBytes = 2 + 24 * 19;
   static bool setAllProtos(SegProto proto, bool save);
   static bool setSegmentBrightness(uint8_t i, uint8_t bri, bool save);
   static bool pixelOrigin(uint16_t pixelIndex, uint16_t &uniOff, uint16_t &ch1);

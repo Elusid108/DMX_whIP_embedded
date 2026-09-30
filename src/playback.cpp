@@ -190,6 +190,62 @@ static bool frameForThisNode(uint32_t universe, uint16_t protocol) {
   return universe >= startUni && universe <= lastUni;
 }
 
+// Universes met in the file being read (first few), so a file with nothing
+// for this node can say what it does hold.
+struct SeenUni {
+  uint32_t universe;
+  uint16_t protocol;
+};
+static constexpr uint8_t kSeenMax = 8;
+static SeenUni s_seen[kSeenMax];
+static uint8_t s_seenN = 0;
+static bool s_seenMore = false;
+
+static void clearSeen() {
+  s_seenN = 0;
+  s_seenMore = false;
+}
+
+static void noteSeen(uint32_t universe, uint16_t protocol) {
+  for (uint8_t i = 0; i < s_seenN; ++i) {
+    if (s_seen[i].universe == universe && s_seen[i].protocol == protocol) {
+      return;
+    }
+  }
+  if (s_seenN < kSeenMax) {
+    s_seen[s_seenN].universe = universe;
+    s_seen[s_seenN].protocol = protocol;
+    ++s_seenN;
+  } else {
+    s_seenMore = true;
+  }
+}
+
+// The file ended without one frame for this node: its records are for other
+// universes than the node's patch.
+static void logNoData() {
+  char held[96];
+  size_t o = 0;
+  held[0] = '\0';
+  for (uint8_t i = 0; i < s_seenN && o + 1 < sizeof(held); ++i) {
+    const int n = snprintf(
+        held + o, sizeof(held) - o, "%s%s %u", i ? ", " : "",
+        s_seen[i].protocol == kDmxrecProtoSacn ? "sACN" : "Art-Net",
+        static_cast<unsigned>(s_seen[i].universe));
+    if (n <= 0) {
+      break;
+    }
+    o += static_cast<size_t>(n);
+  }
+  const PixelMapCfg &m = PixelMap::cfg();
+  LOG_C("play",
+        "skipped %s: nothing for this node (patched Art-Net %u / sACN %u, "
+        "file holds %s%s)",
+        s_path, static_cast<unsigned>(m.startArtNetUniverse),
+        static_cast<unsigned>(m.startSacnUniverse),
+        held[0] ? held : "no universes", s_seenMore ? ", more" : "");
+}
+
 // Records are one universe each, stamped with their own arrival ms. A frame
 // is every record within kAsmWindowMs of the first, until a universe repeats.
 // s_asmRgb keeps the last value of every universe across frames, so a
@@ -316,6 +372,11 @@ static void resetRingLocked() {
 
 static void noteUnderrunLocked() {
   s_underrun = true;
+  // Nothing read for this node yet: the file is just starting, or holds
+  // nothing for this node (logNoData says so when it ends).
+  if (s_matchedPass == 0) {
+    return;
+  }
   const uint32_t now = millis();
   if (s_lastUnderrunLog == 0 || now - s_lastUnderrunLog >= kPlayUnderrunLogMs) {
     LOG_C("play", "underrun");
@@ -483,6 +544,7 @@ static ReadResult readOneFrame() {
       if (!sdRead(dmx, sizeof(dmx))) {
         return ReadResult::Fail;
       }
+      noteSeen(prefix.universe, prefix.protocol);
       lockPlay();
       index = s_frameIndex;
       const uint32_t frames = s_frameCount;
@@ -569,7 +631,7 @@ static bool wrapShow() {
 
   if (matched == 0) {
     if (!s_loggedNoMatch) {
-      LOG_C("play", "no frames for this node %s", s_path);
+      logNoData();
       s_loggedNoMatch = true;
     }
     return false;
@@ -733,7 +795,15 @@ static bool advancePlaylist() {
   const uint8_t n = s_listN;
   uint8_t i = s_listI;
   const uint8_t left = s_passLeft;
+  const bool noData = s_matchedPass == 0 && s_frameIndex >= s_frameCount &&
+                      s_frameCount > 0;
   unlockPlay();
+
+  // In a list the next file is bound straight away, so say it here (a single
+  // looping file says it in wrapShow).
+  if (noData && n > 1) {
+    logNoData();
+  }
 
   if (!wrap) {
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -875,6 +945,7 @@ static bool bindPath(const char *path) {
   s_off = kDmxrecHeaderBytes;
   s_matchedPass = 0;
   s_readPass = 0;
+  clearSeen();
   s_loggedLoop = false;
   s_loggedNoMatch = false;
   s_loggedNoFile = false;

@@ -9,13 +9,15 @@ Release envs are the platformio.ini [env:*] sections with
 is nothing to keep in sync by hand:
 
   board id + version + api   the image's WHIPFW:<board>:<ver>:<api>; tag
-  chip, flash mode/freq/size the image header
-  nvs / otadata / app        the built partitions.bin
+  chip, flash mode/freq/size the image header (ESP32)
+  nvs / otadata / app        the built partitions.bin (ESP32)
+  chip + UF2 family          the firmware.uf2 block headers (RP2040 / RP2350)
 
 Every tag must carry the version in include/version.h or the run fails.
 
-Output: dist/whip-<ver>/<boardId>/{bootloader,partitions,firmware,
-firmware.factory}.bin, dist/whip-<ver>/manifest.json, and dist/whip-<ver>.zip.
+Output: dist/whip-<ver>/<boardId>/ with {bootloader,partitions,firmware,
+firmware.factory}.bin for an ESP32 board or firmware.uf2 for an RP board,
+dist/whip-<ver>/manifest.json, and dist/whip-<ver>.zip.
 """
 import argparse
 import configparser
@@ -50,6 +52,13 @@ FLASH_FREQS = {
     "esp32h2": {0x0: "48m", 0x2: "16m", 0xF: "12m"},
 }
 PARTITIONS_OFFSET = 0x8000
+
+# UF2 family id -> chip. 0xe48bff57 (absolute) marks the RP2350's first block
+# and names no chip.
+UF2_FAMILIES = {0xE48BFF56: "rp2040", 0xE48BFF59: "rp2350", 0xE48BFF5A: "rp2350",
+                0xE48BFF5B: "rp2350"}
+UF2_MAGIC = (0x0A324655, 0x9E5D5157, 0x0AB16F30)
+UF2_FLAG_FAMILY = 0x2000
 
 
 def fail(msg):
@@ -146,6 +155,56 @@ def layout(parts):
     return out
 
 
+def uf2_family(data):
+    """(family id, chip) of a UF2: the chip family most of its blocks carry."""
+    if len(data) < 512 or len(data) % 512:
+        fail("firmware.uf2 is not whole 512-byte blocks")
+    counts = {}
+    for i in range(0, len(data), 512):
+        m0, m1, flags = struct.unpack_from("<III", data, i)
+        family = struct.unpack_from("<I", data, i + 28)[0]
+        end = struct.unpack_from("<I", data, i + 508)[0]
+        if (m0, m1, end) != UF2_MAGIC:
+            fail("firmware.uf2 block %d has bad magic" % (i // 512))
+        if flags & UF2_FLAG_FAMILY and family in UF2_FAMILIES:
+            counts[family] = counts.get(family, 0) + 1
+    if not counts:
+        fail("firmware.uf2 names no RP2040 / RP2350 family")
+    family = max(counts, key=counts.get)
+    return family, UF2_FAMILIES[family]
+
+
+def package_rp(env, version, out_dir, build_dir):
+    # The tag is read from firmware.bin: in the UF2 it can straddle two blocks.
+    fw = read(os.path.join(build_dir, "firmware.bin"))
+    tags = TAG_RE.findall(fw)
+    if len(tags) != 1:
+        fail("%s: expected one WHIPFW tag, found %d" % (env, len(tags)))
+    board, tag_ver, api = (t.decode() for t in tags[0])
+    if tag_ver != version:
+        fail("%s: image is v%s but version.h is v%s (rebuild)" % (env, tag_ver, version))
+    uf2 = read(os.path.join(build_dir, "firmware.uf2"))
+    family, chip = uf2_family(uf2)
+
+    board_dir = os.path.join(out_dir, board)
+    os.makedirs(board_dir, exist_ok=True)
+    with open(os.path.join(board_dir, "firmware.uf2"), "wb") as f:
+        f.write(uf2)
+    print("release: %-12s %-28s %s uf2 %8d B" % (env, board, chip, len(uf2)), flush=True)
+    return board, int(api), {
+        "env": env,
+        "family": "rp",
+        "chip": chip,
+        "uf2": {
+            "file": board + "/firmware.uf2",
+            "familyId": "0x%08x" % family,
+            "size": len(uf2),
+            "sha256": hashlib.sha256(uf2).hexdigest(),
+            "tag": "WHIPFW:%s:%s:%s;" % (board, tag_ver, api),
+        },
+    }
+
+
 def part_entry(role, rel, data, offset):
     return {"role": role, "file": rel, "offset": offset, "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest()}
@@ -156,6 +215,8 @@ def package_env(env, version, out_dir):
     fw_path = os.path.join(build_dir, "firmware.bin")
     if not os.path.isfile(fw_path):
         fail("%s: no firmware.bin (build it first)" % env)
+    if os.path.isfile(os.path.join(build_dir, "firmware.uf2")):
+        return package_rp(env, version, out_dir, build_dir)
     fw = read(fw_path)
     tags = TAG_RE.findall(fw)
     if len(tags) != 1:
@@ -186,8 +247,8 @@ def package_env(env, version, out_dir):
         if role == "app":
             entry["tag"] = "WHIPFW:%s:%s:%s;" % (board, tag_ver, api)
         parts.append(entry)
-    print("release: %-8s %-28s %s %s/%s %8d B" % (env, board, head["chip"], head["mode"],
-                                                  head["freq"], len(fw)), flush=True)
+    print("release: %-12s %-28s %s %s/%s %8d B" % (env, board, head["chip"], head["mode"],
+                                                   head["freq"], len(fw)), flush=True)
     return board, int(api), {
         "env": env,
         "family": "esp",

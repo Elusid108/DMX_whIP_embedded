@@ -43,6 +43,15 @@ bool sdPinsOk(uint8_t mosi, uint8_t clk, uint8_t miso) {
 #endif
 }
 
+bool bootloader() {
+#if defined(ARDUINO_ARCH_RP2040)
+  rp2040.rebootToBootloader();
+  return true;
+#else
+  return false;
+#endif
+}
+
 void restart() {
 #if defined(ARDUINO_ARCH_RP2040)
   rp2040.reboot();

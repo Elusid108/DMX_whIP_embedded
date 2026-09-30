@@ -18,6 +18,7 @@
 #include "playback.h"
 #include "pixel_map.h"
 #include "play_cfg.h"
+#include "sd_cfg.h"
 #include "sd_info.h"
 #include "serial_cmd.h"
 #include "sync.h"
@@ -145,6 +146,7 @@ void loop() {
 
   WifiSetup::service();
   SdInfo::service();
+  SdCfg::service();
 
   // Render. LedBus::show() only when pixels changed (plus a 1 s keepalive so
   // a glitched strip heals); a held playback frame is not re-sent every tick.

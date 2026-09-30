@@ -1,6 +1,6 @@
 # DMX_whIP_embedded
 
-Version: **0.55.0**
+Version: **0.56.0**
 
 The embedded side of DMX_whIP: firmware for pixel nodes that will receive live Art-Net / sACN (KiNet later) and play recorded frames from SD. This tree is shared across boards. Current hardware is a **Waveshare ESP32-S3-Matrix** bring-up node plus an **ESP32-C5-DevKitC-1-N8R4** env, not the production controller.
 
@@ -53,10 +53,12 @@ The companion identifies and provisions a board over its USB serial port (115200
 | Command | Reply / effect |
 | --- | --- |
 | `id` | `tag`, `board`, `chip`, `fam`, `ver`, `api`, `name`, `short`, `mac`, `net` |
-| `get` | `id` fields + `bri`, `sd{cs,mosi,clk,miso}`, `btn`, `ssid`, `play{src,path}` (startup playlist) |
+| `get` | `id` fields + `bri`, `sd{cs,mosi,clk,miso}`, `btn`, `ssid`, `play{src,path}` (startup playlist), `map[]` (the pixel patch: per segment `out`, `chip`, `order`, `data`, `clk`, `count`, `uni`, `sacn`, `ch`, `bri`, `proto`) |
 | `set {json}` | any of `name`, `short`, `bri`, `btn` (-1 = none), `sd{…}`, `play{src,path}`; replies like `get` |
 | `wifi {"ssid":…,"pass":…}` | saved, used from the next boot (`reboot:true`) |
 | `pmap <base64>` | v1 pixel-map blob (same bytes as NVS `pmap`/`blob`), applied now |
+| `pmap` | reads the patch back: `segs`, `px`, `blob` (what `pmap <base64>` takes, so a patch copies from one board to another) and `map[]` |
+| `boot` | RP2040 / RP2350: restart into the UF2 drive. `rp only` on an ESP32 |
 | `test <mode> [out]` | LED test pattern on one output (default 0): `rainbow`, `cycle`, `ends`, `off`. Pauses playback while on |
 | `quiet 0\|1` | stop / resume log lines on Serial |
 | `reboot` | reply, then restart |
@@ -65,7 +67,7 @@ Try it: `python scripts/whip_serial.py ports` lists the serial ports, then `pyth
 
 ## Release bundle (all boards, one version)
 
-`python scripts/release.py` builds every `[env:*]` with `custom_release = yes` and writes `dist/whip-<ver>/` plus `dist/whip-<ver>.zip` (`dist/` is gitignored). Each board gets a folder named by its board id with `bootloader.bin`, `partitions.bin`, `firmware.bin` and `firmware.factory.bin` (one image for address 0). `manifest.json` lists every board with its chip, flash mode / freq / size, NVS / otadata / app offsets and each file's offset, size and sha256; the app part carries its `WHIPFW:` tag. The companion flashes and OTA-updates from this bundle, picking each board's image by board id.
+`python scripts/release.py` builds every `[env:*]` with `custom_release = yes` and writes `dist/whip-<ver>/` plus `dist/whip-<ver>.zip` (`dist/` is gitignored). Each ESP32 board gets a folder named by its board id with `bootloader.bin`, `partitions.bin`, `firmware.bin` and `firmware.factory.bin` (one image for address 0); each RP2040 / RP2350 board gets `firmware.uf2`, listed in the manifest as `family: rp` with its UF2 family id, size, sha256 and tag. `manifest.json` lists every board with its chip, flash mode / freq / size, NVS / otadata / app offsets and each file's offset, size and sha256; the app part carries its `WHIPFW:` tag. The companion flashes and OTA-updates from this bundle, picking each board's image by board id.
 
 Nothing is typed twice: board id, version and API come from each image's tag, chip and flash settings from its header, offsets from the built partition table. The run stops if any image's version differs from `include/version.h`, if two envs build the same board, or if an image does not fit its app slot. `--no-build` packages the existing builds; `-e <env>` limits it to some envs. New boards: add `custom_release = yes` to the env.
 
@@ -76,7 +78,8 @@ Nothing is typed twice: board id, version and API come from each image's tag, ch
 - Same silk wiring as every XIAO: LED data GPIO **26** (D0), clock **27** (D1); microSD on SPI0, CS **1** (D7), SCK **2** (D8), MISO **4** (D9), MOSI **3** (D10). 4 outputs, 24 segments, 1024 pixels. Every GPIO 0–29 is free (flash is on its own pins).
 - LEDs: [`src/led_bus.cpp`](src/led_bus.cpp) is shared with the ESP boards (packing, colour order, brightness, RGBW, clocked frame encoding). The bits leave through PIO state machines fed by DMA ([`src/rp_pio_tx.cpp`](src/rp_pio_tx.cpp)): one per clockless output ([`src/led_out_rp.cpp`](src/led_out_rp.cpp), bit times from the same chip table, 300 µs latch) and one shared by the clocked outputs ([`src/clocked_tx_rp.cpp`](src/clocked_tx_rp.cpp), any pin pair). Any GPIO can be an LED pin.
 - SD pins must be ones SPI0 can use: SCK 2 / 6 / 18 / 22, MOSI 3 / 7 / 19 / 23, MISO 0 / 4 / 16 / 20 (CS is free). The core halts the board on any other pin, so `Platform::sdPinsOk` refuses them (`whip set {"sd":…}` answers `bad sd`; stored pins that do not fit fall back to the defaults).
-- **State: builds, not yet run on hardware.** `whip.cfg` on the SD and the boot-to-UF2 command are F6; companion UF2 flashing is C5. Until then: hold **B**, plug in, copy `.pio/build/xiao-rp2040/firmware.uf2` (or `xiao-rp2350`) onto the drive that appears.
+- **`whip.cfg`** in the SD card's root sets the player up from the card (see [`include/sd_cfg.h`](include/sd_cfg.h); a ready-made file is [`examples/whip.cfg`](examples/whip.cfg)): `name`, `bri`, the first output's patch (`uni`, `ch`, `count`, `order`, `chip`, `data`, `clk`) and what to play (`play=root` / `none` / `file:/look.dmx` / `folder:/shows`, `loop=all` / `one`). One `key=value` per line, `#` comments. It is read every time a card is mounted, lasts until the board restarts and is never saved, so removing the file brings the saved settings back. A card's clips are recorded per universe, so the card can carry the patch that plays them.
+- Flashing: `whip boot` over serial (or hold **B** while plugging in) brings up the UF2 drive; copy `firmware.uf2` onto it. Companion UF2 flashing is C5.
 
 ## Adding a board
 
@@ -337,6 +340,7 @@ Wave 4 — after WS2, WS3, WS6
 
 ## Version history
 
+- **0.56.0** — RP2040 / RP2350 player: `whip.cfg` on the SD card sets name, brightness, the first output's patch and what to play; serial `boot` restarts into the UF2 drive; the release bundle carries each RP board's `firmware.uf2`. Every board: serial `get` lists the pixel patch and `pmap` with no argument reads it back as the blob `pmap` takes; a clip with nothing for this node's universes is logged as skipped, with the universes it does hold, where it used to read as `underrun`
 - **0.55.0** — XIAO RP2040 / RP2350 drive LEDs: clockless strips through PIO + DMA with the chip table's bit times, clocked chips (APA102 family, WS2801, LPD8806, P9813, LPD6803) through a PIO SPI transmitter on any pin pair. `led_bus.cpp` is now shared by every board; the ESP32 RMT output moved to `led_out_esp.cpp` unchanged. RP SD pins are checked against what SPI0 can use. Serial `whip test rainbow|cycle|ends|off [out]` runs the LED test patterns without the portal
 - **0.54.0** — `[env:xiao-rp2040]` and `[env:xiao-rp2350]` build (standalone player skeleton: SD + LEDs + serial commands, no radio; LEDs not driven yet). Play / pause button: a push button from any free GPIO to GND (internal pull-up) pauses and resumes SD playback, the whole group inside a synced cue like the portal's Pause. Pin in NVS `board`/`btn` (none by default), set from the companion Flash tab or serial `whip set {"btn":N}`; `/status` `pins.btn`. Ignored during live input
 - **0.53.0** — USB serial commands: `whip id` / `get` / `set` / `wifi` / `pmap` / `quiet` / `reboot`, one `@whip {json}` reply line each, so the companion can tell which board is on a COM port and provision it without Wi-Fi. `scripts/whip_serial.py` sends one from a PC. Log lines and replies no longer split each other

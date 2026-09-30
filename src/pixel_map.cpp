@@ -415,6 +415,8 @@ static void copySeg0Mirror() {
   // no-op helper marker for save
 }
 
+static size_t packBlob(uint8_t *raw);
+
 static void saveNvs() {
   Preferences prefs;
   if (!prefs.begin(kPrefsNs, false)) {
@@ -435,6 +437,13 @@ static void saveNvs() {
   prefs.putUChar("bri", a.brightness);
   prefs.putUChar("n", s_n);
   uint8_t raw[2 + sizeof(SegBlob) * kPatchMaxSegments];
+  prefs.putBytes("blob", raw, packBlob(raw));
+  prefs.end();
+  (void)copySeg0Mirror;
+}
+
+// The map as a v1 blob. raw holds 2 + kPatchMaxSegments segments.
+static size_t packBlob(uint8_t *raw) {
   raw[0] = kBlobVer;
   raw[1] = s_n;
   for (uint8_t i = 0; i < s_n; ++i) {
@@ -453,9 +462,7 @@ static void saveNvs() {
     b.ch = s_seg[i].startChannel;
     memcpy(raw + 2 + i * sizeof(SegBlob), &b, sizeof(b));
   }
-  prefs.putBytes("blob", raw, 2 + s_n * sizeof(SegBlob));
-  prefs.end();
-  (void)copySeg0Mirror;
+  return 2 + s_n * sizeof(SegBlob);
 }
 
 // v1 blob (NVS "pmap"/"blob", also the serial pmap command) -> tmp[].
@@ -1021,6 +1028,14 @@ bool PixelMap::set(const PixelMapSet &in, bool save) {
   }
   logCfg();
   return true;
+}
+
+size_t PixelMap::getBlob(uint8_t *out, size_t cap) {
+  loadNvs();
+  if (out == nullptr || cap < 2 + s_n * sizeof(SegBlob)) {
+    return 0;
+  }
+  return packBlob(out);
 }
 
 bool PixelMap::setBlob(const uint8_t *raw, size_t len, bool save) {

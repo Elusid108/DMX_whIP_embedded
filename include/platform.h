@@ -17,6 +17,9 @@ namespace Platform {
 void uniqueId(char *out, size_t n);
 // Restart the chip now.
 void restart();
+// Restart into the USB drive that takes a UF2 (RP2040 / RP2350). False on
+// boards without one; does not return when it works.
+bool bootloader();
 // True when the SD card's SPI bus can use these pins. An ESP32 routes SPI to
 // any pin. RP2040 / RP2350 SPI0 has fixed choices (SCK 2/6/18/22, MOSI
 // 3/7/19/23, MISO 0/4/16/20), and its core halts the board on any other pin,
